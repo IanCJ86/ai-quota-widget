@@ -45,6 +45,14 @@ python quota_monitor.py
 | `KIMI_PLAN_NAME` | Kimi 套餐显示名（接口只返回等级，这里覆盖显示） | `"Allegro"` |
 | `CODEX_PLAN_SUFFIX` | Codex 套餐名后缀，追加在接口返回值后 | `" 20x"` |
 
+## 支持范围与局限
+
+- 目前仅支持 **Kimi Code** 和 **Codex** 两家，暂无 Claude / DeepSeek / GLM 等方案
+- 仅支持 Windows（依赖本机 CLI 凭证与 tkinter）
+- 套餐名与续订日期无法从接口自动读取，需要手动配置（见上文「配置项」）
+
+欢迎 issue / PR 扩展更多服务商。
+
 ## 免责声明
 
 本项目为个人学习/自用工具，与 Moonshot AI、OpenAI 无任何隶属或官方关系。接口与凭证读取方式依赖第三方客户端的本地行为，可能随其版本更新而失效。请遵守相关服务条款，使用风险自负。
