@@ -1,0 +1,18 @@
+# runtime debug output
+debug.txt
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+
+# temp files (screenshot.png is intentionally kept)
+*.tmp
+*.log
+*.bak
+_crop*.png
+_v*.png
+
+# OS junk
+Thumbs.db
+Desktop.ini
