@@ -12,6 +12,16 @@ import urllib.parse
 from datetime import datetime, timezone
 import tkinter as tk
 
+# crisp rendering on high-DPI displays (declare per-monitor DPI awareness)
+try:
+    import ctypes
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)
+except Exception:
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
 REFRESH_SECONDS = 900          # auto refresh every 15 minutes
 KIMI_CRED = os.path.expanduser(r"~\.kimi-code\credentials\kimi-code.json")
 KIMI_USAGE_URL = "https://api.kimi.com/coding/v1/usages"
@@ -33,6 +43,14 @@ if os.name == "nt":
                   "creationflags": subprocess.CREATE_NO_WINDOW}
 
 # colors
+THEMES = {
+    "dark": dict(BG="#1e1e2e", BG_CARD="#262638", BORDER="#3a3a4e",
+                 FG_DIM="#7a7a90", FG_TEXT="#e8e8f4",
+                 KIMI_SOFT="#8db4e8", CODEX_SOFT="#83d4ab"),
+    "light": dict(BG="#f2f3f7", BG_CARD="#ffffff", BORDER="#d9dae4",
+                  FG_DIM="#8a8a9a", FG_TEXT="#23233a",
+                  KIMI_SOFT="#4a7fc9", CODEX_SOFT="#3a9e6e"),
+}
 BG = "#1e1e2e"
 BG_CARD = "#262638"
 FG_DIM = "#7a7a90"
@@ -41,15 +59,10 @@ KIMI_BLUE = "#5b9dff"
 CODEX_GREEN = "#4ecf8a"
 KIMI_BLUE_SOFT = "#8db4e8"
 CODEX_GREEN_SOFT = "#83d4ab"
-# ======================= 个人配置（使用前请修改） =======================
-# 续订日期仅用于界面显示，格式 MM-DD，改成你自己的续订日即可。
-RENEW_KIMI = "MM-DD"         # TODO: Kimi 续订日期，如 "09-01"
-RENEW_CODEX = "MM-DD"        # TODO: Codex 续订日期，如 "09-01"
-# Kimi 套餐显示名（接口只返回等级如 LEVEL_ADVANCED，这里覆盖成你套餐的名字）。
-KIMI_PLAN_NAME = "MyPlan"    # TODO: 改成你的 Kimi 套餐名，如 "Allegro"
-# Codex 套餐后缀，追加在接口返回的 planType 后面，如 Pro -> "Pro 20x"。
-CODEX_PLAN_SUFFIX = ""       # TODO: 如需要可填 " 20x"
-# ======================================================================
+RENEW_KIMI = "MM-DD"   # TODO: 填你的 Kimi 续订日期
+RENEW_CODEX = "MM-DD"  # TODO: 填你的 Codex 续订日期
+KIMI_PLAN_NAME = "MyPlan"  # TODO: 你的 Kimi 套餐显示名   # Kimi 套餐显示名（接口返回 LEVEL_ADVANCED，这里覆盖）
+CODEX_PLAN_SUFFIX = ""  # 例: " 20x"   # Codex 套餐后缀，如 Pro -> Pro 20x
 
 
 def _fmt_reset(iso_or_ts):
@@ -229,6 +242,11 @@ def fetch_codex():
 class App:
     def __init__(self):
         self.root = tk.Tk()
+        try:
+            dpi = ctypes.windll.user32.GetDpiForSystem()
+            self.root.tk.call("tk", "scaling", dpi / 72.0)
+        except Exception:
+            pass
         self.root.title("Quota")
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
@@ -239,38 +257,50 @@ class App:
         self.errors = {}
         self.last_ok = None
         self._drag = None
+        self.theme = "dark"
+        self._cards = []
+        self._name_labels = []
+        self._bg_frames = []
 
-        w, h = 212, 194
-        sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        w, h = 232, 212
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
         self.root.geometry(f"{w}x{h}+{sw - w - 40}+{sh - h - 90}")
 
-        tk.Frame(self.root, bg=BG, height=6).grid(row=0, column=0)
+        sp1 = tk.Frame(self.root, bg=BG, height=6)
+        sp1.grid(row=0, column=0)
+        self._bg_frames.append(sp1)
         self.rows = {}  # key -> (pct_label, reset_label)
         self.section_titles = {}
         self.section_renews = {}
         self._section(1, "Kimi", KIMI_BLUE, [("k5", "每5小时"), ("kw", "每周")])
-        tk.Frame(self.root, bg="#3a3a4e", height=1).grid(
-            row=2, column=0, sticky="ew", padx=10, pady=1)
+        self._divider = tk.Frame(self.root, bg="#3a3a4e", height=1)
+        self._divider.grid(row=2, column=0, sticky="ew", padx=10, pady=1)
         self._section(3, "Codex", CODEX_GREEN, [("c5", "每5小时"), ("cw", "每周")])
 
         bar = tk.Frame(self.root, bg=BG)
-        bar.grid(row=4, column=0, sticky="ew", padx=10, pady=(3, 2))
+        bar.grid(row=4, column=0, sticky="ew", padx=(17, 10), pady=(3, 2))
+        self._bg_frames.append(bar)
         self.status = tk.Label(bar, text="初始化…", fg=FG_DIM, bg=BG,
-                               font=("Microsoft YaHei UI", 8), anchor="w")
+                               font=("Microsoft YaHei UI", 9), anchor="w")
         self.status.pack(side="left")
         self.close_btn = tk.Label(bar, text="✕", fg=FG_DIM, bg=BG, cursor="hand2",
-                                  font=("Microsoft YaHei UI", 8))
+                                  font=("Microsoft YaHei UI", 9))
         self.close_btn.pack(side="right")
         self.close_btn._no_drag = True
         self.close_btn.bind("<Button-1>", lambda e: self._quit())
         self.alpha_val = 94
-        for sym, d in (("－", -6), ("＋", 6)):
+        self._alpha_btns = []
+        for sym, d in (("－", -3), ("＋", 3)):
             b = tk.Label(bar, text=sym, fg=FG_DIM, bg=BG, cursor="hand2",
-                         font=("Microsoft YaHei UI", 8))
+                         font=("Microsoft YaHei UI", 9))
             b.pack(side="right", padx=1)
             b._no_drag = True
             b.bind("<Button-1>", lambda e, dd=d: self._alpha_step(dd))
-        tk.Frame(self.root, bg=BG, height=10).grid(row=5, column=0)
+            self._alpha_btns.append(b)
+        sp2 = tk.Frame(self.root, bg=BG, height=5)
+        sp2.grid(row=5, column=0)
+        self._bg_frames.append(sp2)
         self.root.grid_columnconfigure(0, weight=1)
 
         for wgt in self.root.winfo_children():
@@ -282,10 +312,43 @@ class App:
                                 command=self._toggle_top)
         self.menu.add_command(label="立即刷新", command=self.refresh_async)
         self.menu.add_separator()
+        self.menu.add_command(label="白天/黑夜模式", command=self._toggle_theme)
+        self.menu.add_separator()
         self.menu.add_command(label="退出", command=self._quit)
 
         self.refresh_async()
         self._schedule_next()
+
+    def _fit(self):
+        """Resize window to fit content, keeping current position."""
+        self.root.update_idletasks()
+        w = self.root.winfo_reqwidth() + 6
+        h = self.root.winfo_reqheight() + 6
+        self.root.geometry(f"{w}x{h}")  # size only; position unchanged
+        self._round_corners()
+
+    def _round_corners(self, radius=8):
+        """Rounded corners: prefer Win11 DWM native rounding (antialiased)."""
+        try:
+            hwnd = int(self.root.wm_frame(), 16)
+            # DWMWA_WINDOW_CORNER_PREFERENCE = 33, DWMWCP_ROUND = 2
+            pref = ctypes.c_int(2)
+            ok = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd, 33, ctypes.byref(pref), ctypes.sizeof(pref))
+            if ok == 0:
+                return  # DWM handled rounding
+        except Exception:
+            pass
+        # fallback for older Windows: region-based rounding (aliased)
+        try:
+            hwnd = int(self.root.wm_frame(), 16)
+            w = self.root.winfo_width()
+            h = self.root.winfo_height()
+            rgn = ctypes.windll.gdi32.CreateRoundRectRgn(0, 0, w + 1, h + 1,
+                                                         radius, radius)
+            ctypes.windll.user32.SetWindowRgn(hwnd, rgn, True)
+        except Exception:
+            pass
 
     def _quit(self):
         try:
@@ -299,6 +362,31 @@ class App:
         self.alpha_val = max(40, min(100, self.alpha_val + delta))
         self.root.attributes("-alpha", self.alpha_val / 100)
 
+    def _toggle_theme(self):
+        self.theme = "light" if getattr(self, "theme", "dark") == "dark" else "dark"
+        t = THEMES[self.theme]
+        self.root.configure(bg=t["BG"])
+        for fr in self._bg_frames:
+            fr.configure(bg=t["BG"])
+        self._divider.configure(bg=t["BORDER"])
+        for card in self._cards:
+            card.configure(bg=t["BG_CARD"],
+                           highlightbackground=t["BORDER"])
+        for lbl in self._name_labels:
+            lbl.configure(fg=t["FG_DIM"], bg=t["BG_CARD"])
+        for pl, rl in self.rows.values():
+            pl.configure(bg=t["BG_CARD"])
+            rl.configure(fg=t["FG_DIM"], bg=t["BG_CARD"])
+        for name, lbl in self.section_titles.items():
+            lbl.configure(bg=t["BG_CARD"])
+        self.section_renews["Kimi"].configure(fg=t["KIMI_SOFT"], bg=t["BG_CARD"])
+        self.section_renews["Codex"].configure(fg=t["CODEX_SOFT"], bg=t["BG_CARD"])
+        self.status.configure(fg=t["FG_DIM"], bg=t["BG"])
+        self.close_btn.configure(fg=t["FG_DIM"], bg=t["BG"])
+        for b in self._alpha_btns:
+            b.configure(fg=t["FG_DIM"], bg=t["BG"])
+        self._render()  # pct 颜色按当前主题重算
+
     def _schedule_next(self):
         """Align auto-refresh to clock :00/:15/:30/:45."""
         now = time.time()
@@ -309,26 +397,28 @@ class App:
         f = tk.Frame(self.root, bg=BG_CARD,
                      highlightbackground="#33334a", highlightthickness=1)
         f.grid(row=row, column=0, sticky="ew", padx=10, pady=(4, 0))
+        self._cards.append(f)
         title_lbl = tk.Label(f, text=title, fg=color, bg=BG_CARD,
-                             font=("Microsoft YaHei UI", 8, "bold"), anchor="w")
-        title_lbl.grid(row=0, column=0, columnspan=2, sticky="w",
+                             font=("Microsoft YaHei UI", 9, "bold"), anchor="w")
+        title_lbl.grid(row=0, column=0, columnspan=3, sticky="w",
                        padx=(7, 0), pady=(3, 0))
         renew_lbl = tk.Label(f, text="", bg=BG_CARD, anchor="w",
-                             font=("Microsoft YaHei UI", 8))
+                             font=("Microsoft YaHei UI", 9))
         renew_lbl.grid(row=0, column=2, sticky="w",
                        padx=(12, 7), pady=(3, 0))
         self.section_titles[title] = title_lbl
         self.section_renews[title] = renew_lbl
         for i, (key, name) in enumerate(lines, start=1):
-            tk.Label(f, text=name, fg=FG_DIM, bg=BG_CARD,
-                     font=("Microsoft YaHei UI", 8), anchor="w"
-                     ).grid(row=i, column=0, sticky="w", padx=(7, 0))
+            nl = tk.Label(f, text=name, fg=FG_DIM, bg=BG_CARD,
+                          font=("Microsoft YaHei UI", 9), anchor="w", width=8)
+            nl.grid(row=i, column=0, sticky="w", padx=(7, 0))
+            self._name_labels.append(nl)
             pct = tk.Label(f, text="…", fg=FG_TEXT, bg=BG_CARD,
-                           font=("Microsoft YaHei UI", 8, "bold"),
-                           anchor="w", width=5)
+                           font=("Microsoft YaHei UI", 9, "bold"),
+                           anchor="w", width=4)
             pct.grid(row=i, column=1, sticky="w", padx=(6, 0))
             rst = tk.Label(f, text="", fg=FG_DIM, bg=BG_CARD,
-                           font=("Microsoft YaHei UI", 8), anchor="w")
+                           font=("Microsoft YaHei UI", 9), anchor="w", width=11)
             rst.grid(row=i, column=2, sticky="w", padx=(12, 7),
                      pady=(0, 3 if i == len(lines) else 0))
             self.rows[key] = (pct, rst)
@@ -385,10 +475,13 @@ class App:
         render_err = None
         try:
             self._render()
+            self._fit()
         except Exception as ex:
             render_err = repr(ex)
         try:
             dbg = {"updated": datetime.now().isoformat(timespec="seconds"),
+                   "win": {"w": self.root.winfo_width(), "h": self.root.winfo_height(),
+                           "reqw": self.root.winfo_reqwidth(), "reqh": self.root.winfo_reqheight()},
                    "data": data, "errors": errors, "render_err": render_err,
                    "status_text": self.status.cget("text")}
             with open(DEBUG_FILE, "w", encoding="utf-8") as f:
@@ -402,7 +495,8 @@ class App:
             pl.config(text="--")
             rl.config(text="")
         else:
-            color = FG_TEXT if pct > 30 else ("#e0a040" if pct > 15 else "#e06060")
+            base = THEMES[getattr(self, "theme", "dark")]["FG_TEXT"]
+            color = base if pct > 30 else ("#d08020" if pct > 15 else "#d04040")
             pl.config(text=f"{pct}%", fg=color)
             rl.config(text=reset_text if reset_text else "")
 
