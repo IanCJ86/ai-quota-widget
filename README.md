@@ -1,6 +1,6 @@
 # AI Quota Widget（额度监控悬浮窗）
 
-一个 Windows 桌面悬浮小工具，实时显示 **Kimi Code** 和 **Codex** 的用量额度：
+一个 Windows 桌面悬浮小工具，定时显示 **Kimi Code** 和 **Codex** 的用量额度：
 
 ![screenshot](screenshot.png)
 
@@ -18,7 +18,7 @@
 
 1. 安装 Python 3（仅用到标准库，无需 pip 安装任何依赖）
 2. 本机需已登录 Kimi Code CLI（凭证位于 `~/.kimi-code`）和 Codex CLI（`~/.codex`，需可调用 `codex app-server`）
-3. 下载本仓库，双击 `start.bat` 即可启动（无控制台窗口）
+3. 下载本仓库，双击 `start.bat` 即可启动（通常无控制台窗口；如果系统没有 pythonw.exe，可能会出现控制台窗口）
 
 也可以直接运行：
 
@@ -52,6 +52,15 @@ python quota_monitor.py
 - 套餐名与续订日期无法从接口自动读取，需要手动配置（见上文「配置项」）
 
 欢迎 issue / PR 扩展更多服务商。
+
+## 隐私与安全说明
+
+- 本仓库不包含任何本地凭证或账号信息
+- 程序运行时会读取本机凭证（`~/.kimi-code`、`~/.codex`），不会上传、打印或外传
+- Kimi 侧仅访问官方域名 `api.kimi.com` 与 `auth.kimi.com`
+- Codex 侧通过本机 `codex app-server` 获取额度，不直接访问网络
+- Kimi 凭证过期时，程序可能用 refresh_token 自动续期并**更新本地凭证文件**
+- 这是个人自用工具：不建议直接运行未经检查的第三方修改版，改完自己看一遍代码再用
 
 ## 免责声明
 
