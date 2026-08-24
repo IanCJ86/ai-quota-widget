@@ -472,10 +472,10 @@ class App:
                                 command=self._apply_visibility)
         self.menu.add_checkbutton(label="GLM Coding Plan", variable=self.show_glm,
                                 command=self._apply_visibility)
-        self.show_radar = tk.BooleanVar(value=self._st.get("show_radar", True))
-        self.menu.add_checkbutton(label="重置几率", variable=self.show_radar,
-                                command=self._apply_visibility)
         self.menu.add_checkbutton(label="Codex", variable=self.show_codex,
+                                command=self._apply_visibility)
+        self.show_radar = tk.BooleanVar(value=self._st.get("show_radar", True))
+        self.menu.add_checkbutton(label="Codex 重置雷达", variable=self.show_radar,
                                 command=self._apply_visibility)
         self.menu.add_separator()
         self.menu.add_cascade(label="Kimi Coding Plan 设置",
@@ -739,27 +739,12 @@ class App:
         self._provider_menus = getattr(self, "_provider_menus", {})
         self._provider_menus[kind] = m
         cur = self._current_plan(kind)
-        custom = CFG.get(f"custom_plan_{kind}", "")
-        # legacy value no longer in presets migrates into the custom slot so it
-        # still shows up as a selectable, selected entry after upgrades
-        if cur and cur not in presets and not custom:
-            custom = cur
-            CFG[f"custom_plan_{kind}"] = custom
-            _save_config(CFG)
         var = tk.StringVar(value=cur)
         setattr(self, f"_plan_var_{kind}", var)
         for name in presets:
             m.add_radiobutton(label=name, variable=var, value=name,
                               command=lambda n=name: self._set_plan(kind, n))
-        self._plan_custom = getattr(self, "_plan_custom", {})
-        if custom:
-            # persistent custom entry: selectable again, shows as 自定义:xxx
-            self._plan_custom[kind] = len(presets)
-            m.add_radiobutton(label=f"自定义：{custom}", variable=var,
-                              value=custom,
-                              command=lambda: self._set_plan(kind, custom))
-        else:
-            self._plan_custom[kind] = None
+        # custom input just sets the display name; nothing is remembered in the menu
         m.add_command(label="自定义…",
                       command=lambda: self._ask_custom_plan(kind))
         sub = tk.Menu(m, tearoff=0)
@@ -779,26 +764,15 @@ class App:
         self._render()
 
     def _ask_custom_plan(self, kind):
-        cur = self._current_plan(kind)
-        initial = CFG.get(f"custom_plan_{kind}") or cur
-        s = self._ask("自定义套餐", "套餐显示名：", initial=initial)
+        s = self._ask("自定义套餐", "套餐显示名：",
+                      initial=self._current_plan(kind))
         if not (s and s.strip()):
             return  # cancel or empty: no change at all
         name = s.strip()
-        CFG[f"custom_plan_{kind}"] = name
-        m = self._provider_menus[kind]
-        var = getattr(self, f"_plan_var_{kind}")
-        idx = self._plan_custom[kind]
-        if idx is None:
-            # insert the custom radiobutton right before the 自定义… command
-            idx = len(PLAN_PRESETS[kind])
-            m.insert_radiobutton(idx, label=f"自定义：{name}", variable=var,
-                                 value=name,
-                                 command=lambda: self._set_plan(kind, name))
-            self._plan_custom[kind] = idx
-        else:
-            m.entryconfig(idx, label=f"自定义：{name}", value=name)
-        self._set_plan(kind, name)
+        getattr(self, f"_plan_var_{kind}").set(name)
+        CFG[PLAN_CFG_KEY[kind]] = name
+        _save_config(CFG)
+        self._render()
 
     def _set_renew(self, kind, mode):
         today = date.today()
