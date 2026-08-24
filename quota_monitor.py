@@ -12,7 +12,7 @@ import urllib.request
 import urllib.parse
 from datetime import datetime, date, timezone
 import tkinter as tk
-from tkinter import messagebox, simpledialog
+from tkinter import messagebox, simpledialog, ttk
 
 # crisp rendering on high-DPI displays (declare per-monitor DPI awareness)
 try:
@@ -645,7 +645,7 @@ class App:
                         command=lambda: self._set_renew(kind, "next_month"))
         sub.add_command(label="设为本月最后一天",
                         command=lambda: self._set_renew(kind, "last_day"))
-        sub.add_command(label="手动输入…",
+        sub.add_command(label="选择日期…",
                         command=lambda: self._ask_renew(kind))
         m.add_cascade(label="续订日期", menu=sub)
         return m
@@ -681,20 +681,73 @@ class App:
         self._render()
 
     def _ask_renew(self, kind):
-        cur = CFG.get(f"renew_{kind}", "")
-        s = self._ask("续订日期", "输入续订日期（如 08-31 / 8月31 / 0831）：",
-                      initial=cur)
-        if s is None:
-            return
-        v = _parse_mmdd(s)
+        v = self._renew_picker(kind)
         if v:
             CFG[f"renew_{kind}"] = v
             _save_config(CFG)
             self._render()
-        else:
-            messagebox.showerror("格式不对",
-                                 f"无法识别「{s}」，请用 08-31 这类写法。",
-                                 parent=self.root)
+
+    def _renew_picker(self, kind):
+        """Modal month/day picker (no keyboard input, no year involved).
+
+        Returns "MM-DD" or None on cancel. Day overflow (e.g. Feb 31) is
+        clamped to the month's last day with a notice, instead of rejecting.
+        """
+        cur = CFG.get(f"renew_{kind}", "")
+        try:
+            cm, cd = int(cur[:2]), int(cur[3:])
+        except Exception:
+            t = date.today()
+            cm, cd = t.month, t.day
+
+        top = self.topmost.get()
+        self.root.attributes("-topmost", True)
+        self.root.lift()
+        win = tk.Toplevel(self.root)
+        win.title("续订日期")
+        win.attributes("-topmost", True)
+        win.transient(self.root)
+        win.resizable(False, False)
+        win.configure(bg=BG)
+        win.geometry(f"+{self.root.winfo_x() + 40}+{self.root.winfo_y() + 40}")
+
+        mv = tk.StringVar(value=str(cm))
+        dv = tk.StringVar(value=str(cd))
+        lbl = dict(bg=BG, fg=FG_TEXT, font=("Microsoft YaHei UI", 9))
+        tk.Label(win, text="月", **lbl).grid(row=0, column=0, padx=(12, 4), pady=10)
+        mc = ttk.Combobox(win, textvariable=mv, state="readonly", width=3,
+                          values=[str(i) for i in range(1, 13)])
+        mc.grid(row=0, column=1, padx=(0, 8))
+        tk.Label(win, text="日", **lbl).grid(row=0, column=2, padx=(4, 4))
+        dc = ttk.Combobox(win, textvariable=dv, state="readonly", width=3,
+                          values=[str(i) for i in range(1, 32)])
+        dc.grid(row=0, column=3, padx=(0, 12))
+
+        result = {}
+
+        def ok():
+            m, d = int(mv.get()), int(dv.get())
+            # no year is involved; use a non-leap reference year so Feb caps at 28
+            last = calendar.monthrange(2023, m)[1]
+            if d > last:
+                messagebox.showinfo("已调整",
+                                    f"{m}月没有{d}日，已设为{m}月{last}日。",
+                                    parent=win)
+                d = last
+            result["v"] = f"{m:02d}-{d:02d}"
+            win.destroy()
+
+        tk.Button(win, text="确定", command=ok, width=6).grid(
+            row=1, column=1, columnspan=2, pady=(0, 10))
+        tk.Button(win, text="取消", command=win.destroy, width=6).grid(
+            row=1, column=3, pady=(0, 10))
+        # expose for smoke tests
+        self._picker = (win, mv, dv, ok)
+
+        win.grab_set()
+        self.root.wait_window(win)
+        self.root.attributes("-topmost", top)
+        return result.get("v")
 
     def _ask(self, title, prompt, initial=""):
         """simpledialog that stays in front of our borderless topmost window."""
