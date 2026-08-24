@@ -28,7 +28,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 
 ### 3. 根据用户口述写 config.json
 
-安装目录下的 `config.json` 是唯一需要改的文件。向用户确认以下信息（不知道就保留占位值）：
+安装目录下的 `config.json` 是唯一需要改的文件。向用户确认以下信息（不知道就保留占位值；**这些值用户日后都能在右键菜单里自己改，不用追求完美**）：
 
 ```json
 {
@@ -48,8 +48,9 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 
 | 字段 | 含义 |
 | --- | --- |
-| `renew_kimi` / `renew_codex` | 续订日期，仅用于界面显示，格式 `MM-DD` |
-| `kimi_plan_name` | Kimi 套餐显示名（接口只返回等级，显示名靠这里覆盖） |
+| `renew_kimi` / `renew_codex` | 续订日期，仅用于界面显示，格式 `MM-DD`（装好后用户可在右键菜单改） |
+| `kimi_plan_name` | Kimi 套餐显示名（右键菜单可改） |
+| `codex_plan_name` | Codex 套餐显示名覆盖，如 `"Pro 20x"`（右键菜单可改）；留空则用接口值 + `codex_plan_suffix` |
 | `codex_plan_suffix` | Codex 套餐名后缀，例如 `" 20x"` |
 | `show_kimi` / `show_codex` / `show_glm` | 各卡片是否显示（右键菜单也可切换） |
 | `glm_api_key` | 可选。填入有效的 GLM Coding Plan API Key 后 GLM 卡片自动出现 |
@@ -73,10 +74,10 @@ cd "%USERPROFILE%\Desktop\quota-widget" && start.bat
 
 ### 5. 完成
 
-向用户汇报：安装目录、如何改配置（编辑 config.json 后双击窗口或重启生效）、如何退出（右键菜单 → 退出，或底部 ✕）。
+向用户汇报：安装目录、如何改配置（**右键 → Kimi 设置 / Codex 设置 可直接改套餐名和续订日期**；GLM 等进阶项编辑 config.json 后重启生效）、如何退出（右键菜单 → 退出，或底部 ✕）。
 
 ## 排错速查
 
 - 双击 start.bat 没反应 → 用 `python quota_monitor.py` 前台跑，看终端报错。
 - 窗口不出现但 debug.txt 正常 → 窗口在屏幕右下角，可能被其他窗口挡住（默认置顶）。
-- 修改 config.json 不生效 → 重启 widget（配置只在启动时读取；右键菜单的显示开关例外，即时生效并写回 config.json）。
+- 修改 config.json 不生效 → 重启 widget（文件配置只在启动时读取；右键菜单里的套餐、续订日期、显示开关都是即时生效并写回 config.json）。

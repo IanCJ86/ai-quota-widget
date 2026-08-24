@@ -4,13 +4,15 @@
 # Never prints or logs any token.
 import json
 import os
+import calendar
 import subprocess
 import threading
 import time
 import urllib.request
 import urllib.parse
-from datetime import datetime, timezone
+from datetime import datetime, date, timezone
 import tkinter as tk
+from tkinter import messagebox, simpledialog
 
 # crisp rendering on high-DPI displays (declare per-monitor DPI awareness)
 try:
@@ -40,6 +42,7 @@ DEFAULT_CONFIG = {
     "renew_kimi": "MM-DD",        # Kimi renewal date shown in the UI, e.g. "09-01"
     "renew_codex": "MM-DD",       # Codex renewal date shown in the UI
     "kimi_plan_name": "MyPlan",   # Kimi plan display name (API only returns a level)
+    "codex_plan_name": "",        # Codex plan display override; empty = API planType + suffix
     "codex_plan_suffix": "",      # suffix appended to Codex planType, e.g. " 20x"
     # ---- visibility toggles (also in the right-click menu) ----
     "show_kimi": True,
@@ -99,6 +102,8 @@ KIMI_BLUE_SOFT = "#8db4e8"
 CODEX_GREEN_SOFT = "#83d4ab"
 GLM_PURPLE = "#b48cff"
 GLM_PURPLE_SOFT = "#c9b3f2"
+KIMI_PLAN_PRESETS = ["Allegro", "基础版", "专业版"]
+CODEX_PLAN_PRESETS = ["Free", "Plus", "Pro", "Pro 20x"]
 CODEX_RADAR_URL = "https://codex-reset.com/api/forecast"
 GLM_QUOTA_URLS = {
     "cn": "https://open.bigmodel.cn/api/monitor/usage/quota/limit",
@@ -131,6 +136,29 @@ def _countdown(iso_or_ts):
         return f"{h}h{m:02d}m后"
     except Exception:
         return ""
+
+
+def _parse_mmdd(s):
+    """Accept '08-31', '8-31', '8月31', '0831', '831', '8/31' -> 'MM-DD'; else None."""
+    t = str(s).strip()
+    for a, b in (("年", "-"), ("月", "-"), ("日", ""), ("/", "-"), (".", "-")):
+        t = t.replace(a, b)
+    t = t.strip("- ")
+    if t.isdigit():
+        if len(t) == 4:
+            parts = [t[:2], t[2:]]
+        elif len(t) == 3:
+            parts = [t[0], t[1:]]
+        else:
+            return None
+    else:
+        parts = [p for p in t.split("-") if p]
+        if len(parts) != 2 or not all(p.isdigit() for p in parts):
+            return None
+    m, d = int(parts[0]), int(parts[1])
+    if 1 <= m <= 12 and 1 <= d <= 31:
+        return f"{m:02d}-{d:02d}"
+    return None
 
 
 # ---------------- Kimi ----------------
@@ -428,6 +456,11 @@ class App:
         self.menu.add_checkbutton(label="GLM", variable=self.show_glm,
                                 command=self._apply_visibility)
         self.menu.add_separator()
+        self.menu.add_cascade(label="Kimi 设置",
+                              menu=self._build_provider_menu("kimi"))
+        self.menu.add_cascade(label="Codex 设置",
+                              menu=self._build_provider_menu("codex"))
+        self.menu.add_separator()
         self.menu.add_command(label="白天/黑夜模式", command=self._toggle_theme)
         self.menu.add_separator()
         self.menu.add_command(label="退出", command=self._quit)
@@ -582,6 +615,98 @@ class App:
     def _toggle_top(self):
         self.root.attributes("-topmost", self.topmost.get())
 
+    # ---------- provider settings submenus (Kimi / Codex) ----------
+
+    def _current_plan(self, kind):
+        if kind == "kimi":
+            return CFG.get("kimi_plan_name", "")
+        return (CFG.get("codex_plan_name")
+                or (self.data.get("c_plan") or "Pro")
+                + CFG.get("codex_plan_suffix", ""))
+
+    def _build_provider_menu(self, kind):
+        presets = KIMI_PLAN_PRESETS if kind == "kimi" else CODEX_PLAN_PRESETS
+        m = tk.Menu(self.menu, tearoff=0)
+        cur = self._current_plan(kind)
+        var = tk.StringVar(value=cur)
+        setattr(self, f"_plan_var_{kind}", var)
+        for name in presets:
+            m.add_radiobutton(label=name, variable=var, value=name,
+                              command=lambda n=name: self._set_plan(kind, n))
+        # "custom" radiobutton shows as selected when current value is not a preset
+        custom_val = "" if cur in presets else cur
+        custom_idx = len(presets)
+        m.add_radiobutton(label="自定义…", variable=var, value=custom_val,
+                          command=lambda: self._ask_custom_plan(kind))
+        self._plan_custom = getattr(self, "_plan_custom", {})
+        self._plan_custom[kind] = (m, custom_idx)
+        sub = tk.Menu(m, tearoff=0)
+        sub.add_command(label="设为下个月今天",
+                        command=lambda: self._set_renew(kind, "next_month"))
+        sub.add_command(label="设为本月最后一天",
+                        command=lambda: self._set_renew(kind, "last_day"))
+        sub.add_command(label="手动输入…",
+                        command=lambda: self._ask_renew(kind))
+        m.add_cascade(label="续订日期", menu=sub)
+        return m
+
+    def _set_plan(self, kind, name):
+        getattr(self, f"_plan_var_{kind}").set(name)
+        CFG["kimi_plan_name" if kind == "kimi" else "codex_plan_name"] = name
+        _save_config(CFG)
+        self._render()
+
+    def _ask_custom_plan(self, kind):
+        cur = self._current_plan(kind)
+        s = self._ask("自定义套餐", "套餐显示名：", initial=cur)
+        if s and s.strip():
+            name = s.strip()
+            menu, idx = self._plan_custom[kind]
+            menu.entryconfig(idx, value=name)  # make the radio match the new value
+            self._set_plan(kind, name)
+        else:
+            getattr(self, f"_plan_var_{kind}").set(cur)  # revert selection
+
+    def _set_renew(self, kind, mode):
+        today = date.today()
+        if mode == "next_month":
+            y, m = (today.year + 1, 1) if today.month == 12 \
+                else (today.year, today.month + 1)
+            d = min(today.day, calendar.monthrange(y, m)[1])
+        else:  # last_day
+            y, m = today.year, today.month
+            d = calendar.monthrange(y, m)[1]
+        CFG[f"renew_{kind}"] = f"{m:02d}-{d:02d}"
+        _save_config(CFG)
+        self._render()
+
+    def _ask_renew(self, kind):
+        cur = CFG.get(f"renew_{kind}", "")
+        s = self._ask("续订日期", "输入续订日期（如 08-31 / 8月31 / 0831）：",
+                      initial=cur)
+        if s is None:
+            return
+        v = _parse_mmdd(s)
+        if v:
+            CFG[f"renew_{kind}"] = v
+            _save_config(CFG)
+            self._render()
+        else:
+            messagebox.showerror("格式不对",
+                                 f"无法识别「{s}」，请用 08-31 这类写法。",
+                                 parent=self.root)
+
+    def _ask(self, title, prompt, initial=""):
+        """simpledialog that stays in front of our borderless topmost window."""
+        top = self.topmost.get()
+        self.root.attributes("-topmost", True)
+        self.root.lift()
+        try:
+            return simpledialog.askstring(title, prompt, initialvalue=initial,
+                                          parent=self.root)
+        finally:
+            self.root.attributes("-topmost", top)
+
     def _auto(self):
         self.refresh_async()
         self._schedule_next()
@@ -661,8 +786,9 @@ class App:
             self.section_renews["Kimi"].config(
                 text="续订 " + CFG.get("renew_kimi", ""), fg=KIMI_BLUE_SOFT)
         if d.get("c_plan"):
-            self.section_titles["Codex"].config(
-                text="Codex · " + d["c_plan"] + CFG.get("codex_plan_suffix", ""))
+            c_plan = CFG.get("codex_plan_name") or (
+                d["c_plan"] + CFG.get("codex_plan_suffix", ""))
+            self.section_titles["Codex"].config(text="Codex · " + c_plan)
             self.section_renews["Codex"].config(
                 text="续订 " + CFG.get("renew_codex", ""), fg=CODEX_GREEN_SOFT)
         self._set_row("k5", d.get("k5_pct"), _countdown(d.get("k5_reset")))

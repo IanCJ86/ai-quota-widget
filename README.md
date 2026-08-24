@@ -26,7 +26,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 - **Codex 重置雷达**：Codex 卡片内一行「雷达」，显示未来 24 小时全局重置概率（数据源 [codex-reset.com](https://codex-reset.com) 的 forecast 接口；置信度低/中时标注 ·低 / ·中，拉取失败静默降级为 `雷达 --`）
 - **可选 GLM Coding Plan 卡片**：在 config.json 填入 `glm_api_key` 后自动出现，显示 5 小时 / 每周额度与重置时间（需有效的 GLM Coding Plan Key，见「配置项」）
 - 显示额度重置时间（5 小时窗显示倒计时，每周窗显示具体时间）
-- 显示套餐名与续订日期（接口不返回，在 `config.json` 里配置）
+- 显示套餐名与续订日期（接口不返回；**右键 → Kimi 设置 / Codex 设置 里直接选**，也可在 `config.json` 里改）
 - 每 15 分钟自动刷新，刷新时刻对齐整刻（:00 / :15 / :30 / :45）
 - 双击窗口立即刷新；右键菜单：置顶 / 立即刷新 / 白天黑夜切换 / 退出
 - 右键可分别勾选显示 Kimi / Codex / GLM 卡片，选择写回 `config.json`，重启后自动沿用
@@ -60,19 +60,27 @@ python quota_monitor.py
 
 ## 配置项
 
-所有个性化配置都在 **`config.json`**（与 `quota_monitor.py` 同目录），不用改代码。不存在时用占位默认值。右键菜单的显示开关也会写回这个文件：
+**推荐用右键菜单，不用编辑任何文件**：右键 → `Kimi 设置` / `Codex 设置`：
+
+- **套餐**：单选预设（Kimi：Allegro / 基础版 / 专业版；Codex：Free / Plus / Pro / Pro 20x），或「自定义…」输入任意名字
+- **续订日期**：「设为下个月今天」「设为本月最后一天」一键搞定，或「手动输入…」——支持 `08-31`、`8-31`、`8月31`、`0831` 等写法，自动规整为 MM-DD，输错会弹提示不会崩溃
+
+所有选择立即生效并写回 `config.json`。GLM 卡片不提供设置菜单，仍走 config.json。
+
+需要手动改文件的场景（如首次安装、批量配置）：所有配置都在 **`config.json`**（与 `quota_monitor.py` 同目录），不用改代码。不存在时用占位默认值。右键菜单的选择也写在这个文件里：
 
 | 字段 | 说明 | 示例 |
 | --- | --- | --- |
-| `renew_kimi` | Kimi 续订日期，仅用于显示，格式 `MM-DD` | `"09-01"` |
-| `renew_codex` | Codex 续订日期，仅用于显示 | `"09-15"` |
-| `kimi_plan_name` | Kimi 套餐显示名（接口只返回等级，这里覆盖显示） | `"Allegro"` |
+| `renew_kimi` | Kimi 续订日期，仅用于显示，格式 `MM-DD`（右键菜单可改） | `"09-01"` |
+| `renew_codex` | Codex 续订日期，仅用于显示（右键菜单可改） | `"09-15"` |
+| `kimi_plan_name` | Kimi 套餐显示名（右键菜单可改） | `"Allegro"` |
+| `codex_plan_name` | Codex 套餐显示名覆盖（右键菜单可改）；空字符串 = 用接口返回值 + 后缀 | `"Pro 20x"` |
 | `codex_plan_suffix` | Codex 套餐名后缀，追加在接口返回值后 | `" 20x"` |
 | `show_kimi` / `show_codex` / `show_glm` | 各卡片是否显示 | `true` / `false` |
 | `glm_api_key` | 可选，GLM Coding Plan API Key；填了 GLM 卡片才可能出现 | `"sk-..."` |
 | `glm_region` | `"cn"` → open.bigmodel.cn，`"intl"` → api.z.ai | `"cn"` |
 
-注意：`renew_*`、`kimi_plan_name`、`codex_plan_suffix`、`glm_*` 的修改需要重启 widget 生效；`show_*` 用右键菜单切换即时生效。
+注意：直接编辑 config.json 里 `renew_*` / 套餐名 / `glm_*` 需要重启 widget 生效；右键菜单的所有操作（套餐、续订日期、显示开关）即时生效。
 
 ### 关于 GLM 卡片
 
