@@ -44,6 +44,12 @@ DEFAULT_CONFIG = {
     "kimi_plan_name": "MyPlan",   # Kimi plan display name (API only returns a level)
     "codex_plan_name": "",        # Codex plan display override; empty = API planType + suffix
     "codex_plan_suffix": "",      # suffix appended to Codex planType, e.g. " 20x"
+    "glm_plan_name": "",          # GLM plan display name, e.g. "Lite" / "Pro" / "Max"
+    "renew_glm": "MM-DD",         # GLM renewal date shown in the UI
+    "custom_plan_kimi": "",       # user-defined plan names (kept as menu entries)
+    "custom_plan_codex": "",
+    "custom_plan_glm": "",
+    "theme": "dark",              # dark / light / glass
     # ---- visibility toggles (also in the right-click menu) ----
     "show_kimi": True,
     "show_codex": True,
@@ -84,6 +90,7 @@ if os.name == "nt":
                   "creationflags": subprocess.CREATE_NO_WINDOW}
 
 # colors
+TRANSP_KEY = "#010102"  # glass colorkey: root pixels of this color go transparent
 THEMES = {
     "dark": dict(BG="#1e1e2e", BG_CARD="#262638", BORDER="#3a3a4e",
                  FG_DIM="#7a7a90", FG_TEXT="#e8e8f4",
@@ -91,6 +98,11 @@ THEMES = {
     "light": dict(BG="#f2f3f7", BG_CARD="#ffffff", BORDER="#d9dae4",
                   FG_DIM="#8a8a9a", FG_TEXT="#23233a",
                   KIMI_SOFT="#4a7fc9", CODEX_SOFT="#3a9e6e"),
+    # glass: root/spacer/bar pixels use TRANSP_KEY and become see-through,
+    # acrylic blur is applied behind them; cards stay solid for readability
+    "glass": dict(BG=TRANSP_KEY, BG_CARD="#2b2b3d", BORDER="#55556e",
+                  FG_DIM="#a0a0b8", FG_TEXT="#f2f2f8",
+                  KIMI_SOFT="#8db4e8", CODEX_SOFT="#83d4ab"),
 }
 BG = "#1e1e2e"
 BG_CARD = "#262638"
@@ -102,8 +114,13 @@ KIMI_BLUE_SOFT = "#8db4e8"
 CODEX_GREEN_SOFT = "#83d4ab"
 GLM_PURPLE = "#b48cff"
 GLM_PURPLE_SOFT = "#c9b3f2"
-KIMI_PLAN_PRESETS = ["Allegro", "基础版", "专业版"]
-CODEX_PLAN_PRESETS = ["Free", "Plus", "Pro", "Pro 20x"]
+PLAN_PRESETS = {
+    "kimi": ["Andante", "Moderato", "Allegretto", "Allegro"],
+    "codex": ["Go", "Plus", "Pro 5x", "Pro 20x"],
+    "glm": ["Lite", "Pro", "Max"],
+}
+PLAN_CFG_KEY = {"kimi": "kimi_plan_name", "codex": "codex_plan_name",
+                "glm": "glm_plan_name"}
 CODEX_RADAR_URL = "https://codex-reset.com/api/forecast"
 GLM_QUOTA_URLS = {
     "cn": "https://open.bigmodel.cn/api/monitor/usage/quota/limit",
@@ -460,12 +477,20 @@ class App:
                               menu=self._build_provider_menu("kimi"))
         self.menu.add_cascade(label="Codex 设置",
                               menu=self._build_provider_menu("codex"))
+        self.menu.add_cascade(label="GLM 设置",
+                              menu=self._build_provider_menu("glm"))
         self.menu.add_separator()
-        self.menu.add_command(label="白天/黑夜模式", command=self._toggle_theme)
+        self._theme_var = tk.StringVar(value=self.theme)
+        tm = tk.Menu(self.menu, tearoff=0)
+        for label, name in (("黑夜", "dark"), ("白天", "light"), ("毛玻璃", "glass")):
+            tm.add_radiobutton(label=label, variable=self._theme_var, value=name,
+                               command=lambda n=name: self._set_theme(n))
+        self.menu.add_cascade(label="主题", menu=tm)
         self.menu.add_separator()
         self.menu.add_command(label="退出", command=self._quit)
 
         self._apply_visibility()
+        self._set_theme(CFG.get("theme", "dark"))
         self.refresh_async()
         self._schedule_next()
 
@@ -527,9 +552,60 @@ class App:
         (self._divider2.grid if (g and (k or c)) else self._divider2.grid_remove)()
         self._fit()
 
-    def _toggle_theme(self):
-        self.theme = "light" if getattr(self, "theme", "dark") == "dark" else "dark"
-        t = THEMES[self.theme]
+    def _apply_acrylic(self, on):
+        """SetWindowCompositionAttribute: ACCENT_ENABLE_ACRYLICBLURBEHIND (4)
+        when on, ACCENT_DISABLED (0) when off. Returns True on success."""
+        try:
+            hwnd = int(self.root.wm_frame(), 16)
+            # ABGR tint for acrylic: alpha 0x99, color #1e1e2e (dark slate)
+            tint = (0x99 << 24) | (0x2E << 16) | (0x1E << 8) | 0x1E
+
+            class ACCENTPOLICY(ctypes.Structure):
+                _fields_ = [("AccentState", ctypes.c_int),
+                            ("AccentFlags", ctypes.c_int),
+                            ("GradientColor", ctypes.c_uint),
+                            ("AnimationId", ctypes.c_int)]
+
+            class WCA(ctypes.Structure):
+                _fields_ = [("Attribute", ctypes.c_int),
+                            ("Data", ctypes.c_void_p),
+                            ("SizeOfData", ctypes.c_size_t)]
+
+            accent = ACCENTPOLICY(4 if on else 0, 0, tint if on else 0, 0)
+            data = WCA(19, ctypes.cast(ctypes.byref(accent), ctypes.c_void_p),
+                       ctypes.sizeof(accent))
+            return bool(ctypes.windll.user32.SetWindowCompositionAttribute(
+                hwnd, ctypes.byref(data)))
+        except Exception:
+            return False
+
+    def _set_theme(self, name):
+        if name not in THEMES:
+            name = "dark"
+        leaving_glass = getattr(self, "theme", "dark") == "glass" and name != "glass"
+        if name == "glass":
+            # Acrylic is best-effort: if SetWindowCompositionAttribute or the
+            # colorkey is unsupported, the window just stays solid with the
+            # glass palette (readable, no blur) -- a deliberate graceful degrade.
+            self._acrylic_on = self._apply_acrylic(True)
+            try:
+                self.root.attributes("-transparentcolor", TRANSP_KEY)
+            except Exception:
+                self._acrylic_on = False
+        elif leaving_glass:
+            try:
+                self.root.attributes("-transparentcolor", "")
+            except Exception:
+                pass
+            self._apply_acrylic(False)
+            self._acrylic_on = False
+        self.theme = name
+        if hasattr(self, "_theme_var"):
+            self._theme_var.set(name)
+        if CFG.get("theme") != name:
+            CFG["theme"] = name
+            _save_config(CFG)
+        t = THEMES[name]
         self.root.configure(bg=t["BG"])
         for fr in self._bg_frames:
             fr.configure(bg=t["BG"])
@@ -543,11 +619,11 @@ class App:
         for pl, rl in self.rows.values():
             pl.configure(bg=t["BG_CARD"])
             rl.configure(fg=t["FG_DIM"], bg=t["BG_CARD"])
-        for name, lbl in self.section_titles.items():
+        for lbl in self.section_titles.values():
             lbl.configure(bg=t["BG_CARD"])
         soft = {"Kimi": t["KIMI_SOFT"], "Codex": t["CODEX_SOFT"], "GLM": GLM_PURPLE_SOFT}
-        for name, lbl in self.section_renews.items():
-            lbl.configure(fg=soft.get(name, t["FG_DIM"]), bg=t["BG_CARD"])
+        for lbl_name, lbl in self.section_renews.items():
+            lbl.configure(fg=soft.get(lbl_name, t["FG_DIM"]), bg=t["BG_CARD"])
         self.status.configure(fg=t["FG_DIM"], bg=t["BG"])
         self.close_btn.configure(fg=t["FG_DIM"], bg=t["BG"])
         for b in self._alpha_btns:
@@ -615,31 +691,46 @@ class App:
     def _toggle_top(self):
         self.root.attributes("-topmost", self.topmost.get())
 
-    # ---------- provider settings submenus (Kimi / Codex) ----------
+    # ---------- provider settings submenus (Kimi / Codex / GLM) ----------
 
     def _current_plan(self, kind):
         if kind == "kimi":
             return CFG.get("kimi_plan_name", "")
+        if kind == "glm":
+            return CFG.get("glm_plan_name", "")
         return (CFG.get("codex_plan_name")
                 or (self.data.get("c_plan") or "Pro")
                 + CFG.get("codex_plan_suffix", ""))
 
     def _build_provider_menu(self, kind):
-        presets = KIMI_PLAN_PRESETS if kind == "kimi" else CODEX_PLAN_PRESETS
+        presets = PLAN_PRESETS[kind]
         m = tk.Menu(self.menu, tearoff=0)
+        self._provider_menus = getattr(self, "_provider_menus", {})
+        self._provider_menus[kind] = m
         cur = self._current_plan(kind)
+        custom = CFG.get(f"custom_plan_{kind}", "")
+        # legacy value no longer in presets migrates into the custom slot so it
+        # still shows up as a selectable, selected entry after upgrades
+        if cur and cur not in presets and not custom:
+            custom = cur
+            CFG[f"custom_plan_{kind}"] = custom
+            _save_config(CFG)
         var = tk.StringVar(value=cur)
         setattr(self, f"_plan_var_{kind}", var)
         for name in presets:
             m.add_radiobutton(label=name, variable=var, value=name,
                               command=lambda n=name: self._set_plan(kind, n))
-        # "custom" radiobutton shows as selected when current value is not a preset
-        custom_val = "" if cur in presets else cur
-        custom_idx = len(presets)
-        m.add_radiobutton(label="自定义…", variable=var, value=custom_val,
-                          command=lambda: self._ask_custom_plan(kind))
         self._plan_custom = getattr(self, "_plan_custom", {})
-        self._plan_custom[kind] = (m, custom_idx)
+        if custom:
+            # persistent custom entry: selectable again, shows as 自定义:xxx
+            self._plan_custom[kind] = len(presets)
+            m.add_radiobutton(label=f"自定义：{custom}", variable=var,
+                              value=custom,
+                              command=lambda: self._set_plan(kind, custom))
+        else:
+            self._plan_custom[kind] = None
+        m.add_command(label="自定义…",
+                      command=lambda: self._ask_custom_plan(kind))
         sub = tk.Menu(m, tearoff=0)
         sub.add_command(label="设为下个月今天",
                         command=lambda: self._set_renew(kind, "next_month"))
@@ -652,20 +743,31 @@ class App:
 
     def _set_plan(self, kind, name):
         getattr(self, f"_plan_var_{kind}").set(name)
-        CFG["kimi_plan_name" if kind == "kimi" else "codex_plan_name"] = name
+        CFG[PLAN_CFG_KEY[kind]] = name
         _save_config(CFG)
         self._render()
 
     def _ask_custom_plan(self, kind):
         cur = self._current_plan(kind)
-        s = self._ask("自定义套餐", "套餐显示名：", initial=cur)
-        if s and s.strip():
-            name = s.strip()
-            menu, idx = self._plan_custom[kind]
-            menu.entryconfig(idx, value=name)  # make the radio match the new value
-            self._set_plan(kind, name)
+        initial = CFG.get(f"custom_plan_{kind}") or cur
+        s = self._ask("自定义套餐", "套餐显示名：", initial=initial)
+        if not (s and s.strip()):
+            return  # cancel or empty: no change at all
+        name = s.strip()
+        CFG[f"custom_plan_{kind}"] = name
+        m = self._provider_menus[kind]
+        var = getattr(self, f"_plan_var_{kind}")
+        idx = self._plan_custom[kind]
+        if idx is None:
+            # insert the custom radiobutton right before the 自定义… command
+            idx = len(PLAN_PRESETS[kind])
+            m.insert_radiobutton(idx, label=f"自定义：{name}", variable=var,
+                                 value=name,
+                                 command=lambda: self._set_plan(kind, name))
+            self._plan_custom[kind] = idx
         else:
-            getattr(self, f"_plan_var_{kind}").set(cur)  # revert selection
+            m.entryconfig(idx, label=f"自定义：{name}", value=name)
+        self._set_plan(kind, name)
 
     def _set_renew(self, kind, mode):
         today = date.today()
@@ -827,7 +929,7 @@ class App:
             rl.config(text="")
             return
         base = THEMES[self.theme]["FG_TEXT"]
-        pl.config(text=f"24h {pct}%", fg=base)
+        pl.config(text=f"24h {pct}%", fg=base, width=7)
         suffix = {"low": "·低", "medium": "·中"}.get(self.data.get("cr_conf"), "")
         rl.config(text=suffix)
 
@@ -844,6 +946,14 @@ class App:
             self.section_titles["Codex"].config(text="Codex · " + c_plan)
             self.section_renews["Codex"].config(
                 text="续订 " + CFG.get("renew_codex", ""), fg=CODEX_GREEN_SOFT)
+        if d.get("g_plan"):
+            g_title = "GLM" + ((" · " + CFG["glm_plan_name"])
+                               if CFG.get("glm_plan_name") else "")
+            self.section_titles["GLM"].config(text=g_title)
+            renew_g = CFG.get("renew_glm", "")
+            self.section_renews["GLM"].config(
+                text=("续订 " + renew_g) if renew_g and renew_g != "MM-DD" else "",
+                fg=GLM_PURPLE_SOFT)
         self._set_row("k5", d.get("k5_pct"), _countdown(d.get("k5_reset")))
         self._set_row("kw", d.get("kw_pct"), _fmt_reset(d.get("kw_reset")))
         self._set_row("c5", d.get("c5_pct"),

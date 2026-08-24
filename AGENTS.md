@@ -48,10 +48,12 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 
 | 字段 | 含义 |
 | --- | --- |
-| `renew_kimi` / `renew_codex` | 续订日期，仅用于界面显示，格式 `MM-DD`（装好后用户可在右键菜单改） |
+| `renew_kimi` / `renew_codex` / `renew_glm` | 续订日期，仅用于界面显示，格式 `MM-DD`（装好后用户可在右键菜单改） |
 | `kimi_plan_name` | Kimi 套餐显示名（右键菜单可改） |
 | `codex_plan_name` | Codex 套餐显示名覆盖，如 `"Pro 20x"`（右键菜单可改）；留空则用接口值 + `codex_plan_suffix` |
+| `glm_plan_name` | GLM 套餐显示名，如 `"Pro"`（右键菜单可改） |
 | `codex_plan_suffix` | Codex 套餐名后缀，例如 `" 20x"` |
+| `theme` | 主题：`dark` / `light` / `glass`（毛玻璃），右键菜单可切换 |
 | `show_kimi` / `show_codex` / `show_glm` | 各卡片是否显示（右键菜单也可切换） |
 | `glm_api_key` | 可选。填入有效的 GLM Coding Plan API Key 后 GLM 卡片自动出现 |
 | `glm_region` | `"cn"` 用 open.bigmodel.cn，`"intl"` 用 api.z.ai |
@@ -74,7 +76,7 @@ cd "%USERPROFILE%\Desktop\quota-widget" && start.bat
 
 ### 5. 完成
 
-向用户汇报：安装目录、如何改配置（**右键 → Kimi 设置 / Codex 设置 可直接改套餐名和续订日期**；GLM 等进阶项编辑 config.json 后重启生效）、如何退出（右键菜单 → 退出，或底部 ✕）。
+向用户汇报：安装目录、如何改配置（**右键 → Kimi / Codex / GLM 设置 可直接改套餐名和续订日期，主题子菜单切换黑夜/白天/毛玻璃**；GLM Key 等进阶项编辑 config.json 后重启生效）、如何退出（右键菜单 → 退出，或底部 ✕）。
 
 ## 排错速查
 
