@@ -53,7 +53,8 @@ DEFAULT_CONFIG = {
     # ---- visibility toggles (also in the right-click menu) ----
     "show_kimi": True,
     "show_codex": True,
-    "show_glm": False,            # GLM card appears only when glm_api_key is set
+    "show_radar": True,
+    "show_glm": False,            # GLM card visibility; rows show "--" until glm_api_key works
     # ---- GLM Coding Plan (optional) ----
     "glm_api_key": "",            # z.ai / open.bigmodel.cn API key; empty = disabled
     "glm_region": "cn",           # "cn" -> open.bigmodel.cn, "intl" -> api.z.ai
@@ -417,16 +418,17 @@ class App:
         sp1.grid(row=0, column=0)
         self._bg_frames.append(sp1)
         self.rows = {}  # key -> (pct_label, reset_label)
+        self.row_labels = {}
         self.section_titles = {}
         self.section_renews = {}
         self._section(1, "Kimi", KIMI_BLUE, [("k5", "每5小时"), ("kw", "每周")])
         self._divider = tk.Frame(self.root, bg="#3a3a4e", height=1)
         self._divider.grid(row=2, column=0, sticky="ew", padx=10, pady=1)
-        self._section(3, "Codex", CODEX_GREEN,
-                      [("c5", "每5小时"), ("cw", "每周"), ("cr", "雷达")])
+        self._section(3, "GLM", GLM_PURPLE, [("g5", "每5小时"), ("gw", "每周")])
         self._divider2 = tk.Frame(self.root, bg="#3a3a4e", height=1)
         self._divider2.grid(row=4, column=0, sticky="ew", padx=10, pady=1)
-        self._section(5, "GLM", GLM_PURPLE, [("g5", "每5小时"), ("gw", "每周")])
+        self._section(5, "Codex", CODEX_GREEN,
+                      [("c5", "每5小时"), ("cw", "每周"), ("cr", "重置几率")])
 
         bar = tk.Frame(self.root, bg=BG)
         bar.grid(row=6, column=0, sticky="ew", padx=(17, 10), pady=(3, 2))
@@ -466,19 +468,22 @@ class App:
         self.show_kimi = tk.BooleanVar(value=self._st.get("show_kimi", True))
         self.show_codex = tk.BooleanVar(value=self._st.get("show_codex", True))
         self.show_glm = tk.BooleanVar(value=self._st.get("show_glm", False))
-        self.menu.add_checkbutton(label="Kimi", variable=self.show_kimi,
+        self.menu.add_checkbutton(label="Kimi Coding Plan", variable=self.show_kimi,
+                                command=self._apply_visibility)
+        self.menu.add_checkbutton(label="GLM Coding Plan", variable=self.show_glm,
+                                command=self._apply_visibility)
+        self.show_radar = tk.BooleanVar(value=self._st.get("show_radar", True))
+        self.menu.add_checkbutton(label="重置几率", variable=self.show_radar,
                                 command=self._apply_visibility)
         self.menu.add_checkbutton(label="Codex", variable=self.show_codex,
                                 command=self._apply_visibility)
-        self.menu.add_checkbutton(label="GLM", variable=self.show_glm,
-                                command=self._apply_visibility)
         self.menu.add_separator()
-        self.menu.add_cascade(label="Kimi 设置",
+        self.menu.add_cascade(label="Kimi Coding Plan 设置",
                               menu=self._build_provider_menu("kimi"))
+        self.menu.add_cascade(label="GLM Coding Plan 设置",
+                              menu=self._build_provider_menu("glm"))
         self.menu.add_cascade(label="Codex 设置",
                               menu=self._build_provider_menu("codex"))
-        self.menu.add_cascade(label="GLM 设置",
-                              menu=self._build_provider_menu("glm"))
         self.menu.add_separator()
         self._theme_var = tk.StringVar(value=self.theme)
         tm = tk.Menu(self.menu, tearoff=0)
@@ -495,11 +500,24 @@ class App:
         self._schedule_next()
 
     def _fit(self):
-        """Resize window to fit content, keeping current position."""
+        """Resize window to fit content, clamped fully on-screen."""
         self.root.update_idletasks()
         w = self.root.winfo_reqwidth() + 6
         h = self.root.winfo_reqheight() + 6
-        self.root.geometry(f"{w}x{h}")  # size only; position unchanged
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        x = self.root.winfo_x()
+        y = self.root.winfo_y()
+        # only pull back when genuinely overflowing the screen edges
+        if x + w > sw - 8:
+            x = sw - w - 8
+        if y + h > sh - 48:  # keep clear of taskbar
+            y = sh - h - 48
+        if x < -w // 2:
+            x = 8
+        if y < -h // 2:
+            y = 8
+        self.root.geometry(f"{w}x{h}+{x}+{y}")
         self._round_corners()
 
     def _round_corners(self, radius=8):
@@ -526,12 +544,14 @@ class App:
             pass
 
     def _quit(self):
+        # hard exit: hide then kill process immediately — no teardown, no ghost frame
         try:
+            self.root.attributes("-alpha", 0)
             self.root.withdraw()
-            self.root.update_idletasks()
+            self.root.update()
         except Exception:
             pass
-        self.root.destroy()
+        os._exit(0)
 
     def _alpha_step(self, delta):
         self.alpha_val = max(40, min(100, self.alpha_val + delta))
@@ -543,13 +563,19 @@ class App:
         CFG["show_glm"] = self.show_glm.get()
         _save_config(CFG)
         k, c = CFG["show_kimi"], CFG["show_codex"]
-        g = CFG["show_glm"] and bool((CFG.get("glm_api_key") or "").strip())
-        kimi_card, codex_card, glm_card = self._cards[0], self._cards[1], self._cards[2]
+        g = CFG["show_glm"]
+        kimi_card, glm_card, codex_card = self._cards[0], self._cards[1], self._cards[2]
         (kimi_card.grid if k else kimi_card.grid_remove)()
         (codex_card.grid if c else codex_card.grid_remove)()
         (glm_card.grid if g else glm_card.grid_remove)()
-        (self._divider.grid if (k and c) else self._divider.grid_remove)()
-        (self._divider2.grid if (g and (k or c)) else self._divider2.grid_remove)()
+        (self._divider.grid if (k and g) else self._divider.grid_remove)()
+        (self._divider2.grid if (c and (k or g)) else self._divider2.grid_remove)()
+        CFG["show_radar"] = self.show_radar.get()
+        _save_config(CFG)
+        if "cr" in self.rows:
+            widgets = [self.row_labels["cr"][0], *self.rows["cr"]]
+            for wgt in widgets:
+                (wgt.grid if (c and CFG["show_radar"]) else wgt.grid_remove)()
         self._fit()
 
     def _apply_acrylic(self, on):
@@ -641,6 +667,10 @@ class App:
                      highlightbackground="#33334a", highlightthickness=1)
         f.grid(row=row, column=0, sticky="ew", padx=10, pady=(4, 0))
         self._cards.append(f)
+        # fixed pixel column widths so titles never distort alignment across cards
+        f.grid_columnconfigure(0, minsize=64)
+        f.grid_columnconfigure(1, minsize=34)
+        f.grid_columnconfigure(2, minsize=100)
         title_lbl = tk.Label(f, text=title, fg=color, bg=BG_CARD,
                              font=("Microsoft YaHei UI", 9, "bold"), anchor="w")
         title_lbl.grid(row=0, column=0, columnspan=3, sticky="w",
@@ -653,9 +683,10 @@ class App:
         self.section_renews[title] = renew_lbl
         for i, (key, name) in enumerate(lines, start=1):
             nl = tk.Label(f, text=name, fg=FG_DIM, bg=BG_CARD,
-                          font=("Microsoft YaHei UI", 9), anchor="w", width=8)
+                          font=("Microsoft YaHei UI", 9), anchor="w", width=9)
             nl.grid(row=i, column=0, sticky="w", padx=(7, 0))
             self._name_labels.append(nl)
+            self.row_labels[key] = (nl,)
             pct = tk.Label(f, text="…", fg=FG_TEXT, bg=BG_CARD,
                            font=("Microsoft YaHei UI", 9, "bold"),
                            anchor="w", width=4)
@@ -921,17 +952,17 @@ class App:
             rl.config(text=reset_text if reset_text else "")
 
     def _render_radar(self):
-        """Radar row: '雷达 24h 20%' + confidence suffix (low=·低, medium=·中)."""
+        """Radar row: '重置几率 20% 24小时内' (+confidence suffix)."""
         pl, rl = self.rows["cr"]
         pct = self.data.get("cr_pct")
         if pct is None:
             pl.config(text="--", fg=THEMES[self.theme]["FG_DIM"])
             rl.config(text="")
             return
-        base = THEMES[self.theme]["FG_TEXT"]
-        pl.config(text=f"24h {pct}%", fg=base, width=7)
-        suffix = {"low": "·低", "medium": "·中"}.get(self.data.get("cr_conf"), "")
-        rl.config(text=suffix)
+        # dim by default (secondary element); orange when >= 80%
+        color = "#d08020" if pct >= 80 else THEMES[self.theme]["FG_DIM"]
+        pl.config(text=f"{pct}%", fg=color, width=4)
+        rl.config(text="24小时内")
 
     def _render(self):
         d = self.data
