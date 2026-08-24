@@ -32,6 +32,21 @@ CODEX_EXE_CANDIDATES = [
     os.path.expandvars(r"%LOCALAPPDATA%\OpenAI\Codex\bin\codex.exe"),
 ]
 DEBUG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug.txt")
+SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
+
+
+def _load_settings():
+    try:
+        return json.load(open(SETTINGS_FILE, encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_settings(d):
+    try:
+        json.dump(d, open(SETTINGS_FILE, "w", encoding="utf-8"))
+    except Exception:
+        pass
 
 # silent subprocess: no console window flash
 _NO_WINDOW = {}
@@ -312,10 +327,19 @@ class App:
                                 command=self._toggle_top)
         self.menu.add_command(label="立即刷新", command=self.refresh_async)
         self.menu.add_separator()
+        self._st = _load_settings()
+        self.show_kimi = tk.BooleanVar(value=self._st.get("show_kimi", True))
+        self.show_codex = tk.BooleanVar(value=self._st.get("show_codex", True))
+        self.menu.add_checkbutton(label="Kimi", variable=self.show_kimi,
+                                command=self._apply_visibility)
+        self.menu.add_checkbutton(label="Codex", variable=self.show_codex,
+                                command=self._apply_visibility)
+        self.menu.add_separator()
         self.menu.add_command(label="白天/黑夜模式", command=self._toggle_theme)
         self.menu.add_separator()
         self.menu.add_command(label="退出", command=self._quit)
 
+        self._apply_visibility()
         self.refresh_async()
         self._schedule_next()
 
@@ -361,6 +385,17 @@ class App:
     def _alpha_step(self, delta):
         self.alpha_val = max(40, min(100, self.alpha_val + delta))
         self.root.attributes("-alpha", self.alpha_val / 100)
+
+    def _apply_visibility(self):
+        st = {"show_kimi": self.show_kimi.get(),
+              "show_codex": self.show_codex.get()}
+        _save_settings(st)
+        k, c = st["show_kimi"], st["show_codex"]
+        kimi_card, codex_card = self._cards[0], self._cards[1]
+        (kimi_card.grid if k else kimi_card.grid_remove)()
+        (codex_card.grid if c else codex_card.grid_remove)()
+        (self._divider.grid if (k and c) else self._divider.grid_remove)()
+        self._fit()
 
     def _toggle_theme(self):
         self.theme = "light" if getattr(self, "theme", "dark") == "dark" else "dark"
