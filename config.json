@@ -1,0 +1,11 @@
+{
+  "renew_kimi": "MM-DD",
+  "renew_codex": "MM-DD",
+  "kimi_plan_name": "MyPlan",
+  "codex_plan_suffix": "",
+  "show_kimi": true,
+  "show_codex": true,
+  "show_glm": false,
+  "glm_api_key": "",
+  "glm_region": "cn"
+}

@@ -16,3 +16,6 @@ _v*.png
 # OS junk
 Thumbs.db
 Desktop.ini
+
+# legacy local settings
+settings.json
