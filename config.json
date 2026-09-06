@@ -12,6 +12,7 @@
   "theme": "dark",
   "show_kimi": true,
   "show_codex": true,
+  "show_codex_5h": null,
   "show_glm": false,
   "glm_api_key": "",
   "glm_region": "cn"

@@ -53,7 +53,11 @@ DEFAULT_CONFIG = {
     # ---- visibility toggles (also in the right-click menu) ----
     "show_kimi": True,
     "show_codex": True,
+    # None = follow the selected plan: Pro hidden, other plans shown.
+    # A boolean is a user's explicit menu override.
+    "show_codex_5h": None,
     "show_radar": True,
+    "radar_window": 24,   # 24 or 48 hours
     "show_glm": False,            # GLM card visibility; rows show "--" until glm_api_key works
     # ---- GLM Coding Plan (optional) ----
     "glm_api_key": "",            # z.ai / open.bigmodel.cn API key; empty = disabled
@@ -327,12 +331,40 @@ def fetch_codex():
 # ---------------- Codex reset radar ----------------
 
 def fetch_radar():
-    """Global Codex reset probability forecast. Any failure -> {} (silent)."""
+    """Global Codex reset probability forecast. Any failure -> {} (silent).
+
+    The API also exposes raw probabilities. Use those instead of its coarse
+    5-point display buckets, with conventional half-up rounding for the UI.
+    """
     try:
-        d = json.load(urllib.request.urlopen(CODEX_RADAR_URL, timeout=8))
+        # codex-reset.com rejects Python's default urllib user agent with 403.
+        # Keep the request credential-free, but identify this read-only client.
+        req = urllib.request.Request(
+            CODEX_RADAR_URL,
+            headers={"User-Agent": "ai-quota-widget/1.0", "Accept": "application/json"},
+        )
+        d = json.load(urllib.request.urlopen(req, timeout=8))
         prob = d.get("probabilities") or {}
-        return {"cr_pct": prob.get("rounded_24h"),
-                "cr_conf": d.get("confidence")}
+
+        def pct(value):
+            if value is None:
+                return None
+            try:
+                value = float(value)
+                # API raw values are fractions (0..1); tolerate percentage
+                # values too so a provider-side format change degrades safely.
+                if 0 <= value <= 1:
+                    value *= 100
+                return int(value + 0.5)  # conventional round: 27.5 -> 28
+            except Exception:
+                return None
+
+        return {"cr_pct": pct(prob.get("raw_24h")),
+                "cr_pct48": pct(prob.get("raw_48h")),
+                "cr_conf": d.get("confidence"),
+                "cr_updated": d.get("updated_at"),
+                "cr_last_reset": d.get("last_reset_at"),
+                "cr_mode": d.get("mode")}
     except Exception:
         return {}
 
@@ -428,7 +460,7 @@ class App:
         self._divider2 = tk.Frame(self.root, bg="#3a3a4e", height=1)
         self._divider2.grid(row=4, column=0, sticky="ew", padx=10, pady=1)
         self._section(5, "Codex", CODEX_GREEN,
-                      [("c5", "每5小时"), ("cw", "每周"), ("cr", "重置几率")])
+                      [("c5", "每5小时"), ("cw", "每周"), ("cr", "全球重置")])
 
         bar = tk.Frame(self.root, bg=BG)
         bar.grid(row=6, column=0, sticky="ew", padx=(17, 10), pady=(3, 2))
@@ -467,6 +499,7 @@ class App:
         self._st = CFG
         self.show_kimi = tk.BooleanVar(value=self._st.get("show_kimi", True))
         self.show_codex = tk.BooleanVar(value=self._st.get("show_codex", True))
+        self.show_codex_5h = tk.BooleanVar(value=self._codex_5h_visible())
         self.show_glm = tk.BooleanVar(value=self._st.get("show_glm", False))
         self.menu.add_checkbutton(label="Kimi Coding Plan", variable=self.show_kimi,
                                 command=self._apply_visibility)
@@ -474,9 +507,17 @@ class App:
                                 command=self._apply_visibility)
         self.menu.add_checkbutton(label="Codex", variable=self.show_codex,
                                 command=self._apply_visibility)
+        self.menu.add_checkbutton(label="Codex 每5小时窗口", variable=self.show_codex_5h,
+                                command=self._apply_visibility)
         self.show_radar = tk.BooleanVar(value=self._st.get("show_radar", True))
         self.menu.add_checkbutton(label="Codex 重置雷达", variable=self.show_radar,
                                 command=self._apply_visibility)
+        self._radar_var = tk.StringVar(value=str(self._st.get("radar_window", 24)))
+        rw = tk.Menu(self.menu, tearoff=0)
+        for label, val in (("24小时内", "24"), ("48小时内", "48")):
+            rw.add_radiobutton(label=label, variable=self._radar_var, value=val,
+                               command=lambda v=val: self._set_radar_window(int(v)))
+        self.menu.add_cascade(label="雷达窗口", menu=rw)
         self.menu.add_separator()
         self.menu.add_cascade(label="Kimi Coding Plan 设置",
                               menu=self._build_provider_menu("kimi"))
@@ -494,7 +535,7 @@ class App:
         self.menu.add_separator()
         self.menu.add_command(label="退出", command=self._quit)
 
-        self._apply_visibility()
+        self._apply_visibility(persist=False)
         self._set_theme(CFG.get("theme", "dark"))
         self.refresh_async()
         self._schedule_next()
@@ -557,10 +598,32 @@ class App:
         self.alpha_val = max(40, min(100, self.alpha_val + delta))
         self.root.attributes("-alpha", self.alpha_val / 100)
 
-    def _apply_visibility(self):
+    def _set_radar_window(self, hours):
+        CFG["radar_window"] = hours
+        _save_config(CFG)
+        self._render()
+
+    def _codex_5h_default_visible(self):
+        """Plan default: Pro has no 5-hour window; other plans do."""
+        plan = (self._current_plan("codex") or "").strip().lower()
+        return not plan.startswith("pro")
+
+    def _codex_5h_visible(self):
+        override = CFG.get("show_codex_5h")
+        return self._codex_5h_default_visible() if override is None else bool(override)
+
+    def _sync_codex_5h_menu(self):
+        if hasattr(self, "show_codex_5h"):
+            self.show_codex_5h.set(self._codex_5h_visible())
+
+    def _apply_visibility(self, persist=True):
         CFG["show_kimi"] = self.show_kimi.get()
         CFG["show_codex"] = self.show_codex.get()
         CFG["show_glm"] = self.show_glm.get()
+        if persist:
+            # A clicked checkbutton is an explicit user override. Leaving this
+            # as None is how the plan-based default remains active.
+            CFG["show_codex_5h"] = self.show_codex_5h.get()
         _save_config(CFG)
         k, c = CFG["show_kimi"], CFG["show_codex"]
         g = CFG["show_glm"]
@@ -570,8 +633,11 @@ class App:
         (glm_card.grid if g else glm_card.grid_remove)()
         (self._divider.grid if (k and g) else self._divider.grid_remove)()
         (self._divider2.grid if (c and (k or g)) else self._divider2.grid_remove)()
-        CFG["show_radar"] = self.show_radar.get()
+        if persist:
+            CFG["show_radar"] = self.show_radar.get()
         _save_config(CFG)
+        c5_visible = c and self.show_codex_5h.get()
+        self._set_row_visible("c5", c5_visible)
         if "cr" in self.rows:
             widgets = [self.row_labels["cr"][0], *self.rows["cr"]]
             for wgt in widgets:
@@ -761,6 +827,9 @@ class App:
         getattr(self, f"_plan_var_{kind}").set(name)
         CFG[PLAN_CFG_KEY[kind]] = name
         _save_config(CFG)
+        if kind == "codex" and CFG.get("show_codex_5h") is None:
+            self._sync_codex_5h_menu()
+            self._apply_visibility(persist=False)
         self._render()
 
     def _ask_custom_plan(self, kind):
@@ -925,10 +994,17 @@ class App:
             pl.config(text=f"{pct}%", fg=color)
             rl.config(text=reset_text if reset_text else "")
 
+    def _set_row_visible(self, key, visible):
+        """Show/hide a complete quota row without leaving an empty label."""
+        widgets = [self.row_labels[key][0], *self.rows[key]]
+        for wgt in widgets:
+            (wgt.grid if visible else wgt.grid_remove)()
+
     def _render_radar(self):
-        """Radar row: '重置几率 20% 24小时内' (+confidence suffix)."""
+        """Radar row: global reset probability for the selected window."""
         pl, rl = self.rows["cr"]
-        pct = self.data.get("cr_pct")
+        win = CFG.get("radar_window", 24)
+        pct = self.data.get("cr_pct48") if win == 48 else self.data.get("cr_pct")
         if pct is None:
             pl.config(text="--", fg=THEMES[self.theme]["FG_DIM"])
             rl.config(text="")
@@ -936,13 +1012,16 @@ class App:
         # dim by default (secondary element); orange when >= 80%
         color = "#d08020" if pct >= 80 else THEMES[self.theme]["FG_DIM"]
         pl.config(text=f"{pct}%", fg=color, width=4)
-        rl.config(text="24小时内")
+        rl.config(text=f"{win}小时内")
 
     def _render(self):
         d = self.data
-        if d.get("k_plan"):
+        # The Kimi usage endpoint may omit membership.level. The local display
+        # override and renewal date must still be rendered in that case.
+        k_plan = CFG.get("kimi_plan_name") or d.get("k_plan") or ""
+        if k_plan or CFG.get("renew_kimi"):
             self.section_titles["Kimi"].config(
-                text="Kimi · " + CFG.get("kimi_plan_name", ""))
+                text="Kimi · " + k_plan)
             self.section_renews["Kimi"].config(
                 text="续订 " + CFG.get("renew_kimi", ""), fg=KIMI_BLUE_SOFT)
         if d.get("c_plan"):
@@ -961,6 +1040,11 @@ class App:
                 fg=GLM_PURPLE_SOFT)
         self._set_row("k5", d.get("k5_pct"), _countdown(d.get("k5_reset")))
         self._set_row("kw", d.get("kw_pct"), _fmt_reset(d.get("kw_reset")))
+        # Visibility is a user/menu setting with a plan-aware default. The row
+        # intentionally remains visible as "--" when enabled but the API does
+        # not expose a 5-hour window yet.
+        self._set_row_visible("c5", CFG.get("show_codex", True)
+                              and self.show_codex_5h.get())
         self._set_row("c5", d.get("c5_pct"),
                       _countdown(d.get("c5_reset")) if d.get("c5_reset") else "")
         self._set_row("cw", d.get("cw_pct"), _fmt_reset(d.get("cw_reset")))

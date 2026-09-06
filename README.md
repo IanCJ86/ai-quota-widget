@@ -23,7 +23,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 ## 功能
 
 - 显示 Kimi Code / Codex 的 **每 5 小时** 与 **每周** 额度剩余百分比
-- **Codex 重置雷达**：Codex 卡片内一行「雷达」，显示未来 24 小时全局重置概率（数据源 [codex-reset.com](https://codex-reset.com) 的 forecast 接口；置信度低/中时标注 ·低 / ·中，拉取失败静默降级为 `雷达 --`）
+- **Codex 全球重置雷达**：显示未来 24/48 小时全局重置概率（数据源 [codex-reset.com](https://codex-reset.com) 的 forecast 接口）；读取原始概率并按普通四舍五入显示，不使用接口的 5% 粗粒度展示值。它是第三方全球事件预测，不统计个人赠送/补偿重置卡，也不代表个人账户真值
 - **可选 GLM Coding Plan 卡片**：在 config.json 填入 `glm_api_key` 后自动出现，显示 5 小时 / 每周额度与重置时间（需有效的 GLM Coding Plan Key，见「配置项」）
 - 显示额度重置时间（5 小时窗显示倒计时，每周窗显示具体时间）
 - 显示套餐名与续订日期（接口不返回；**右键 → Kimi / Codex / GLM 设置 里直接选**，也可在 `config.json` 里改）
@@ -31,6 +31,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 - 每 15 分钟自动刷新，刷新时刻对齐整刻（:00 / :15 / :30 / :45）
 - 双击窗口立即刷新；右键菜单：置顶 / 立即刷新 / 主题 / 退出
 - 右键可分别勾选显示 Kimi / Codex / GLM 卡片，选择写回 `config.json`，重启后自动沿用
+- 右键可控制 Codex 每 5 小时窗口；未手动覆盖时 Pro 默认隐藏，其他套餐默认显示；雷达可选择 24 小时或 48 小时窗口
 - **三套主题**：黑夜 / 白天 / 毛玻璃（亚克力模糊，透出桌面背景；老系统不支持 Acrylic 时自动降级为普通纯色渲染，不影响使用）
 - 底部 ＋ / － 按钮微调窗口透明度（3% 步进），✕ 关闭
 - 无边框、可拖动、可置顶、圆角（Win11 原生抗锯齿）
@@ -55,7 +56,7 @@ python quota_monitor.py
 - 双击窗口任意位置立即刷新
 - Kimi 数据来自官方接口 `api.kimi.com/coding/v1/usages`；access_token 过期时会用本地 refresh_token 自动续期（client_id 为 CLI 公开值）
 - Codex 数据通过本机 `codex app-server`（stdio JSON-RPC）读取 `account/rateLimits/read`
-- 雷达数据来自 `codex-reset.com/api/forecast`（第三方公开预测接口，不含任何个人凭证）
+- 雷达数据来自 `codex-reset.com/api/forecast`（第三方公开预测接口，不含任何个人凭证）；使用 `raw_24h` / `raw_48h` 并在本地四舍五入
 - GLM 数据来自 `open.bigmodel.cn/api/monitor/usage/quota/limit`（国际版 `api.z.ai` 同路径），用 config.json 里的 apiKey 鉴权
 - 所有 CLI 凭证只从本机 `~/.kimi-code` 与 `~/.codex` 读取，代码不打印、不上传任何 token
 
@@ -79,6 +80,7 @@ python quota_monitor.py
 | `codex_plan_suffix` | Codex 套餐名后缀，追加在接口返回值后 | `" 20x"` |
 | `theme` | 主题：`dark` / `light` / `glass` | `"dark"` |
 | `show_kimi` / `show_codex` / `show_glm` | 各卡片是否显示 | `true` / `false` |
+| `show_codex_5h` | Codex 每 5 小时行；`null` 按套餐自动（Pro 隐藏，其余显示） | `null` / `true` / `false` |
 | `glm_api_key` | 可选，GLM Coding Plan API Key；填了 GLM 卡片才可能出现 | `"sk-..."` |
 | `glm_region` | `"cn"` → open.bigmodel.cn，`"intl"` → api.z.ai | `"cn"` |
 
@@ -97,7 +99,7 @@ GLM 额度接口（`monitor/usage/quota/limit`）是智谱官方 Claude Code 插
 不需要。Kimi / Codex 凭证来自本机已登录的 CLI；GLM 是唯一的例外，需要你自己在 config.json 里填 API Key。
 
 **雷达是什么？**
-对「Codex 额度什么时候全局重置」的第三方概率预测，仅供参考，不代表官方信息。
+对「Codex 额度什么时候发生全球重置」的第三方概率预测，仅供参考，不代表官方信息；赠送/补偿重置卡、个人 5 小时/每周额度必须以 Codex 官方状态为准。
 
 ## 支持范围与局限
 
