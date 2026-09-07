@@ -537,8 +537,8 @@ class App:
         self._divider2.grid(row=4, column=0, sticky="ew", padx=10, pady=1)
         self._section(5, "Codex", CODEX_GREEN,
                       [("c5", "每5小时"), ("cw", "每周"),
-                       ("cr_main", "主源"), ("cr_org", "ORG"),
-                       ("cr_resets", "RS")])
+                       ("cr_main", "主源"), ("cr_org", "交叉"),
+                       ("cr_resets", "社区")])
 
         bar = tk.Frame(self.root, bg=BG)
         bar.grid(row=6, column=0, sticky="ew", padx=(17, 10), pady=(3, 2))
@@ -1097,8 +1097,8 @@ class App:
         render("cr_main", self.data.get("cr_pct48" if win == 48 else "cr_pct"),
                f"主源·{win}h")
         render("cr_org", self.data.get("cr_org48" if win == 48 else "cr_org24"),
-               f"ORG·{win}h")
-        render("cr_resets", self.data.get("cr_resets_pct"), "RS投票")
+               f"交叉·{win}h")
+        render("cr_resets", self.data.get("cr_resets_pct"), "社区投票")
 
     def _render(self):
         d = self.data
