@@ -13,6 +13,7 @@
 - 双击窗口立即刷新；右键菜单：置顶 / 立即刷新 / 退出
 - 底部 ＋ / － 按钮调节窗口透明度，✕ 关闭
 - 无边框、可拖动、可置顶，纯 tkinter 绘制
+- Codex 重置雷达显示三个独立的第三方公共信号：原主源 `codex-reset.com`、交叉源 `codexreset.org`、社区投票源 `codex-resets.com`
 
 ## 使用方法
 
@@ -32,7 +33,7 @@ python quota_monitor.py
 - 双击窗口任意位置立即刷新
 - Kimi 数据来自官方接口 `api.kimi.com/coding/v1/usages`；access_token 过期时会用本地 refresh_token 自动续期（client_id 为 CLI 公开值）
 - Codex 数据通过本机 `codex app-server`（stdio JSON-RPC）读取 `account/rateLimits/read`
-- 所有凭证只从本机 `~/.kimi-code` 与 `~/.codex` 读取，网络请求仅发往官方域名，代码不打印、不上传任何 token
+- 所有凭证只从本机 `~/.kimi-code` 与 `~/.codex` 读取；重置雷达只读取无凭证的第三方公开页面/API；代码不打印、不上传任何 token
 
 ## 配置项
 
@@ -44,6 +45,9 @@ python quota_monitor.py
 | `RENEW_CODEX` | Codex 续订日期，仅用于显示 | `"09-15"` |
 | `KIMI_PLAN_NAME` | Kimi 套餐显示名（接口只返回等级，这里覆盖显示） | `"Allegro"` |
 | `CODEX_PLAN_SUFFIX` | Codex 套餐名后缀，追加在接口返回值后 | `" 20x"` |
+| `RADAR_WINDOW` | 两个模型源显示的预测窗口，只能填 `24` 或 `48` | `24` |
+
+重置雷达中的 `codex-reset.com` 是原主源；`codexreset.org` 与 `codex-resets.com` 是新增且独立的交叉信号。它们不是 OpenAI 官方概率，也不是个人账号额度真值。
 
 ## 支持范围与局限
 

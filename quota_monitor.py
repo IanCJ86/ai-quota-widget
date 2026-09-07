@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 # Quota Monitor: Kimi Code + Codex floating widget.
-# Reads local credentials only; network calls go to official domains only.
+# Reads local credentials only; account calls go to official domains, while
+# the optional reset radar reads credential-free public third-party sources.
 # Never prints or logs any token.
 import json
 import os
@@ -10,7 +11,9 @@ import time
 import urllib.request
 import urllib.parse
 from datetime import datetime, timezone
+from html import unescape
 import tkinter as tk
+import re
 
 REFRESH_SECONDS = 900          # auto refresh every 15 minutes
 KIMI_CRED = os.path.expanduser(r"~\.kimi-code\credentials\kimi-code.json")
@@ -22,6 +25,13 @@ CODEX_EXE_CANDIDATES = [
     os.path.expandvars(r"%LOCALAPPDATA%\OpenAI\Codex\bin\codex.exe"),
 ]
 DEBUG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug.txt")
+# These are public third-party signals about global reset timing. They do not
+# expose or replace the account-specific Codex quota read through the CLI.
+CODEX_RADAR_URL = "https://codex-reset.com/api/forecast"
+CODEXRESET_ORG_URL = "https://codexreset.org/"
+CODEX_RESETS_PAGE_URL = "https://codex-resets.com/"
+CODEX_RESETS_API_URL = "https://codex-resets.com/api/v1/status"
+RADAR_WINDOW = 24           # 24 or 48 hours for the two model sources
 
 # silent subprocess: no console window flash
 _NO_WINDOW = {}
@@ -224,6 +234,94 @@ def fetch_codex():
     }
 
 
+# ---------------- Codex reset radar ----------------
+
+def _fetch_public_text(url, accept):
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "ai-quota-widget/1.0", "Accept": accept},
+    )
+    with urllib.request.urlopen(req, timeout=8) as response:
+        return response.read()
+
+
+def _visible_html_text(raw):
+    text = raw.decode("utf-8", errors="replace")
+    text = re.sub(r"<[^>]+>", " ", text)
+    return " ".join(unescape(text).split())
+
+
+def _int_match(pattern, text):
+    match = re.search(pattern, text, flags=re.IGNORECASE)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except Exception:
+        return None
+
+
+def _pct_value(value):
+    if value is None:
+        return None
+    try:
+        value = float(value)
+        if 0 <= value <= 1:
+            value *= 100
+        return int(value + 0.5)
+    except Exception:
+        return None
+
+
+def fetch_radar():
+    """Read three independent public global-reset signals."""
+    data = {}
+
+    # Original primary: codex-reset.com (singular, hyphenated).
+    try:
+        d = json.loads(_fetch_public_text(
+            CODEX_RADAR_URL, "application/json").decode("utf-8"))
+        prob = d.get("probabilities") or {}
+        data["cr_main24"] = _pct_value(prob.get("raw_24h"))
+        data["cr_main48"] = _pct_value(prob.get("raw_48h"))
+    except Exception:
+        pass
+
+    # Added source: codexreset.org (no hyphen).
+    try:
+        html = _fetch_public_text(CODEXRESET_ORG_URL, "text/html").decode(
+            "utf-8", errors="replace")
+        data["cr_org24"] = _int_match(
+            r'data-testid="probability-ring-24h"[^>]*data-target-value="(\d+)"',
+            html)
+        data["cr_org48"] = _int_match(
+            r'data-testid="probability-ring-48h"[^>]*data-target-value="(\d+)"',
+            html)
+    except Exception:
+        pass
+
+    # Added source: codex-resets.com (plural, hyphenated). Prefer its page
+    # community-vote headline; use the documented API only as a fallback.
+    try:
+        page = _visible_html_text(_fetch_public_text(
+            CODEX_RESETS_PAGE_URL, "text/html,application/xhtml+xml"))
+        data["cr_resets_pct"] = _int_match(
+            r"Possible reset\s+(\d+)\s*%\s+chance of reset", page)
+        if data["cr_resets_pct"] is None:
+            raise ValueError("plural-domain headline unavailable")
+    except Exception:
+        try:
+            d = json.loads(_fetch_public_text(
+                CODEX_RESETS_API_URL, "application/json").decode("utf-8"))
+            watch = ((d.get("data") or {}).get("active_watch") or {})
+            data["cr_resets_pct"] = _pct_value(
+                watch.get("reset_chance_percent"))
+        except Exception:
+            pass
+
+    return data
+
+
 # ---------------- UI ----------------
 
 class App:
@@ -240,7 +338,7 @@ class App:
         self.last_ok = None
         self._drag = None
 
-        w, h = 212, 194
+        w, h = 212, 250
         sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
         self.root.geometry(f"{w}x{h}+{sw - w - 40}+{sh - h - 90}")
 
@@ -252,9 +350,14 @@ class App:
         tk.Frame(self.root, bg="#3a3a4e", height=1).grid(
             row=2, column=0, sticky="ew", padx=10, pady=1)
         self._section(3, "Codex", CODEX_GREEN, [("c5", "每5小时"), ("cw", "每周")])
+        tk.Frame(self.root, bg="#3a3a4e", height=1).grid(
+            row=4, column=0, sticky="ew", padx=10, pady=1)
+        self._section(5, "重置雷达", CODEX_GREEN,
+                      [("cr_main", "主源"), ("cr_org", "ORG"),
+                       ("cr_resets", "RS")])
 
         bar = tk.Frame(self.root, bg=BG)
-        bar.grid(row=4, column=0, sticky="ew", padx=10, pady=(3, 2))
+        bar.grid(row=6, column=0, sticky="ew", padx=10, pady=(3, 2))
         self.status = tk.Label(bar, text="初始化…", fg=FG_DIM, bg=BG,
                                font=("Microsoft YaHei UI", 8), anchor="w")
         self.status.pack(side="left")
@@ -270,7 +373,7 @@ class App:
             b.pack(side="right", padx=1)
             b._no_drag = True
             b.bind("<Button-1>", lambda e, dd=d: self._alpha_step(dd))
-        tk.Frame(self.root, bg=BG, height=10).grid(row=5, column=0)
+        tk.Frame(self.root, bg=BG, height=10).grid(row=7, column=0)
         self.root.grid_columnconfigure(0, weight=1)
 
         for wgt in self.root.winfo_children():
@@ -375,6 +478,7 @@ class App:
             data.update(fetch_codex())
         except Exception as ex:
             errors["codex"] = type(ex).__name__
+        data.update(fetch_radar())  # public sources fail soft
         self.root.after(0, lambda: self._apply(data, errors))
 
     def _apply(self, data, errors):
@@ -422,6 +526,12 @@ class App:
         self._set_row("c5", d.get("c5_pct"),
                       _countdown(d.get("c5_reset")) if d.get("c5_reset") else "")
         self._set_row("cw", d.get("cw_pct"), _fmt_reset(d.get("cw_reset")))
+
+        main_key = "cr_main48" if RADAR_WINDOW == 48 else "cr_main24"
+        org_key = "cr_org48" if RADAR_WINDOW == 48 else "cr_org24"
+        self._set_row("cr_main", d.get(main_key), f"主源·{RADAR_WINDOW}h")
+        self._set_row("cr_org", d.get(org_key), f"ORG·{RADAR_WINDOW}h")
+        self._set_row("cr_resets", d.get("cr_resets_pct"), "RS投票")
 
         parts = []
         if self.last_ok:
