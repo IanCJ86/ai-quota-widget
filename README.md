@@ -23,7 +23,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 ## 功能
 
 - 显示 Kimi Code / Codex 的 **每 5 小时** 与 **每周** 额度剩余百分比
-- **Codex 全球重置雷达**：显示未来 24/48 小时全局重置概率（数据源 [codex-reset.com](https://codex-reset.com) 的 forecast 接口）；读取原始概率并按普通四舍五入显示，不使用接口的 5% 粗粒度展示值。它是第三方全球事件预测，不统计个人赠送/补偿重置卡，也不代表个人账户真值
+- **Codex 全球重置雷达**：显示三个独立的第三方公共信号：原主源 [codex-reset.com](https://codex-reset.com) 的 24/48 小时模型预测、新增 [codexreset.org](https://codexreset.org) 的 24/48 小时预测，以及 [codex-resets.com](https://codex-resets.com) 的社区投票信号。它们不统计个人赠送/补偿重置卡，也不代表个人账户真值
 - **可选 GLM Coding Plan 卡片**：在 config.json 填入 `glm_api_key` 后自动出现，显示 5 小时 / 每周额度与重置时间（需有效的 GLM Coding Plan Key，见「配置项」）
 - 显示额度重置时间（5 小时窗显示倒计时，每周窗显示具体时间）
 - 显示套餐名与续订日期（接口不返回；**右键 → Kimi / Codex / GLM 设置 里直接选**，也可在 `config.json` 里改）
@@ -56,7 +56,7 @@ python quota_monitor.py
 - 双击窗口任意位置立即刷新
 - Kimi 数据来自官方接口 `api.kimi.com/coding/v1/usages`；access_token 过期时会用本地 refresh_token 自动续期（client_id 为 CLI 公开值）
 - Codex 数据通过本机 `codex app-server`（stdio JSON-RPC）读取 `account/rateLimits/read`
-- 雷达数据来自 `codex-reset.com/api/forecast`（第三方公开预测接口，不含任何个人凭证）；使用 `raw_24h` / `raw_48h` 并在本地四舍五入
+- 雷达数据分别来自 `codex-reset.com`、`codexreset.org` 和 `codex-resets.com` 的第三方公开页面/API，不含任何个人凭证；两个模型源使用 24/48 小时预测，复数域名使用社区投票信号
 - GLM 数据来自 `open.bigmodel.cn/api/monitor/usage/quota/limit`（国际版 `api.z.ai` 同路径），用 config.json 里的 apiKey 鉴权
 - 所有 CLI 凭证只从本机 `~/.kimi-code` 与 `~/.codex` 读取，代码不打印、不上传任何 token
 
@@ -99,7 +99,7 @@ GLM 额度接口（`monitor/usage/quota/limit`）是智谱官方 Claude Code 插
 不需要。Kimi / Codex 凭证来自本机已登录的 CLI；GLM 是唯一的例外，需要你自己在 config.json 里填 API Key。
 
 **雷达是什么？**
-对「Codex 额度什么时候发生全球重置」的第三方概率预测，仅供参考，不代表官方信息；赠送/补偿重置卡、个人 5 小时/每周额度必须以 Codex 官方状态为准。
+对「Codex 额度什么时候发生全球重置」的三个第三方公共信号，仅供参考，不代表官方信息；赠送/补偿重置卡、个人 5 小时/每周额度必须以 Codex 官方状态为准。
 
 ## 支持范围与局限
 
@@ -115,7 +115,7 @@ GLM 额度接口（`monitor/usage/quota/limit`）是智谱官方 Claude Code 插
 - 程序运行时会读取本机凭证（`~/.kimi-code`、`~/.codex`），不会上传、打印或外传
 - Kimi 侧仅访问官方域名 `api.kimi.com` 与 `auth.kimi.com`
 - Codex 侧通过本机 `codex app-server` 获取额度，不直接访问网络
-- 雷达与 GLM 请求分别发往 `codex-reset.com` 与智谱官方域名；GLM Key 只存在你自己的 config.json 里
+- 雷达与 GLM 请求分别发往三个第三方公开域名与智谱官方域名；GLM Key 只存在你自己的 config.json 里
 - Kimi 凭证过期时，程序可能用 refresh_token 自动续期并**更新本地凭证文件**
 - 这是个人自用工具：不建议直接运行未经检查的第三方修改版，改完自己看一遍代码再用
 

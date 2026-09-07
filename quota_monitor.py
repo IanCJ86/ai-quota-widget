@@ -1,16 +1,19 @@
 # -*- coding: utf-8 -*-
 # Quota Monitor: Kimi Code + Codex floating widget.
-# Reads local credentials only; network calls go to official domains only.
+# Reads local credentials only; account calls go to official domains, while
+# the optional reset radar reads credential-free public third-party sources.
 # Never prints or logs any token.
 import json
 import os
 import calendar
+import re
 import subprocess
 import threading
 import time
 import urllib.request
 import urllib.parse
 from datetime import datetime, date, timezone
+from html import unescape
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 
@@ -127,6 +130,9 @@ PLAN_PRESETS = {
 PLAN_CFG_KEY = {"kimi": "kimi_plan_name", "codex": "codex_plan_name",
                 "glm": "glm_plan_name"}
 CODEX_RADAR_URL = "https://codex-reset.com/api/forecast"
+CODEXRESET_ORG_URL = "https://codexreset.org/"
+CODEX_RESETS_PAGE_URL = "https://codex-resets.com/"
+CODEX_RESETS_API_URL = "https://codex-resets.com/api/v1/status"
 GLM_QUOTA_URLS = {
     "cn": "https://open.bigmodel.cn/api/monitor/usage/quota/limit",
     "intl": "https://api.z.ai/api/monitor/usage/quota/limit",
@@ -330,15 +336,50 @@ def fetch_codex():
 
 # ---------------- Codex reset radar ----------------
 
-def fetch_radar():
-    """Global Codex reset probability forecast. Any failure -> {} (silent).
+def _fetch_public_text(url, accept):
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "ai-quota-widget/1.0", "Accept": accept},
+    )
+    with urllib.request.urlopen(req, timeout=8) as response:
+        return response.read()
 
-    The API also exposes raw probabilities. Use those instead of its coarse
-    5-point display buckets, with conventional half-up rounding for the UI.
-    """
+
+def _visible_html_text(raw):
+    text = raw.decode("utf-8", errors="replace")
+    text = re.sub(r"<[^>]+>", " ", text)
+    return " ".join(unescape(text).split())
+
+
+def _int_match(pattern, text):
+    match = re.search(pattern, text, flags=re.IGNORECASE)
+    if not match:
+        return None
     try:
-        # codex-reset.com rejects Python's default urllib user agent with 403.
-        # Keep the request credential-free, but identify this read-only client.
+        return int(match.group(1))
+    except Exception:
+        return None
+
+
+def _pct_value(value):
+    if value is None:
+        return None
+    try:
+        value = float(value)
+        if 0 <= value <= 1:
+            value *= 100
+        return int(value + 0.5)
+    except Exception:
+        return None
+
+
+def fetch_radar():
+    """Read three independent public global-reset signals, fail-soft."""
+    data = {}
+
+    # Original primary: codex-reset.com (singular, hyphenated). The API also
+    # exposes raw probabilities; use those instead of coarse display buckets.
+    try:
         req = urllib.request.Request(
             CODEX_RADAR_URL,
             headers={"User-Agent": "ai-quota-widget/1.0", "Accept": "application/json"},
@@ -359,14 +400,49 @@ def fetch_radar():
             except Exception:
                 return None
 
-        return {"cr_pct": pct(prob.get("raw_24h")),
-                "cr_pct48": pct(prob.get("raw_48h")),
-                "cr_conf": d.get("confidence"),
-                "cr_updated": d.get("updated_at"),
-                "cr_last_reset": d.get("last_reset_at"),
-                "cr_mode": d.get("mode")}
+        data.update({"cr_pct": pct(prob.get("raw_24h")),
+                     "cr_pct48": pct(prob.get("raw_48h")),
+                     "cr_conf": d.get("confidence"),
+                     "cr_updated": d.get("updated_at"),
+                     "cr_last_reset": d.get("last_reset_at"),
+                     "cr_mode": d.get("mode")})
     except Exception:
-        return {}
+        pass
+
+    # Added source: codexreset.org (no hyphen), which publishes two forecast
+    # rings in server-rendered page data.
+    try:
+        html = _fetch_public_text(CODEXRESET_ORG_URL, "text/html").decode(
+            "utf-8", errors="replace")
+        data["cr_org24"] = _int_match(
+            r'data-testid="probability-ring-24h"[^>]*data-target-value="(\d+)"',
+            html)
+        data["cr_org48"] = _int_match(
+            r'data-testid="probability-ring-48h"[^>]*data-target-value="(\d+)"',
+            html)
+    except Exception:
+        pass
+
+    # Added source: codex-resets.com (plural, hyphenated). Prefer the page's
+    # community-vote headline; use its documented API only as a fallback.
+    try:
+        page = _visible_html_text(_fetch_public_text(
+            CODEX_RESETS_PAGE_URL, "text/html,application/xhtml+xml"))
+        data["cr_resets_pct"] = _int_match(
+            r"Possible reset\s+(\d+)\s*%\s+chance of reset", page)
+        if data["cr_resets_pct"] is None:
+            raise ValueError("plural-domain headline unavailable")
+    except Exception:
+        try:
+            d = json.loads(_fetch_public_text(
+                CODEX_RESETS_API_URL, "application/json").decode("utf-8"))
+            watch = ((d.get("data") or {}).get("active_watch") or {})
+            data["cr_resets_pct"] = _pct_value(
+                watch.get("reset_chance_percent"))
+        except Exception:
+            pass
+
+    return data
 
 
 # ---------------- GLM Coding Plan (optional) ----------------
@@ -460,7 +536,9 @@ class App:
         self._divider2 = tk.Frame(self.root, bg="#3a3a4e", height=1)
         self._divider2.grid(row=4, column=0, sticky="ew", padx=10, pady=1)
         self._section(5, "Codex", CODEX_GREEN,
-                      [("c5", "每5小时"), ("cw", "每周"), ("cr", "全球重置")])
+                      [("c5", "每5小时"), ("cw", "每周"),
+                       ("cr_main", "主源"), ("cr_org", "ORG"),
+                       ("cr_resets", "RS")])
 
         bar = tk.Frame(self.root, bg=BG)
         bar.grid(row=6, column=0, sticky="ew", padx=(17, 10), pady=(3, 2))
@@ -638,10 +716,11 @@ class App:
         _save_config(CFG)
         c5_visible = c and self.show_codex_5h.get()
         self._set_row_visible("c5", c5_visible)
-        if "cr" in self.rows:
-            widgets = [self.row_labels["cr"][0], *self.rows["cr"]]
-            for wgt in widgets:
-                (wgt.grid if (c and CFG["show_radar"]) else wgt.grid_remove)()
+        for key in ("cr_main", "cr_org", "cr_resets"):
+            if key in self.rows:
+                widgets = [self.row_labels[key][0], *self.rows[key]]
+                for wgt in widgets:
+                    (wgt.grid if (c and CFG["show_radar"]) else wgt.grid_remove)()
         self._fit()
 
     def _apply_acrylic(self, on):
@@ -1001,18 +1080,25 @@ class App:
             (wgt.grid if visible else wgt.grid_remove)()
 
     def _render_radar(self):
-        """Radar row: global reset probability for the selected window."""
-        pl, rl = self.rows["cr"]
+        """Show the original primary source plus two independent sources."""
         win = CFG.get("radar_window", 24)
-        pct = self.data.get("cr_pct48") if win == 48 else self.data.get("cr_pct")
-        if pct is None:
-            pl.config(text="--", fg=THEMES[self.theme]["FG_DIM"])
-            rl.config(text="")
-            return
-        # dim by default (secondary element); orange when >= 80%
-        color = "#d08020" if pct >= 80 else THEMES[self.theme]["FG_DIM"]
-        pl.config(text=f"{pct}%", fg=color, width=4)
-        rl.config(text=f"{win}小时内")
+
+        def render(key, pct, label):
+            pl, rl = self.rows[key]
+            if pct is None:
+                pl.config(text="--", fg=THEMES[self.theme]["FG_DIM"])
+                rl.config(text="")
+                return
+            # Dim by default; highlight unusually high public signals.
+            color = "#d08020" if pct >= 80 else THEMES[self.theme]["FG_DIM"]
+            pl.config(text=f"{pct}%", fg=color, width=4)
+            rl.config(text=label)
+
+        render("cr_main", self.data.get("cr_pct48" if win == 48 else "cr_pct"),
+               f"主源·{win}h")
+        render("cr_org", self.data.get("cr_org48" if win == 48 else "cr_org24"),
+               f"ORG·{win}h")
+        render("cr_resets", self.data.get("cr_resets_pct"), "RS投票")
 
     def _render(self):
         d = self.data
