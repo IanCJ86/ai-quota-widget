@@ -23,7 +23,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 ## 功能
 
 - 显示 Kimi Code / Codex 的 **每 5 小时** 与 **每周** 额度剩余百分比
-- **Codex 全球重置雷达**：显示三个独立的第三方公共信号：原主源 [codex-reset.com](https://codex-reset.com) 的 24/48 小时模型预测、新增 [codexreset.org](https://codexreset.org) 的 24/48 小时预测，以及 [codex-resets.com](https://codex-resets.com) 的社区投票信号。它们不统计个人赠送/补偿重置卡，也不代表个人账户真值
+- **Codex 全球重置雷达**：显示 [codexreset.org](https://codexreset.org) 的 24/48 小时主源预测，以及 [codex-resets.com](https://codex-resets.com) 的社区投票辅助信号。原 [codex-reset.com](https://codex-reset.com) 已移除。两者都是第三方公共信号，不统计个人赠送/补偿重置卡，也不代表个人账户真值
 - **可选 GLM Coding Plan 卡片**：在 config.json 填入 `glm_api_key` 后自动出现，显示 5 小时 / 每周额度与重置时间（需有效的 GLM Coding Plan Key，见「配置项」）
 - 显示额度重置时间（5 小时窗显示倒计时，每周窗显示具体时间）
 - 显示套餐名与续订日期（接口不返回；**右键 → Kimi / Codex / GLM 设置 里直接选**，也可在 `config.json` 里改）
@@ -56,7 +56,7 @@ python quota_monitor.py
 - 双击窗口任意位置立即刷新
 - Kimi 数据来自官方接口 `api.kimi.com/coding/v1/usages`；access_token 过期时会用本地 refresh_token 自动续期（client_id 为 CLI 公开值）
 - Codex 数据通过本机 `codex app-server`（stdio JSON-RPC）读取 `account/rateLimits/read`
-- 雷达数据分别来自 `codex-reset.com`、`codexreset.org` 和 `codex-resets.com` 的第三方公开页面/API，不含任何个人凭证；两个模型源使用 24/48 小时预测，复数域名使用社区投票信号
+- 雷达数据来自 `codexreset.org` 和 `codex-resets.com` 的第三方公开页面/API，不含任何个人凭证；主源使用 24/48 小时预测，复数域名使用社区投票信号
 - GLM 数据来自 `open.bigmodel.cn/api/monitor/usage/quota/limit`（国际版 `api.z.ai` 同路径），用 config.json 里的 apiKey 鉴权
 - 所有 CLI 凭证只从本机 `~/.kimi-code` 与 `~/.codex` 读取，代码不打印、不上传任何 token
 
