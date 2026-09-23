@@ -1,21 +1,32 @@
 # -*- coding: utf-8 -*-
 # Quota Monitor: Kimi Code + Codex floating widget.
-# Reads local credentials only; account calls go to official domains, while
-# the optional reset radar reads credential-free public third-party sources.
+# Reads local credentials only; public radar calls are read-only and credential-free.
 # Never prints or logs any token.
 import json
 import os
+import sys
 import calendar
+import queue
 import re
 import subprocess
 import threading
 import time
 import urllib.request
 import urllib.parse
+import urllib.error
 from datetime import datetime, date, timezone
 from html import unescape
-import tkinter as tk
-from tkinter import messagebox, simpledialog, ttk
+from monitor_runtime import Scheduler, SingleInstance, atomic_json, validate_result
+
+QUERY_MODE = len(sys.argv) == 3 and sys.argv[1] == "--query"
+if not QUERY_MODE:
+    import tkinter as tk
+    from tkinter import messagebox, simpledialog, ttk
+    try:
+        import pystray
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        pystray = None  # Main window still works if optional tray packages are absent.
 
 # crisp rendering on high-DPI displays (declare per-monitor DPI awareness)
 try:
@@ -39,6 +50,7 @@ CODEX_EXE_CANDIDATES = [
 DEBUG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug.txt")
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")  # legacy
+CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "last-good.json")
 
 DEFAULT_CONFIG = {
     # ---- personal display options (edit config.json, not this file) ----
@@ -61,6 +73,7 @@ DEFAULT_CONFIG = {
     "show_codex_5h": None,
     "show_radar": True,
     "radar_window": 24,   # 24 or 48 hours
+    "tray_metric": "cw_pct",  # Codex weekly percentage in the Windows tray
     "show_glm": False,            # GLM card visibility; rows show "--" until glm_api_key works
     # ---- GLM Coding Plan (optional) ----
     "glm_api_key": "",            # z.ai / open.bigmodel.cn API key; empty = disabled
@@ -72,7 +85,8 @@ def _load_config():
     cfg = dict(DEFAULT_CONFIG)
     for path in (SETTINGS_FILE, CONFIG_FILE):  # legacy settings.json first, config.json wins
         try:
-            cfg.update(json.load(open(path, encoding="utf-8")))
+            with open(path, encoding="utf-8") as stream:
+                cfg.update(json.load(stream))
         except Exception:
             pass
     return cfg
@@ -80,8 +94,7 @@ def _load_config():
 
 def _save_config(cfg):
     try:
-        json.dump(cfg, open(CONFIG_FILE, "w", encoding="utf-8"),
-                  ensure_ascii=False, indent=2)
+        atomic_json(CONFIG_FILE, cfg)
     except Exception:
         pass
 
@@ -96,6 +109,9 @@ if os.name == "nt":
     _si.wShowWindow = 0  # SW_HIDE
     _NO_WINDOW = {"startupinfo": _si,
                   "creationflags": subprocess.CREATE_NO_WINDOW}
+
+_CODEX_PROCESS_LOCK = threading.Lock()
+_CODEX_ACTIVE_PROCESS = None
 
 # colors
 TRANSP_KEY = "#010102"  # glass colorkey: root pixels of this color go transparent
@@ -129,9 +145,11 @@ PLAN_PRESETS = {
 }
 PLAN_CFG_KEY = {"kimi": "kimi_plan_name", "codex": "codex_plan_name",
                 "glm": "glm_plan_name"}
-CODEX_RADAR_URL = "https://codexreset.org/"
+# Global reset sources are public, third-party signals. They do not expose or
+# replace the account-specific Codex quota below.
 CODEX_RESETS_PAGE_URL = "https://codex-resets.com/"
 CODEX_RESETS_API_URL = "https://codex-resets.com/api/v1/status"
+CODEX_RADAR_URL = "https://codexreset.org/"
 GLM_QUOTA_URLS = {
     "cn": "https://open.bigmodel.cn/api/monitor/usage/quota/limit",
     "intl": "https://api.z.ai/api/monitor/usage/quota/limit",
@@ -191,7 +209,8 @@ def _parse_mmdd(s):
 # ---------------- Kimi ----------------
 
 def fetch_kimi():
-    cred = json.load(open(KIMI_CRED, encoding="utf-8"))
+    with open(KIMI_CRED, encoding="utf-8") as stream:
+        cred = json.load(stream)
     if cred.get("expires_at", 0) <= time.time() + 60 and cred.get("refresh_token"):
         body = urllib.parse.urlencode({
             "client_id": KIMI_CLIENT_ID,
@@ -202,20 +221,22 @@ def fetch_kimi():
             try:
                 req = urllib.request.Request(KIMI_OAUTH_HOST + path, data=body,
                                              headers={"Accept": "application/json"})
-                r = json.load(urllib.request.urlopen(req, timeout=15))
+                with urllib.request.urlopen(req, timeout=15) as response:
+                    r = json.load(response)
                 if r.get("access_token"):
                     cred["access_token"] = r["access_token"]
                     if r.get("refresh_token"):
                         cred["refresh_token"] = r["refresh_token"]
                     if r.get("expires_in"):
                         cred["expires_at"] = int(time.time()) + int(r["expires_in"])
-                    json.dump(cred, open(KIMI_CRED, "w", encoding="utf-8"))
+                    atomic_json(KIMI_CRED, cred)
                     break
             except Exception:
                 continue
     req = urllib.request.Request(KIMI_USAGE_URL,
                                  headers={"Authorization": "Bearer " + cred["access_token"]})
-    d = json.load(urllib.request.urlopen(req, timeout=15))
+    with urllib.request.urlopen(req, timeout=15) as response:
+        d = json.load(response)
 
     weekly = d.get("usage") or {}
     five_h = None
@@ -227,15 +248,14 @@ def fetch_kimi():
             dur = 0
         if abs(dur - 300) <= 5:
             five_h = item.get("detail") or {}
-    if five_h is None and d.get("limits"):
-        five_h = (d["limits"][0] or {}).get("detail") or {}
+    five_h = five_h or {}
 
     def pct_left(detail):
         try:
             if detail.get("used") is not None and detail.get("limit"):
-                return 100 - int(detail["used"]) * 100 // int(detail["limit"])
+                return max(0, min(100, 100 - int(detail["used"]) * 100 // int(detail["limit"])))
             if detail.get("remaining") is not None and detail.get("limit"):
-                return int(detail["remaining"]) * 100 // int(detail["limit"])
+                return max(0, min(100, int(detail["remaining"]) * 100 // int(detail["limit"])))
         except Exception:
             pass
         return None
@@ -265,11 +285,33 @@ def _find_codex_exe():
 
 
 def fetch_codex():
+    global _CODEX_ACTIVE_PROCESS
     env = dict(os.environ, CODEX_HOME=CODEX_HOME)
     p = subprocess.Popen([_find_codex_exe(), "app-server", "--listen", "stdio://"],
                          stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                          stderr=subprocess.DEVNULL, env=env, text=True,
                          encoding="utf-8", errors="replace", **_NO_WINDOW)
+    with _CODEX_PROCESS_LOCK:
+        _CODEX_ACTIVE_PROCESS = p
+    output = queue.Queue(maxsize=128)
+
+    def collect_stdout():
+        try:
+            for line in p.stdout:
+                # Drop excess notifications instead of growing memory without limit.
+                if len(line) <= 262144:
+                    try:
+                        output.put(line, timeout=1)
+                    except queue.Full:
+                        return
+        finally:
+            try:
+                output.put_nowait(None)
+            except queue.Full:
+                pass
+
+    reader = threading.Thread(target=collect_stdout, daemon=True)
+    reader.start()
     try:
         def send(i, method, params):
             p.stdin.write(json.dumps({"jsonrpc": "2.0", "id": i,
@@ -277,10 +319,13 @@ def fetch_codex():
             p.stdin.flush()
 
         def read(want_id, timeout=20):
-            end = time.time() + timeout
-            while time.time() < end:
-                line = p.stdout.readline()
-                if not line:
+            end = time.monotonic() + timeout
+            while time.monotonic() < end:
+                try:
+                    line = output.get(timeout=max(0.01, end - time.monotonic()))
+                except queue.Empty:
+                    raise TimeoutError("codex rpc timeout")
+                if line is None:
                     raise RuntimeError("codex app-server exited")
                 try:
                     m = json.loads(line)
@@ -298,38 +343,52 @@ def fetch_codex():
         read(0)
         send(1, "account/rateLimits/read", None)
         result = read(1)
-        send(2, "account/read", {})
-        account = (read(2) or {}).get("account") or {}
+        account = {}
+        try:
+            send(2, "account/read", {})
+            account = (read(2, timeout=3) or {}).get("account") or {}
+        except Exception:
+            pass  # Optional plan name must not discard valid quota data.
     finally:
         try:
             p.kill()
         except Exception:
             pass
+        try:
+            p.wait(timeout=2)
+        except Exception:
+            pass
+        with _CODEX_PROCESS_LOCK:
+            if _CODEX_ACTIVE_PROCESS is p:
+                _CODEX_ACTIVE_PROCESS = None
+        reader.join(timeout=1)
+        try:
+            p.stdin.close()
+        except OSError:
+            pass
+        if not reader.is_alive():
+            p.stdout.close()
 
-    rl = (result or {}).get("rateLimits") or {}
-    if not rl:
-        by_id = (result or {}).get("rateLimitsByLimitId") or {}
-        rl = by_id.get("codex") or next(iter(by_id.values()), {})
+    by_id = (result or {}).get("rateLimitsByLimitId") or {}
+    rl = by_id.get("codex") or (result or {}).get("rateLimits") or {}
 
     def window(node):
         if not node:
             return None
         used = node.get("usedPercent")
-        return {"pct": (100 - int(used)) if used is not None else None,
+        return {"pct": max(0, min(100, 100 - int(used))) if used is not None else None,
                 "mins": node.get("windowDurationMins"),
                 "reset": node.get("resetsAt")}
 
     wins = [w for w in (window(rl.get("primary")), window(rl.get("secondary"))) if w]
     five_h = next((w for w in wins if w["mins"] and abs(w["mins"] - 300) <= 5), None)
     weekly = next((w for w in wins if w["mins"] and abs(w["mins"] - 10080) <= 60), None)
-    if weekly is None and wins:
-        weekly = wins[0]
     return {
         "c5_pct": five_h["pct"] if five_h else None,
         "c5_reset": five_h["reset"] if five_h else None,
         "cw_pct": weekly["pct"] if weekly else None,
         "cw_reset": weekly["reset"] if weekly else None,
-        "c_plan": str(account.get("planType") or "").title(),
+        "c_plan": str(account.get("planType") or rl.get("planType") or "").title(),
     }
 
 
@@ -341,7 +400,10 @@ def _fetch_public_text(url, accept):
         headers={"User-Agent": "ai-quota-widget/1.0", "Accept": accept},
     )
     with urllib.request.urlopen(req, timeout=8) as response:
-        return response.read()
+        raw = response.read(2 * 1024 * 1024 + 1)
+        if len(raw) > 2 * 1024 * 1024:
+            raise ValueError("response too large")
+        return raw
 
 
 def _visible_html_text(raw):
@@ -360,57 +422,40 @@ def _int_match(pattern, text):
         return None
 
 
-def _pct_value(value):
-    if value is None:
-        return None
-    try:
-        value = float(value)
-        if 0 <= value <= 1:
-            value *= 100
-        return int(value + 0.5)
-    except Exception:
-        return None
+def fetch_main_radar():
+    html = _fetch_public_text(CODEX_RADAR_URL, "text/html").decode("utf-8", errors="replace")
+    return {
+        "cr_main24": _int_match(
+            r'data-testid="probability-ring-24h"[^>]*data-target-value="(\d+)"', html),
+        "cr_main48": _int_match(
+            r'data-testid="probability-ring-48h"[^>]*data-target-value="(\d+)"', html),
+        "cr_main_updated": datetime.now(timezone.utc).isoformat(),
+        "cr_main_mode": "model",
+    }
 
 
-def fetch_radar():
-    """Read the selected primary forecast and the community signal, fail-soft."""
-    data = {}
-
-    # Primary: codexreset.org. Its server-rendered 24h/48h forecast rings are
-    # the only model-based signal shown as the main radar.
-    try:
-        html = _fetch_public_text(CODEX_RADAR_URL, "text/html").decode(
-            "utf-8", errors="replace")
-        data["cr_pct"] = _int_match(
-            r'data-testid="probability-ring-24h"[^>]*data-target-value="(\d+)"',
-            html)
-        data["cr_pct48"] = _int_match(
-            r'data-testid="probability-ring-48h"[^>]*data-target-value="(\d+)"',
-            html)
-        data["cr_mode"] = "model"
-    except Exception:
-        pass
-
-    # Auxiliary source: codex-resets.com (plural, hyphenated). Prefer the page's
-    # community-vote headline; use its documented API only as a fallback.
+def fetch_community_radar():
     try:
         page = _visible_html_text(_fetch_public_text(
             CODEX_RESETS_PAGE_URL, "text/html,application/xhtml+xml"))
-        data["cr_resets_pct"] = _int_match(
+        pct = _int_match(
             r"Possible reset\s+(\d+)\s*%\s+chance of reset", page)
-        if data["cr_resets_pct"] is None:
-            raise ValueError("plural-domain headline unavailable")
+        if pct is not None:
+            return {"cr_resets_pct": pct, "cr_resets_mode": "community_vote",
+                    "cr_resets_updated": datetime.now(timezone.utc).isoformat()}
     except Exception:
-        try:
-            d = json.loads(_fetch_public_text(
-                CODEX_RESETS_API_URL, "application/json").decode("utf-8"))
-            watch = ((d.get("data") or {}).get("active_watch") or {})
-            data["cr_resets_pct"] = _pct_value(
-                watch.get("reset_chance_percent"))
-        except Exception:
-            pass
-
-    return data
+        pass  # Independent, bounded API fallback.
+    d = json.loads(_fetch_public_text(CODEX_RESETS_API_URL, "application/json").decode("utf-8"))
+    body = d.get("data")
+    if not isinstance(body, dict) or "active_watch" not in body:
+        raise ValueError("community schema changed")
+    watch = body["active_watch"]
+    if watch is None:
+        return {"cr_resets_pct": None, "cr_resets_mode": "no_watch"}
+    # The percent field is already 0..100; 1 means 1%, not 100%.
+    pct = float(watch["reset_chance_percent"])
+    return {"cr_resets_pct": round(pct), "cr_resets_mode": "api_watch",
+            "cr_resets_updated": (d.get("meta") or {}).get("generated_at")}
 
 
 # ---------------- GLM Coding Plan (optional) ----------------
@@ -428,7 +473,8 @@ def fetch_glm():
         "Accept-Language": "zh-CN,zh",
         "Content-Type": "application/json",
     })
-    d = json.load(urllib.request.urlopen(req, timeout=15))
+    with urllib.request.urlopen(req, timeout=15) as response:
+        d = json.load(response)
     items = d
     for k in ("limits", "data"):
         if isinstance(items, dict):
@@ -463,7 +509,7 @@ def fetch_glm():
 # ---------------- UI ----------------
 
 class App:
-    def __init__(self):
+    def __init__(self, instance=None):
         self.root = tk.Tk()
         try:
             dpi = ctypes.windll.user32.GetDpiForSystem()
@@ -479,8 +525,22 @@ class App:
         self.data = {}
         self.errors = {}
         self.last_ok = None
+        self.instance = instance
+        self._closed = False
+        self._commands = queue.SimpleQueue()
+        self._verified = set()
+        self._success_at = {}
+        self._diagnostics = {}
+        self._ui_error = None
+        self._last_render_minute = None
+        self._tray_value = object()
+        self._tray_thread = None
+        self._tray_failed = False
+        self.scheduler = Scheduler(os.path.abspath(__file__), self._on_result, REFRESH_SECONDS)
+        self._load_cache()
         self._drag = None
         self.theme = "dark"
+        self.tray = None
         self._cards = []
         self._name_labels = []
         self._bg_frames = []
@@ -504,7 +564,7 @@ class App:
         self._divider2 = tk.Frame(self.root, bg="#3a3a4e", height=1)
         self._divider2.grid(row=4, column=0, sticky="ew", padx=10, pady=1)
         self._section(5, "Codex", CODEX_GREEN,
-                       [("c5", "每5小时"), ("cw", "每周"),
+                      [("c5", "每5小时"), ("cw", "每周"),
                        ("cr_main", "主源"),
                        ("cr_resets", "社区")])
 
@@ -518,7 +578,7 @@ class App:
                                   font=("Microsoft YaHei UI", 9))
         self.close_btn.pack(side="right")
         self.close_btn._no_drag = True
-        self.close_btn.bind("<Button-1>", lambda e: self._quit())
+        self.close_btn.bind("<Button-1>", lambda e: self._minimize_to_tray())
         self.alpha_val = 94
         self._alpha_btns = []
         for sym, d in (("－", -3), ("＋", 3)):
@@ -538,11 +598,11 @@ class App:
         self._bind(self.root)
 
         self.menu = tk.Menu(self.root, tearoff=0)
+        self._st = CFG
         self.menu.add_checkbutton(label="置顶", variable=self.topmost,
                                 command=self._toggle_top)
         self.menu.add_command(label="立即刷新", command=self.refresh_async)
         self.menu.add_separator()
-        self._st = CFG
         self.show_kimi = tk.BooleanVar(value=self._st.get("show_kimi", True))
         self.show_codex = tk.BooleanVar(value=self._st.get("show_codex", True))
         self.show_codex_5h = tk.BooleanVar(value=self._codex_5h_visible())
@@ -583,8 +643,10 @@ class App:
 
         self._apply_visibility(persist=False)
         self._set_theme(CFG.get("theme", "dark"))
+        self._init_tray()
+        self.root.protocol("WM_DELETE_WINDOW", self._minimize_to_tray)
         self.refresh_async()
-        self._schedule_next()
+        self.root.after(100, self._poll)
 
     def _fit(self):
         """Resize window to fit content, clamped fully on-screen."""
@@ -631,14 +693,98 @@ class App:
             pass
 
     def _quit(self):
-        # hard exit: hide then kill process immediately — no teardown, no ghost frame
+        if self._closed:
+            return
+        self._closed = True
+        self.scheduler.close()  # Reap only our Job Object trees, never other Codex tasks.
         try:
-            self.root.attributes("-alpha", 0)
             self.root.withdraw()
-            self.root.update()
         except Exception:
             pass
-        os._exit(0)
+        try:
+            if self.tray is not None:
+                self.tray.stop()
+        except Exception:
+            pass
+        self.root.destroy()
+
+    def _minimize_to_tray(self):
+        """Close button hides the main window; tray menu remains available."""
+        if self.tray is not None and self.tray.visible and self._tray_thread.is_alive():
+            self.root.withdraw()
+        else:
+            self.status.config(text="托盘不可用，窗口已保留")
+
+    def _tray_image(self, value, stale=False):
+        """Create a transparent tray icon showing the selected percentage."""
+        image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(image)
+        pct = int(value) if value is not None else None
+        color = (131, 212, 171, 255) if pct is None or pct > 30 else (
+            (208, 128, 32, 255) if pct > 15 else (208, 64, 64, 255))
+        if stale:
+            color = (155, 155, 165, 255)
+        text = "--" if pct is None else str(pct)
+        try:
+            size = 46 if pct is not None and len(text) <= 2 else 34
+            font = ImageFont.truetype(r"C:\Windows\Fonts\calibrib.ttf", size)
+        except Exception:
+            font = ImageFont.load_default()
+        box = draw.textbbox((0, 0), text, font=font)
+        x = (64 - (box[2] - box[0])) / 2
+        y = (64 - (box[3] - box[1])) / 2 - 9
+        draw.text((x, y), text, fill=color, font=font)
+        return image
+
+    def _init_tray(self):
+        if pystray is None:
+            self._tray_failed = True
+            return
+        menu = pystray.Menu(
+            pystray.MenuItem("显示额度监控", self._tray_show, default=True),
+            pystray.MenuItem("立即刷新", self._tray_refresh),
+            pystray.MenuItem("退出", self._tray_quit),
+        )
+        try:
+            self.tray = pystray.Icon("quota-monitor", self._tray_image(None),
+                                     "Codex 每周 --", menu)
+            def run_tray():
+                try:
+                    self.tray.run()
+                except Exception:
+                    self._commands.put("tray_failed")
+            self._tray_thread = threading.Thread(target=run_tray, daemon=True)
+            self._tray_thread.start()
+        except Exception:
+            self.tray = None
+            self._tray_failed = True
+
+    def _tray_show(self, icon, item):
+        self._commands.put("show")
+
+    def _tray_refresh(self, icon, item):
+        self._commands.put("refresh")
+
+    def _tray_quit(self, icon, item):
+        self._commands.put("quit")
+
+    def _update_tray(self):
+        if self.tray is None:
+            return
+        metric = CFG.get("tray_metric", "cw_pct")
+        value = self.data.get(metric)
+        source = "codex" if metric.startswith("c") else "kimi" if metric.startswith("k") else "glm"
+        stale = self._is_stale(source)
+        key = (metric, value, stale)
+        if key != self._tray_value:
+            self.tray.icon = self._tray_image(value, stale)
+            self._tray_value = key
+        shown = "--" if value is None else f"{int(value)}%"
+        stamp = self._success_at.get(source)
+        when = datetime.fromtimestamp(stamp).strftime("%m-%d %H:%M") if stamp else "尚无成功数据"
+        title = f"{source.title()} {'每周' if 'w_' in metric else '5小时'} {shown} | {'旧数据' if stale else '更新'} {when}"
+        if self.tray.title != title:
+            self.tray.title = title
 
     def _alpha_step(self, delta):
         self.alpha_val = max(40, min(100, self.alpha_val + delta))
@@ -670,7 +816,6 @@ class App:
             # A clicked checkbutton is an explicit user override. Leaving this
             # as None is how the plan-based default remains active.
             CFG["show_codex_5h"] = self.show_codex_5h.get()
-        _save_config(CFG)
         k, c = CFG["show_kimi"], CFG["show_codex"]
         g = CFG["show_glm"]
         kimi_card, glm_card, codex_card = self._cards[0], self._cards[1], self._cards[2]
@@ -681,7 +826,9 @@ class App:
         (self._divider2.grid if (c and (k or g)) else self._divider2.grid_remove)()
         if persist:
             CFG["show_radar"] = self.show_radar.get()
-        _save_config(CFG)
+            _save_config(CFG)
+        if hasattr(self, "scheduler"):
+            self.scheduler.configure(self._enabled_sources())
         c5_visible = c and self.show_codex_5h.get()
         self._set_row_visible("c5", c5_visible)
         for key in ("cr_main", "cr_resets"):
@@ -768,12 +915,6 @@ class App:
         for b in self._alpha_btns:
             b.configure(fg=t["FG_DIM"], bg=t["BG"])
         self._render()  # pct 颜色按当前主题重算
-
-    def _schedule_next(self):
-        """Align auto-refresh to clock :00/:15/:30/:45."""
-        now = time.time()
-        nxt = (int(now // REFRESH_SECONDS) + 1) * REFRESH_SECONDS
-        self.root.after(int((nxt - now) * 1000) + 500, self._auto)
 
     def _section(self, row, title, color, lines):
         f = tk.Frame(self.root, bg=BG_CARD,
@@ -983,52 +1124,132 @@ class App:
         finally:
             self.root.attributes("-topmost", top)
 
-    def _auto(self):
-        self.refresh_async()
-        self._schedule_next()
-
     def refresh_async(self):
-        threading.Thread(target=self._fetch, daemon=True).start()
+        if self._closed:
+            return
+        self.scheduler.configure(self._enabled_sources())
+        self.scheduler.refresh()
+        self.scheduler.tick()
+        self.status.config(text="刷新中…（保留上次数据）")
 
-    def _fetch(self):
-        data, errors = {}, {}
+    def _enabled_sources(self):
+        names = []
+        if CFG.get("show_codex", True) or CFG.get("tray_metric", "cw_pct").startswith("c"):
+            names.append("codex")
+        if CFG.get("show_kimi", True) or CFG.get("tray_metric", "cw_pct").startswith("k"):
+            names.append("kimi")
+        if CFG.get("show_codex", True) and CFG.get("show_radar", True):
+            names.extend(("main", "community"))
+        if CFG.get("show_glm") and CFG.get("glm_api_key"):
+            names.append("glm")
+        return names
+
+    def _is_stale(self, source):
+        return (source not in self._verified or source in self.errors or
+                time.time() - self._success_at.get(source, 0) > REFRESH_SECONDS + 60)
+
+    def _load_cache(self):
         try:
-            data.update(fetch_kimi())
-        except Exception as ex:
-            errors["kimi"] = type(ex).__name__
-        try:
-            data.update(fetch_codex())
-        except Exception as ex:
-            errors["codex"] = type(ex).__name__
-        data.update(fetch_radar())  # silent degrade: never touches errors
-        if (CFG.get("glm_api_key") or "").strip():
+            with open(CACHE_FILE, encoding="utf-8") as stream:
+                cache = json.load(stream)
+            for name, record in cache.get("sources", {}).items():
+                try:
+                    stamp = float(record["success_at"])
+                    if not 0 < stamp <= time.time() + 60:
+                        continue
+                    data = validate_result(name, record["data"])
+                    self.data.update(data)
+                    self._success_at[name] = stamp
+                except (KeyError, TypeError, ValueError):
+                    continue
+        except (OSError, ValueError, AttributeError):
+            pass
+
+    @staticmethod
+    def _source_keys(name):
+        return {"kimi": ("k5_", "kw_", "k_plan"), "codex": ("c5_", "cw_", "c_plan"),
+                "glm": ("g5_", "gw_", "g_plan"), "main": ("cr_main",),
+                "community": ("cr_resets",)}[name]
+
+    def _save_cache(self):
+        sources = {name: {"success_at": stamp,
+                         "data": {key: value for key, value in self.data.items()
+                                  if key.startswith(self._source_keys(name))}}
+                   for name, stamp in self._success_at.items()}
+        atomic_json(CACHE_FILE, {"version": 1, "sources": sources})
+
+    def _on_result(self, name, payload, diagnostics):
+        if payload.get("ok"):
+            self.data.update(payload["data"])
+            self._success_at[name] = time.time()
+            self._verified.add(name)
+            self.errors.pop(name, None)
             try:
-                data.update(fetch_glm())
-            except Exception as ex:
-                errors["glm"] = type(ex).__name__
-        self.root.after(0, lambda: self._apply(data, errors))
-
-    def _apply(self, data, errors):
-        if data:
-            self.data = data
-            self.last_ok = datetime.now()
-        self.errors = errors
-        render_err = None
+                self._save_cache()
+            except OSError:
+                self._ui_error = "CacheWriteFailed"
+        else:
+            self.errors[name] = payload.get("error", "QueryFailed")
+        self._diagnostics[name] = diagnostics
         try:
             self._render()
             self._fit()
+            self._update_tray()
         except Exception as ex:
-            render_err = repr(ex)
+            self._ui_error = type(ex).__name__
+        self._write_debug()
+
+    def _write_debug(self):
         try:
-            dbg = {"updated": datetime.now().isoformat(timespec="seconds"),
-                   "win": {"w": self.root.winfo_width(), "h": self.root.winfo_height(),
-                           "reqw": self.root.winfo_reqwidth(), "reqh": self.root.winfo_reqheight()},
-                   "data": data, "errors": errors, "render_err": render_err,
-                   "status_text": self.status.cget("text")}
-            with open(DEBUG_FILE, "w", encoding="utf-8") as f:
-                json.dump(dbg, f, ensure_ascii=False, indent=1, default=str)
+            atomic_json(DEBUG_FILE, {
+                "updated": datetime.now().isoformat(timespec="seconds"), "pid": os.getpid(),
+                "data": self.data, "errors": self.errors, "ui_error": self._ui_error,
+                "success_at": {name: datetime.fromtimestamp(ts).isoformat(timespec="seconds")
+                               for name, ts in self._success_at.items()},
+                "queries": self._diagnostics, "status_text": self.status.cget("text"),
+                "active": [name for name, state in self.scheduler.states.items() if state["worker"]],
+                "tray": {"available": bool(self.tray and self.tray.visible),
+                         "title": self.tray.title if self.tray else None}})
         except Exception:
             pass
+
+    def _poll(self):
+        """Single GUI-thread timer; no worker ever calls Tk, and errors cannot cancel it."""
+        try:
+            while not self._commands.empty():
+                command = self._commands.get_nowait()
+                if command == "quit":
+                    self._quit()
+                    return
+                if command == "show":
+                    self.root.deiconify()
+                    self.root.lift()
+                elif command == "refresh":
+                    self.refresh_async()
+                elif command == "tray_failed":
+                    self._tray_failed = True
+                    self.root.deiconify()
+            if self.instance and self.instance.requested():
+                self.root.deiconify()
+                self.root.lift()
+            if self._tray_thread and not self._tray_thread.is_alive() and not self._tray_failed:
+                self._tray_failed = True
+                self.root.deiconify()
+            self.scheduler.tick()
+            minute = int(time.time() // 60)
+            if minute != self._last_render_minute:
+                self._last_render_minute = minute
+                if self.root.state() != "withdrawn":
+                    self._render()
+                    self._fit()
+                self._update_tray()
+        except Exception as ex:
+            self._ui_error = type(ex).__name__
+            self._write_debug()
+        finally:
+            if not self._closed:
+                # Idle: one cheap check / second, no image allocation, disk or network I/O.
+                self.root.after(250 if self.scheduler.active else 1000, self._poll)
 
     def _set_row(self, key, pct, reset_text):
         pl, rl = self.rows[key]
@@ -1051,20 +1272,19 @@ class App:
         """Show the selected primary source plus the community signal."""
         win = CFG.get("radar_window", 24)
 
-        def render(key, pct, label):
-            pl, rl = self.rows[key]
-            if pct is None:
-                pl.config(text="--", fg=THEMES[self.theme]["FG_DIM"])
-                rl.config(text="")
-                return
-            # Dim by default; highlight unusually high public signals.
-            color = "#d08020" if pct >= 80 else THEMES[self.theme]["FG_DIM"]
-            pl.config(text=f"{pct}%", fg=color, width=4)
-            rl.config(text=label)
+        main_pct = self.data.get("cr_main48" if win == 48 else "cr_main24")
+        self._set_row("cr_main", main_pct, f"主源·{win}h")
+        if main_pct is not None:
+            color = "#d08020" if main_pct >= 80 else THEMES[self.theme]["FG_DIM"]
+            self.rows["cr_main"][0].config(fg=color)
 
-        render("cr_main", self.data.get("cr_pct48" if win == 48 else "cr_pct"),
-               f"主源·{win}h")
-        render("cr_resets", self.data.get("cr_resets_pct"), "社区投票")
+        resets_pct = self.data.get("cr_resets_pct")
+        self._set_row("cr_resets", resets_pct, "社区投票")
+        if resets_pct is None and self.data.get("cr_resets_mode") == "no_watch":
+            self.rows["cr_resets"][1].config(text="暂无投票")
+        if resets_pct is not None:
+            color = "#d08020" if resets_pct >= 80 else THEMES[self.theme]["FG_DIM"]
+            self.rows["cr_resets"][0].config(fg=color)
 
     def _render(self):
         d = self.data
@@ -1104,20 +1324,63 @@ class App:
                       _countdown(d.get("g5_reset")) if d.get("g5_reset") else "")
         self._set_row("gw", d.get("gw_pct"), _fmt_reset(d.get("gw_reset")))
         self._render_radar()
-
+        enabled = self._enabled_sources()
+        for source, keys in {"kimi": ("k5", "kw"), "codex": ("c5", "cw"),
+                             "glm": ("g5", "gw"), "main": ("cr_main",),
+                             "community": ("cr_resets",)}.items():
+            if source in enabled and self._is_stale(source):
+                stamp = self._success_at.get(source)
+                text = "旧 " + datetime.fromtimestamp(stamp).strftime("%H:%M") if stamp else "等待更新"
+                for key in keys:
+                    self.rows[key][1].config(text=text)
+                    self.rows[key][0].config(fg=THEMES[self.theme]["FG_DIM"])
+        stale = [name for name in enabled if self._is_stale(name)]
         parts = []
-        if self.last_ok:
-            parts.append("更新于 " + self.last_ok.strftime("%H:%M"))
-        if self.errors:
-            parts.append("刷新失败:" + ",".join(self.errors))
+        account_times = [self._success_at.get(name) for name in enabled if name in ("kimi", "codex", "glm")]
+        if account_times and all(account_times):
+            parts.append("额度更新 " + datetime.fromtimestamp(min(account_times)).strftime("%H:%M"))
+        if stale:
+            labels = {"kimi": "Kimi", "codex": "Codex", "glm": "GLM", "main": "主源", "community": "社区"}
+            parts.append("待更新:" + "/".join(labels[name] for name in stale))
+        if self._tray_failed:
+            parts.append("托盘不可用")
         if not parts:
             parts.append("加载中…")
         self.status.config(text="  ".join(parts),
-                           fg="#d08080" if self.errors else FG_DIM)
+                           fg="#d08080" if stale else FG_DIM)
 
     def run(self):
         self.root.mainloop()
 
 
+def query_worker(name):
+    if sys.stdin.buffer.readline(16) != b"go\n":
+        return
+    try:
+        fn = {"kimi": fetch_kimi, "codex": fetch_codex, "glm": fetch_glm,
+              "main": fetch_main_radar, "community": fetch_community_radar}[name]
+        data = validate_result(name, fn())
+        payload = {"ok": True, "data": data}
+    except Exception as ex:
+        code = ex.code if isinstance(ex, urllib.error.HTTPError) else None
+        payload = {"ok": False, "error": f"HTTP{code}" if code else type(ex).__name__,
+                   "retryable": code not in (400, 401, 403, 404) and not isinstance(ex, FileNotFoundError)}
+    # Only known public/account quota fields; never exception text, request headers or credentials.
+    sys.stdout.buffer.write(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+    sys.stdout.buffer.flush()
+
+
 if __name__ == "__main__":
-    App().run()
+    if QUERY_MODE:
+        query_worker(sys.argv[2])
+    else:
+        instance = SingleInstance("IanQuotaMonitor-v2")
+        app = None
+        try:
+            if not instance.existing:
+                app = App(instance)
+                app.run()
+        finally:
+            if app:
+                app.scheduler.close()
+            instance.close()
