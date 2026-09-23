@@ -13,6 +13,9 @@
   "show_kimi": true,
   "show_codex": true,
   "show_codex_5h": null,
+  "show_radar": true,
+  "radar_window": 24,
+  "tray_metric": "cw_pct",
   "show_glm": false,
   "glm_api_key": "",
   "glm_region": "cn"

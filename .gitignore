@@ -1,5 +1,7 @@
 # runtime debug output
 debug.txt
+last-good.json
+dist/
 
 # python
 __pycache__/
