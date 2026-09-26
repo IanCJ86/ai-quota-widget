@@ -34,7 +34,16 @@ with tempfile.TemporaryDirectory(prefix='quota-package-test-') as temp:
         run([exe,'--doctor'],(0,1,2))
         run([exe,'--json'],(1,2))
         dest = root/'中文 install with spaces'
-        run([exe,'--install','--dest',dest,'--no-autostart'])
+        try:
+            run([exe,'--install','--dest',dest,'--no-autostart'])
+        except AssertionError:
+            # CI-only fixture diagnostics, no credentials or network requests.
+            installed_python=dest/('.venv-'+APP_VERSION)/'Scripts/python.exe'
+            if installed_python.exists():
+                for module in ('tkinter','PIL','pystray','compression.zstd' if sys.version_info >= (3,14) else 'backports.zstd'):
+                    p=subprocess.run([str(installed_python),'-c',f'import {module}'],capture_output=True,env=env)
+                    print('fixture import',module,'exit',p.returncode,flush=True)
+            raise
         sentinel = '{"kimi_plan_name":"TEST_ONLY","show_kimi":false,"show_codex":false}'
         (dest/'config.json').write_text(sentinel,encoding='utf-8')
         run([exe,'--install','--dest',dest,'--no-autostart'])

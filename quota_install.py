@@ -34,12 +34,16 @@ def running():
 def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
-def run(args):
+def run(args, stage='检查'):
     process = subprocess.run(args, capture_output=True, timeout=240,
                              creationflags=0x08000000 if os.name == 'nt' else 0)
     if process.returncode:
         # Do not echo pip output, URLs with credentials or arbitrary exception text.
-        raise RuntimeError('环境检查或依赖安装失败。请检查Python/Tk、网络和pip；原程序文件未替换。')
+        stderr=process.stderr.decode('utf-8','replace')
+        categories=[name for name in ('ModuleNotFoundError','ImportError','PermissionError',
+                    'UnicodeEncodeError','SSLError','ProxyError','ConnectionError','TclError') if name in stderr]
+        reason='/'.join(categories) or '环境或网络错误'
+        raise RuntimeError(f'{stage}失败（退出码{process.returncode}，{reason}）。请检查Python/Tk、网络和pip；原程序文件未替换。')
     return process
 
 def install(destination=None, skip_deps=False):
@@ -93,11 +97,11 @@ def _install(destination=None, skip_deps=False):
             environment = dest/('.venv-'+APP_VERSION)
             if not (environment/'Scripts/python.exe').is_file():
                 # A permanent venv must not bind itself to an ephemeral uvx venv.
-                run([getattr(sys,'_base_executable',sys.executable),'-m','venv',str(environment)])
+                run([getattr(sys,'_base_executable',sys.executable),'-m','venv',str(environment)],stage='创建持久环境')
             python = environment/'Scripts/python.exe'
-            run([str(python),'-m','pip','install','--disable-pip-version-check','-r',str(stage/'requirements.txt')])
-        run([str(python),'-c',"import sys,tkinter,PIL,pystray; assert sys.version_info >= (3,10); __import__('compression.zstd' if sys.version_info >= (3,14) else 'backports.zstd')"])
-        run([str(python),'-m','py_compile',*[str(stage/n) for n in modules]])
+            run([str(python),'-m','pip','install','--disable-pip-version-check','-r',str(stage/'requirements.txt')],stage='安装依赖')
+        run([str(python),'-c',"import sys,tkinter,PIL,pystray; assert sys.version_info >= (3,10); __import__('compression.zstd' if sys.version_info >= (3,14) else 'backports.zstd')"],stage='检查GUI与压缩运行时')
+        run([str(python),'-m','py_compile',*[str(stage/n) for n in modules]],stage='检查程序模块')
         pythonw = python.with_name('pythonw.exe')
         if not pythonw.exists():
             pythonw = python
