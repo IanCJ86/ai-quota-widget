@@ -4,6 +4,7 @@ from ctypes import wintypes
 import json
 from pathlib import Path
 import unittest
+from unittest.mock import Mock
 from unittest.mock import patch
 import test_monitor as fixtures
 monitor = fixtures.monitor
@@ -56,6 +57,20 @@ class FirstRunTests(unittest.TestCase):
         evidence = json.loads(path.read_text(encoding='utf-8'))
         self.assertEqual(evidence['success_at'], {})
         self.assertIsNone(evidence['ui_error'])
+
+    def test_api_only_install_does_not_wait_for_missing_harness_logs_or_show_codex_tray(self):
+        a = self.app
+        for name in a.CARD_ORDER:
+            getattr(a,'show_'+name).set(name=='deepseek')
+        with patch.object(monitor,'DSH_SESSIONS',str(Path(self.tmp.name)/'not-installed')):
+            a._apply_visibility(persist=False)
+            self.assertEqual(a._enabled_sources(), ['deepseek'])
+        a.tray_controller.icon = Mock()
+        a.tray_controller.image = Mock()
+        a.data['cw_pct']=75
+        a._update_tray()
+        self.assertEqual(a.tray_controller.icon.title, 'AI 额度监控 · 点击打开')
+        a.tray_controller.image.assert_called_once_with(None)
 
     def test_setup_can_be_skipped_and_reopened_without_network_wait(self):
         a = self.app

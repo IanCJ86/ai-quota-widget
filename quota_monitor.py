@@ -1244,7 +1244,7 @@ class App:
         self.tray_menu.delete(0, "end")
         choices = self._visible_tray_choices()
         if not choices:
-            self.tray_menu.add_command(label="（没有显示的卡片）", state="disabled")
+            self.tray_menu.add_command(label="（未显示百分比账户）", state="disabled")
             return
         for metric, label in choices:
             self.tray_menu.add_radiobutton(label=label, value=metric,
@@ -1276,6 +1276,12 @@ class App:
 
     def _update_tray(self):
         if self.tray_controller.icon is None or self._closed:
+            return
+        if not self._visible_tray_choices():
+            if self.tray_controller.last_value != ('no_percentage',):
+                self.tray_controller.icon.icon = self.tray_controller.image(None)
+                self.tray_controller.last_value = ('no_percentage',)
+            self.tray_controller.icon.title = 'AI 额度监控 · 点击打开'
             return
         metric = CFG.get("tray_metric", "cw_pct")
         value = self.data.get(metric)
@@ -1542,7 +1548,7 @@ class App:
             names.append("glm")
         if CFG.get("show_deepseek", True) and deepseek_api_key():
             names.append("deepseek")
-            if CFG.get("deepseek_token_metric", "total") != "off":
+            if CFG.get("deepseek_token_metric", "total") != "off" and os.path.isdir(DSH_SESSIONS):
                 names.append("tokens")
         return names
 
