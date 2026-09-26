@@ -36,7 +36,19 @@ labels: bug
 - 显示器缩放（100% / 125% / 150%）与屏幕数量：
 - 已登录的 AI CLI（勾选）：Kimi Code ☐　Codex ☐　GLM ☐　DeepSeek ☐
 
-## 5. debug.txt 关键字段
+## 5. 脱敏诊断输出（推荐用这个）
+
+请在程序目录运行下面这条命令，把输出**整段贴进来**（它本身已脱敏，不含密钥/路径/账号/余额）：
+
+```powershell
+python quota_monitor.py --doctor --data-dir "<安装目录>"
+```
+
+或：右键菜单 →「复制脱敏诊断」。
+
+> ⚠️ **请不要贴原始 `debug.txt` 或含余额的 JSON** —— 按仓库隐私指引，公开渠道只放脱敏信息。
+
+## 5b. 如果你更愿意贴 debug.txt 的摘要字段
 
 <!--
 命令：Get-Content "$env:USERPROFILE\Desktop\quota-widget\debug.txt" -Raw
@@ -44,8 +56,7 @@ labels: bug
 -->
 
 ```
-pid:
-ui_error:
+# 只贴这四行即可，不要整份粘贴
 errors:
 status_text:
 ```

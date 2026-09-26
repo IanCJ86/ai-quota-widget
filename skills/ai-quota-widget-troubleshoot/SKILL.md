@@ -7,7 +7,17 @@ description: 排查已装好的「AI 额度监控悬浮窗」(ai-quota-widget) �
 
 只处理**已安装但显示不对**的情况。若用户还没装，改用 `ai-quota-widget` 技能安装。
 
-## 第一步：拿证据（不要猜）
+## 第一步：先跑脱敏体检（首选）
+
+```powershell
+python quota_monitor.py --doctor --data-dir "<安装目录>"
+```
+
+离线、脱敏：不含密钥、路径、账号、余额。先看它报缺什么，再往下按 `errors` 定位。
+需要更细的信息时，让用户在右键菜单点「**复制脱敏诊断**」——
+**不要把原始 `debug.txt` 或含余额的 JSON 发到公开渠道**（仓库指引明确要求脱敏）。
+
+## 第二步：拿证据（如果体检不够）
 
 安装目录（默认 `%USERPROFILE%\Desktop\quota-widget\`）下的 `debug.txt` 是关键：
 

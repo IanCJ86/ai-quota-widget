@@ -34,10 +34,10 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 如果用户没有 git，让他从 GitHub 页面下载 ZIP 解压后，对同目录执行 `install.ps1`。
 
 安装脚本会：检查 Python → 安装 `Pillow` / `pystray`（Python < 3.14 还会装 `backports.zstd`）→ 把
-`quota_monitor.py`、`monitor_runtime.py`、`harness_stats.py` **三个模块全部**复制到安装目录
+`quota_monitor.py`、`monitor_runtime.py`、`harness_stats.py` 按 `runtime-files.txt` 清单**复制全部运行模块（当前 14 个）**到安装目录
 （默认 `%USERPROFILE%\Desktop\quota-widget\`，用户可自定义）→ 生成 `start.bat` → 询问是否开机自启。
 
-> ⚠️ **三个模块必须一起复制**。只替换其中一个会导致程序起不来或功能缺失（例如缺 `harness_stats.py` 会让 token 统计失效）。
+> ⚠️ **必须按 `runtime-files.txt` 清单复制全部模块（当前 14 个）；安装器会建立**版本化持久虚拟环境**并逐个校验清单**。只替换其中一个会导致程序起不来或功能缺失（例如缺 `harness_stats.py` 会让 token 统计失效）。
 
 ## 配置（问用户这几项，不知道就留默认）
 
@@ -52,6 +52,15 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 | `deepseek_token_metric` | `total`（默认）/ `fresh` / `off` |
 
 这些**用户日后都能在右键菜单里改**，不必一次问全。
+
+## 先跑体检（离线、脱敏）
+
+```powershell
+python quota_monitor.py --doctor --data-dir "<安装目录>"
+```
+
+`--doctor` 不上网、不打印密钥/路径/账号/余额，会报告：Python 与依赖、模块清单（当前 14/14）、各来源凭据是否存在、上次成功时间、实例是否在跑。
+退出码：`0` 正常 ｜ `1` 有告警 ｜ `2` 失败。装完先看它，再启动。
 
 ## 验收（必须做，不要凭感觉说"装好了"）
 
@@ -75,6 +84,16 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 | 窗口不见了 | 点过 ✕ 收进了托盘 | 托盘图标双击唤回；右键菜单"退出"才真正结束 |
 | 装了新版但功能没变 | 只替换了部分文件，或旧进程还在 | 先从托盘菜单**退出**旧程序，再复制**三个模块**，重新启动 |
 | Windows 提示"未知发布者" | 未做代码签名 | 属于正常现象，源码在 GitHub 可自行审计 |
+
+## 还能用的命令行
+
+| 命令 | 用途 |
+| --- | --- |
+| `--version` | 打印版本号 |
+| `--doctor [--data-dir DIR]` | 离线脱敏体检（首选） |
+| `--json [--fresh]` | 机器可读快照（单行 JSON，不含密钥） |
+| `--once [--fresh]` | 终端一次性摘要，适合"先看效果再决定装不装" |
+| `--install [--dest DIR]` | 安装/升级；检测到实例在跑会**拒绝**并提示先退出，不会强制结束进程 |
 
 ## 禁止事项
 
