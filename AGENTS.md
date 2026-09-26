@@ -58,7 +58,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 | `codex_plan_name` | Codex 套餐显示名覆盖，如 `"Pro 20x"`（右键菜单可改）；留空则用接口值 + `codex_plan_suffix` |
 | `glm_plan_name` | GLM 套餐显示名，如 `"Pro"`（右键菜单可改） |
 | `codex_plan_suffix` | Codex 套餐名后缀，例如 `" 20x"` |
-| `theme` | 主题：`dark` / `light` / `glass`（毛玻璃），右键菜单可切换 |
+| `theme` | 主题：`dark`（月之暗面）/ `light`（月之亮面）/ `steam`（蒸汽算力机）/ `fuel`（Token 加油站）/ `ink`（电子墨水账本）；`glass` 为毛玻璃兼容项。右键菜单即时切换并保存 |
 | `show_kimi` / `show_codex` / `show_glm` | 各卡片是否显示（右键菜单也可切换） |
 | `glm_api_key` | 可选。GLM Coding Plan API Key；**明文存储，仅兼容旧配置**。优先用环境变量 `AI_QUOTA_WIDGET_GLM_API_KEY`，或让用户点右键菜单「GLM Coding Plan 设置 → 安全保存 API Key…」（DPAPI 加密，且会清空这里的明文） |
 | `glm_region` | `"cn"` 用 open.bigmodel.cn，`"intl"` 用 api.z.ai |

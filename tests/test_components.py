@@ -20,6 +20,18 @@ import widget_windows
 
 
 class IdentityTests(unittest.TestCase):
+    def test_theme_contract_and_opaque_text_contrast(self):
+        self.assertEqual([p['LABEL'] for k, p in monitor.THEMES.items() if k != 'glass'],
+                         ['月之暗面', '月之亮面', '蒸汽算力机', 'Token 加油站', '电子墨水账本'])
+        def luminance(color):
+            values = [int(color[i:i+2], 16) / 255 for i in (1, 3, 5)]
+            values = [v / 12.92 if v <= .04045 else ((v + .055) / 1.055) ** 2.4 for v in values]
+            return sum(v * weight for v, weight in zip(values, (.2126, .7152, .0722)))
+        for theme, palette in monitor.THEMES.items():
+            for color in [palette[k] for k in ('FG_TEXT', 'FG_DIM', 'WARNING', 'DANGER')] + list(palette['BRANDS'].values()):
+                a, b = sorted((luminance(color), luminance(palette['BG_CARD'])))
+                self.assertGreaterEqual((b + .05) / (a + .05), 4.5, (theme, color))
+
     def test_cli_version_without_ui_import_or_config_read(self):
         code = (
             "import runpy,sys; sys.argv=['quota_monitor.py','--version']; "
@@ -38,7 +50,7 @@ class IdentityTests(unittest.TestCase):
             "import runpy,sys; sys.argv=['quota_monitor.py','--query','unused']; "
             "runpy.run_path('quota_monitor.py',run_name='test_worker_import'); "
             "assert not any(n in sys.modules for n in "
-            "('tkinter','pystray','PIL','widget_dialogs','widget_settings','widget_tray','widget_windows'))"
+            "('tkinter','pystray','PIL','widget_dialogs','widget_settings','widget_tray','widget_windows','widget_themes'))"
         )
         result = subprocess.run([sys.executable, "-c", code], cwd=ROOT,
                                 capture_output=True, text=True, timeout=10,
@@ -51,7 +63,7 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual(set(files), {p.name for p in ROOT.glob('*.py')})
 
     def test_version_format_and_rpc_identity(self):
-        self.assertRegex(app_version.APP_VERSION, r'^\d+\.\d+\.\d+$')
+        self.assertRegex(app_version.APP_VERSION, r'^\d+\.\d+\.\d+(?:-dev)?$')
         self.assertEqual(app_version.USER_AGENT, 'ai-quota-widget/' + app_version.APP_VERSION)
         tree = ast.parse((ROOT / 'quota_monitor.py').read_text(encoding='utf-8'))
         # RPC is a local process, not HTTP: it must use the same identity source.

@@ -20,7 +20,7 @@ from html import unescape
 from html.parser import HTMLParser
 from app_version import APP_VERSION, USER_AGENT
 from widget_style import (
-    TRANSP_KEY, THEMES, BG, BG_CARD, FG_DIM, FG_TEXT,
+    TRANSP_KEY, THEMES, THEME_CHOICES, BG, BG_CARD, FG_DIM, FG_TEXT,
     KIMI_BLUE, CODEX_GREEN, KIMI_BLUE_SOFT, CODEX_GREEN_SOFT,
     GLM_PURPLE, GLM_PURPLE_SOFT, DEEPSEEK_BLUE, DEEPSEEK_SOFT,
     FONT_TITLE, FONT_TEXT, FONT_VALUE, FONT_STATUS, MONEY_PAD,
@@ -41,6 +41,7 @@ if not QUERY_MODE:
     from widget_settings import SettingsController
     from widget_windows import WindowEffects
     from widget_tray import TrayIcon
+    from widget_themes import ThemePainter
 
 # crisp rendering on high-DPI displays (declare per-monitor DPI awareness)
 try:
@@ -94,7 +95,7 @@ DEFAULT_CONFIG = {
     "custom_plan_kimi": "",       # user-defined plan names (kept as menu entries)
     "custom_plan_codex": "",
     "custom_plan_glm": "",
-    "theme": "dark",              # dark / light / glass
+    "theme": "dark",              # dark / light / steam / fuel / ink / glass
     # ---- visibility toggles (also in the right-click menu) ----
     "show_kimi": True,
     "show_codex": True,
@@ -912,8 +913,7 @@ class App:
         self._cards = []
         self._name_labels = []
 
-        sp1 = tk.Frame(self.root, bg=BG, height=6)
-        sp1.grid(row=0, column=0)
+        self.theme_painter = ThemePainter(self)
         self.rows = {}  # key -> (pct_label, reset_label)
         self.row_labels = {}
         self.section_titles = {}
@@ -1021,7 +1021,7 @@ class App:
         self.menu.add_separator()
         self._theme_var = tk.StringVar(value=self.theme)
         tm = tk.Menu(self.menu, tearoff=0)
-        for label, name in (("黑夜", "dark"), ("白天", "light"), ("毛玻璃", "glass")):
+        for label, name in THEME_CHOICES:
             tm.add_radiobutton(label=label, variable=self._theme_var, value=name,
                                command=lambda n=name: self._set_theme(n))
         self.menu.add_cascade(label="主题", menu=tm)
@@ -1324,23 +1324,9 @@ class App:
         if CFG.get("theme") != name:
             CFG["theme"] = name
             _save_config(CFG)
-        t = THEMES[name]
-        self._paint_backgrounds(t)
-        for lbl in self._name_labels:
-            lbl.configure(fg=t["FG_DIM"], bg=t["BG_CARD"])
-        for pl, rl in self.rows.values():
-            pl.configure(bg=t["BG_CARD"])
-            rl.configure(fg=t["FG_DIM"], bg=t["BG_CARD"])
-        for lbl in self.section_titles.values():
-            lbl.configure(bg=t["BG_CARD"])
-        soft = {"Kimi": t["KIMI_SOFT"], "Codex": t["CODEX_SOFT"], "GLM": GLM_PURPLE_SOFT}
-        for lbl_name, lbl in self.section_renews.items():
-            lbl.configure(fg=soft.get(lbl_name, t["FG_DIM"]), bg=t["BG_CARD"])
-        self.status.configure(fg=t["FG_DIM"], bg=t["BG"])
-        self.close_btn.configure(fg=t["FG_DIM"], bg=t["BG"])
-        for b in self._alpha_btns:
-            b.configure(fg=t["FG_DIM"], bg=t["BG"])
-        self._render()  # pct 颜色按当前主题重算
+        self.theme_painter.apply(THEMES[name])
+        self._render()
+        self._fit()
 
     def _paint_backgrounds(self, palette):
         """Inherit the containing card/root surface, including new nested widgets.
@@ -1637,7 +1623,7 @@ class App:
             rl.config(text="")
         else:
             base = THEMES[getattr(self, "theme", "dark")]["FG_TEXT"]
-            color = base if pct > 30 else ("#d08020" if pct > 15 else "#d04040")
+            color = base if pct > 30 else (THEMES[self.theme]["WARNING"] if pct > 15 else THEMES[self.theme]["DANGER"])
             pl.config(text=f"{pct}%", fg=color)
             rl.config(text=reset_text if reset_text else "")
 
@@ -1671,7 +1657,7 @@ class App:
             limit = 0.0
         color = base
         if warn and limit > 0 and amount <= limit:
-            color = "#d04040" if amount <= limit / 4 else "#d08020"
+            color = THEMES[self.theme]["DANGER"] if amount <= limit / 4 else THEMES[self.theme]["WARNING"]
         pl.config(text=text, fg=color)
         rl.config(text=note)
 
@@ -1689,7 +1675,7 @@ class App:
         main_pct = self.data.get("cr_main48" if win == 48 else "cr_main24")
         self._set_row("cr_main", main_pct, f"{win}h概率")
         if main_pct is not None:
-            color = "#d08020" if main_pct >= 80 else THEMES[self.theme]["FG_DIM"]
+            color = THEMES[self.theme]["WARNING"] if main_pct >= 80 else THEMES[self.theme]["FG_DIM"]
             self.rows["cr_main"][0].config(fg=color)
 
     def _render(self):
@@ -1706,13 +1692,13 @@ class App:
         if k_plan or CFG.get("renew_kimi"):
             self._set_title("Kimi", "Kimi · " + k_plan)
             self.section_renews["Kimi"].config(
-                text="续订 " + CFG.get("renew_kimi", ""), fg=KIMI_BLUE_SOFT)
+                text="续订 " + CFG.get("renew_kimi", ""), fg=THEMES[self.theme]["KIMI_SOFT"])
         if d.get("c_plan"):
             c_plan = CFG.get("codex_plan_name") or (
                 d["c_plan"] + CFG.get("codex_plan_suffix", ""))
             self._set_title("Codex", "Codex · " + c_plan)
             self.section_renews["Codex"].config(
-                text="续订 " + CFG.get("renew_codex", ""), fg=CODEX_GREEN_SOFT)
+                text="续订 " + CFG.get("renew_codex", ""), fg=THEMES[self.theme]["CODEX_SOFT"])
         if d.get("g_plan"):
             g_title = "GLM" + ((" · " + CFG["glm_plan_name"])
                                if CFG.get("glm_plan_name") else "")
@@ -1720,7 +1706,7 @@ class App:
             renew_g = CFG.get("renew_glm", "")
             self.section_renews["GLM"].config(
                 text=("续订 " + renew_g) if renew_g and renew_g != "MM-DD" else "",
-                fg=GLM_PURPLE_SOFT)
+                fg=THEMES[self.theme]["GLM_SOFT"])
         self._set_row("k5", d.get("k5_pct"), _countdown(d.get("k5_reset")))
         self._set_row("kw", d.get("kw_pct"), _fmt_reset(d.get("kw_reset")))
         # Visibility is a user/menu setting with a plan-aware default. The row
@@ -1741,7 +1727,7 @@ class App:
             if isinstance(expiry, (int, float)):
                 note = _fmt_day(expiry) + " 到期"
                 if expiry - time.time() <= 7 * 86400:
-                    color = "#d08020"     # about to expire
+                    color = THEMES[self.theme]["WARNING"]     # about to expire
             self._set_custom("cr_credit", f"{int(count)} 张", note, color)
         self._set_row("g5", d.get("g5_pct"),
                       _countdown(d.get("g5_reset")) if d.get("g5_reset") else "")
@@ -1749,7 +1735,7 @@ class App:
         # DeepSeek is pay-as-you-go: the card shows money, not a percentage.
         if d.get("ds_plan") or d.get("ds_balance") is not None:
             self._set_title("DeepSeek", "DeepSeek")
-            self.section_renews["DeepSeek"].config(text="按量付费", fg=DEEPSEEK_SOFT)
+            self.section_renews["DeepSeek"].config(text="按量付费", fg=THEMES[self.theme]["DEEPSEEK_SOFT"])
         # Both money rows share one integer width, so their currency symbols and
         # decimal points line up (¥114.05 / ¥  4.68).
         money = [v for v in (d.get("ds_balance"), d.get("ds_spend"))
@@ -1815,7 +1801,8 @@ class App:
         if not parts:
             parts.append("加载中…")
         self.status.config(text="  ".join(parts),
-                           fg="#d08080" if stale else FG_DIM)
+                           fg=THEMES[self.theme]["DANGER"] if stale else THEMES[self.theme]["FG_DIM"])
+        self.theme_painter.update()
 
     def run(self):
         self.root.mainloop()

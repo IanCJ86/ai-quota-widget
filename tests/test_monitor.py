@@ -625,6 +625,73 @@ class UITests(unittest.TestCase):
         for item in reversed(self.patches):
             item.stop()
         self.tmp.cleanup()
+    def test_five_skins_preserve_data_config_and_do_not_add_timers(self):
+        a = self.app
+        a._on_result("codex", {"ok": True, "data": {"cw_pct": 76}}, {})
+        before = dict(a.data)
+        for theme in list(monitor.THEMES) * 3:
+            with self.subTest(theme=theme), patch.object(a.root, "after") as after:
+                a._set_theme(theme)
+                self.assertEqual(monitor.CFG['theme'], theme)
+                self.assertEqual(a._theme_var.get(), theme)
+                self.assertEqual(a.data, before)
+                self.assertEqual(a.rows['cw'][0].cget('text'), '76%')
+                self.assertEqual(str(a.menu.cget('bg')), monitor.THEMES[theme]['BG_CARD'])
+                self.assertEqual(a.settings.dialogs.palette, monitor.THEMES[theme])
+                after.assert_not_called()
+        a._set_theme('unsupported')
+        self.assertEqual(a.theme, 'dark')
+
+    def test_skin_redraw_is_bounded_and_unchanged_values_are_cached(self):
+        a = self.app
+        a._on_result('codex', {'ok': True, 'data': {'cw_pct': 76}}, {})
+        for theme in monitor.THEMES:
+            a._set_theme(theme)
+            canvas = a.theme_painter.canvas
+            a.root.update_idletasks()
+            self.assertLessEqual(len(canvas.find_all()), 30)
+            with patch.object(canvas, 'delete') as delete:
+                for _ in range(20):
+                    a.theme_painter.update()
+                delete.assert_not_called()
+            self.assertEqual(bool(canvas.winfo_manager()), theme != 'glass')
+
+    def test_gauge_expires_only_the_week_and_never_displays_old_value(self):
+        a = self.app
+        a.show_codex_5h.set(True)
+        a._on_result('codex', {'ok': True, 'data': {
+            'cw_pct': 76, 'cw_reset': time.time() + 1000, 'c5_reset': time.time() - 1}}, {})
+        a._set_theme('steam')
+        self.assertEqual(a.theme_painter.snapshot, ('Codex 周余量', 76, False))
+        a.data['cw_reset'] = time.time() - 1
+        a._render()
+        canvas = a.theme_painter.canvas
+        text = ' '.join(canvas.itemcget(i, 'text') for i in canvas.find_all() if canvas.type(i) == 'text')
+        self.assertIn('待更新', text)
+        self.assertNotIn('76%', text)
+
+    def test_gauge_only_uses_visible_percentage_accounts(self):
+        a = self.app
+        a._on_result('kimi', {'ok': True, 'data': {'kw_pct': 88}}, {})
+        a.show_codex.set(False)
+        a.theme_painter.update()
+        self.assertEqual(a.theme_painter.snapshot, ('Kimi 周余量', 88, False))
+        a.show_kimi.set(False)
+        a.show_glm.set(False)
+        a.theme_painter.update()
+        self.assertEqual(a.theme_painter.snapshot, ('', None, True))
+
+    def test_all_skin_numeric_colours_survive_refresh_and_glass_exit(self):
+        a = self.app
+        a._set_theme('glass')
+        for theme in ('dark', 'light', 'steam', 'fuel', 'ink'):
+            a._set_theme(theme)
+            for value, key in ((76, 'FG_TEXT'), (20, 'WARNING'), (10, 'DANGER')):
+                a._on_result('codex', {'ok': True, 'data': {'cw_pct': value}}, {})
+                self.assertEqual(a.rows['cw'][0].cget('fg'), monitor.THEMES[theme][key])
+            self.assertFalse(a._acrylic_on)
+            self.assertEqual(a.root.attributes('-transparentcolor'), '')
+
     def test_partial_failure_preserves_value_and_original_success_time(self):
         a = self.app
         a._on_result("codex", {"ok": True, "data": {"cw_pct": 75}}, {})
@@ -825,13 +892,13 @@ class UITests(unittest.TestCase):
         # the note reports which DeepSeek price regime the refresh fell into
         self.assertIn(a.rows["ds"][1].cget("text"),
                       (monitor.DEEPSEEK_PEAK, monitor.DEEPSEEK_OFFPEAK))
-        self.assertNotEqual(a.rows["ds"][0].cget("fg"), "#d08020")
+        self.assertNotEqual(a.rows["ds"][0].cget("fg"), monitor.THEMES[a.theme]["WARNING"])
         with patch.dict(monitor.CFG, {"deepseek_low_balance": 200.0}):
             a._render()
-            self.assertEqual(a.rows["ds"][0].cget("fg"), "#d08020")   # below limit
+            self.assertEqual(a.rows["ds"][0].cget("fg"), monitor.THEMES[a.theme]["WARNING"])   # below limit
         with patch.dict(monitor.CFG, {"deepseek_low_balance": 500.0}):
             a._render()
-            self.assertEqual(a.rows["ds"][0].cget("fg"), "#d04040")   # below a quarter
+            self.assertEqual(a.rows["ds"][0].cget("fg"), monitor.THEMES[a.theme]["DANGER"])   # below a quarter
     def test_peak_label_follows_beijing_windows(self):
         """梁文峰 09:00-12:00 and 14:00-18:00 Beijing time on weekdays, 梁文谷
         the rest of the time ( weekends included )."""
@@ -1068,7 +1135,7 @@ class UITests(unittest.TestCase):
         """The card header row is built from its own frames; if the theme pass
         forgets them, the light theme shows dark blocks behind the titles."""
         a = self.app
-        for theme in ("dark", "light", "glass"):
+        for theme in monitor.THEMES:
             a._set_theme(theme)
             expected = monitor.THEMES[theme]["BG_CARD"]
             def check_children(parent):
@@ -1211,7 +1278,7 @@ class UITests(unittest.TestCase):
         a._on_result("codex", {"ok": True, "data": {
             "cw_pct": 86, "cr_credit_count": 1,
             "cr_credit_expiry": time.time() + 3 * 86400}}, {})
-        self.assertEqual(a.rows["cr_credit"][0].cget("fg"), "#d08020")
+        self.assertEqual(a.rows["cr_credit"][0].cget("fg"), monitor.THEMES[a.theme]["WARNING"])
         # No vouchers left: the row disappears instead of showing 0.
         a._on_result("codex", {"ok": True, "data": {"cw_pct": 86, "cr_credit_count": 0}}, {})
         self.assertFalse(shown(a.rows["cr_credit"][0]))
@@ -1229,8 +1296,8 @@ class UITests(unittest.TestCase):
         self.assertEqual(a.rows["ds_spend"][0].cget("text"), "¥0.50")
         # 8.00 is under the default 20 limit (but above a quarter of it), so the
         # balance warns while the spend row (always small) stays neutral.
-        self.assertEqual(a.rows["ds"][0].cget("fg"), "#d08020")
-        self.assertNotEqual(a.rows["ds_spend"][0].cget("fg"), "#d08020")
+        self.assertEqual(a.rows["ds"][0].cget("fg"), monitor.THEMES[a.theme]["WARNING"])
+        self.assertNotEqual(a.rows["ds_spend"][0].cget("fg"), monitor.THEMES[a.theme]["WARNING"])
 
     def test_dividers_need_a_visible_card_on_both_sides(self):
         a = self.app
