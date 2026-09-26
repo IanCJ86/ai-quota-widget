@@ -167,7 +167,7 @@ Kimi / Codex 凭证来自本机已登录的 CLI；可选 GLM / DeepSeek 需要�
 - 程序运行时读取本机凭证（`~/.kimi-code`、`~/.codex`），只用于对应官方服务认证，不发送给第三方雷达，不打印或记录到日志
 - Kimi 侧仅访问官方域名 `api.kimi.com` 与 `auth.kimi.com`
 - Codex 侧通过本机 `codex app-server` 获取额度，由该客户端与官方服务通信
-- 雷达、GLM 与 DeepSeek 请求分别发往两个第三方公开域名与智谱 / DeepSeek 官方域名；GLM / DeepSeek 的 Key 保存在本机，只用于对应官方认证
+- 雷达请求发往 **codexreset.org**（社区维护的第三方公开站点，**非 OpenAI 官方、与本项目无关联**）；GLM / DeepSeek 请求发往智谱 / DeepSeek 官方域名；GLM / DeepSeek 的 Key 保存在本机，只用于对应官方认证
 - GLM / DeepSeek 的 Key 可用右键菜单「安全保存 API Key…」以 Windows DPAPI 加密写入本机 `glm-key.dpapi` / `deepseek-key.dpapi`（仅当前账户可解密）并清空 config.json 中的明文，也可用环境变量完全不落盘；明文 `glm_api_key` / `deepseek_api_key` 字段仅为兼容旧配置保留
 - Kimi 凭证过期时，程序可能用 refresh_token 自动续期并**更新本地凭证文件**
 - 这是个人自用工具：不建议直接运行未经检查的第三方修改版，改完自己看一遍代码再用
@@ -188,4 +188,7 @@ Kimi / Codex 凭证来自本机已登录的 CLI；可选 GLM / DeepSeek 需要�
 
 ## License
 
-MIT © IanCJ86
+MIT © 临界思潮 (IanCJ86)
+---
+
+作者：**临界思潮**（GitHub [@IanCJ86](https://github.com/IanCJ86)）
