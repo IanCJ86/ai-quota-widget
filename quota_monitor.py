@@ -23,6 +23,7 @@ from monitor_runtime import (Scheduler, SingleInstance, atomic_json, dpapi_prote
 QUERY_MODE = len(sys.argv) == 3 and sys.argv[1] == "--query"
 if not QUERY_MODE:
     import tkinter as tk
+    from tkinter import font as tkfont
     from tkinter import messagebox, simpledialog, ttk
     try:
         import pystray
@@ -169,9 +170,20 @@ GLM_PURPLE = "#b48cff"
 GLM_PURPLE_SOFT = "#c9b3f2"
 DEEPSEEK_BLUE = "#4d6bfe"
 DEEPSEEK_SOFT = "#8fa2ff"
-# Money values are monospaced on purpose: padding with spaces only lines the
+# One type scale for the whole widget: 10 for a card's title, 9 for every body
+# row (labels, values, notes, the refresh line), 8 only for secondary hints in
+# dialogs.  Money is monospaced on purpose: padding with spaces only lines the
 # decimal points up when a space is as wide as a digit.
+FONT_FAMILY = "Microsoft YaHei UI"
+FONT_TITLE = (FONT_FAMILY, 10, "bold")
+FONT_TEXT = (FONT_FAMILY, 9)
+FONT_VALUE = (FONT_FAMILY, 9, "bold")
+FONT_HINT = (FONT_FAMILY, 8)
 MONEY_FONT = ("Consolas", 9, "bold")
+# A card title shares its row with the renewal date. They are packed left and
+# right so they can never overlap; this cap only stops an absurd plan name from
+# stretching the whole window.
+TITLE_MAX_PX = 220
 PLAN_PRESETS = {
     "kimi": ["Andante", "Moderato", "Allegretto", "Allegro"],
     "codex": ["Go", "Plus", "Pro 5x", "Pro 20x"],
@@ -789,6 +801,11 @@ class App:
         self.row_labels = {}
         self.section_titles = {}
         self.section_renews = {}
+        self._title_text = {}       # full title text, before any ellipsis
+        # Height of a card's header row, measured from the title font. The row
+        # is given this height explicitly (see _section) so the header labels
+        # cannot influence the card's column widths.
+        self._head_height = tkfont.Font(font=FONT_TITLE).metrics("linespace") + 4
         self._section(1, "Kimi", KIMI_BLUE, [("k5", "每5小时"), ("kw", "每周")])
         self._divider = tk.Frame(self.root, bg="#3a3a4e", height=1)
         self._divider.grid(row=2, column=0, sticky="ew", padx=10, pady=1)
@@ -797,7 +814,7 @@ class App:
         self._divider2.grid(row=4, column=0, sticky="ew", padx=10, pady=1)
         self._section(5, "Codex", CODEX_GREEN,
                       [("c5", "每5小时"), ("cw", "每周"),
-                       ("cr_credit", "重置券"), ("cr_main", "重置雷达")])
+                       ("cr_credit", "重置券"), ("cr_main", "雷达")])
         self._divider3 = tk.Frame(self.root, bg="#3a3a4e", height=1)
         self._divider3.grid(row=6, column=0, sticky="ew", padx=10, pady=1)
         # DeepSeek is pay-as-you-go, so this card shows a money balance. Money
@@ -809,13 +826,13 @@ class App:
         self._dividers = [self._divider, self._divider2, self._divider3]
 
         bar = tk.Frame(self.root, bg=BG)
-        bar.grid(row=8, column=0, sticky="ew", padx=(17, 10), pady=(3, 2))
+        bar.grid(row=8, column=0, sticky="ew", padx=(19, 12), pady=(3, 2))
         self._bg_frames.append(bar)
         self.status = tk.Label(bar, text="初始化…", fg=FG_DIM, bg=BG,
-                               font=("Microsoft YaHei UI", 9), anchor="w")
+                               font=FONT_TEXT, anchor="w")
         self.status.pack(side="left")
         self.close_btn = tk.Label(bar, text="✕", fg=FG_DIM, bg=BG, cursor="hand2",
-                                  font=("Microsoft YaHei UI", 9))
+                                  font=FONT_TEXT)
         self.close_btn.pack(side="right")
         self.close_btn._no_drag = True
         self.close_btn.bind("<Button-1>", lambda e: self._minimize_to_tray())
@@ -823,12 +840,15 @@ class App:
         self._alpha_btns = []
         for sym, d in (("－", -3), ("＋", 3)):
             b = tk.Label(bar, text=sym, fg=FG_DIM, bg=BG, cursor="hand2",
-                         font=("Microsoft YaHei UI", 9))
+                         font=FONT_TEXT)
             b.pack(side="right", padx=1)
             b._no_drag = True
             b.bind("<Button-1>", lambda e, dd=d: self._alpha_step(dd))
             self._alpha_btns.append(b)
-        sp2 = tk.Frame(self.root, bg=BG, height=5)
+        # A little breathing room under the refresh line; the bar's own pady
+        # plus this should end up close to the top margin so the frame looks
+        # evenly padded.
+        sp2 = tk.Frame(self.root, bg=BG, height=3)
         sp2.grid(row=9, column=0)
         self._bg_frames.append(sp2)
         self.root.grid_columnconfigure(0, weight=1)
@@ -907,6 +927,36 @@ class App:
         for card in self._cards:
             card.grid_columnconfigure(0, minsize=label_w)
             card.grid_columnconfigure(1, minsize=value_w)
+        # A title shares its row with the renewal date and must never reach it.
+        # The header spans the card (a title cannot change that), so reading the
+        # card's width here is safe and stable.
+        font = tkfont.Font(font=FONT_TITLE)
+        for name, lbl in self.section_titles.items():
+            renew = self.section_renews.get(name)
+            card = lbl.master.master
+            # winfo_width() is 1 until the window is mapped (tests, first fit).
+            width = card.winfo_width()
+            if width <= 1:
+                width = self.root.winfo_reqwidth() - 24
+            room = width - 10 - (renew.winfo_reqwidth() if renew else 0) - 8
+            full = self._title_text.get(name, lbl.cget("text"))
+            lbl.configure(text=self._ellipsize(font, full,
+                                               min(TITLE_MAX_PX, max(room, 60))))
+
+    @staticmethod
+    def _ellipsize(font, text, limit):
+        """Shorten text with an ellipsis so it draws within limit pixels."""
+        if font.measure(text) <= limit:
+            return text
+        trimmed = text
+        while trimmed and font.measure(trimmed + "…") > limit:
+            trimmed = trimmed[:-1]
+        return (trimmed + "…") if trimmed else "…"
+
+    def _set_title(self, name, text):
+        """Card titles remember their full text so _sync_columns can trim them."""
+        self._title_text[name] = text
+        self.section_titles[name].configure(text=text)
 
     def _fit(self):
         """Resize window to fit content, clamped fully on-screen."""
@@ -1196,35 +1246,42 @@ class App:
     def _section(self, row, title, color, lines):
         f = tk.Frame(self.root, bg=BG_CARD,
                      highlightbackground="#33334a", highlightthickness=1)
-        f.grid(row=row, column=0, sticky="ew", padx=10, pady=(4, 0))
+        f.grid(row=row, column=0, sticky="ew", padx=12,
+               pady=(8, 0) if row == 1 else (4, 0))
         self._cards.append(f)
         # Column widths are equalised across cards in _sync_columns(); nothing is
         # fixed here, so each column is only as wide as its content needs.
-        title_lbl = tk.Label(f, text=title, fg=color, bg=BG_CARD,
-                             font=("Microsoft YaHei UI", 9, "bold"), anchor="w")
-        title_lbl.grid(row=0, column=0, columnspan=3, sticky="w",
-                       padx=(7, 0), pady=(3, 0))
-        renew_lbl = tk.Label(f, text="", bg=BG_CARD, anchor="w",
-                             font=("Microsoft YaHei UI", 9))
-        renew_lbl.grid(row=0, column=2, sticky="w",
-                       padx=(8, 3), pady=(3, 0))
+        # Title and renewal share their own full-width row: the title sits left,
+        # the renewal right, so they can never overlap and the title may use the
+        # whole card width. The row is placed (with a spacer keeping its height
+        # in the grid) so the header cannot influence the three data columns.
+        spacer = tk.Frame(f, bg=BG_CARD, height=self._head_height)
+        spacer.grid(row=0, column=0, columnspan=3, pady=(3, 0))
+        head = tk.Frame(f, bg=BG_CARD)
+        head.place(x=7, y=3, relwidth=1, width=-10, height=self._head_height)
+        title_lbl = tk.Label(head, text=title, fg=color, bg=BG_CARD,
+                             font=FONT_TITLE, anchor="w")
+        title_lbl.pack(side="left")
+        renew_lbl = tk.Label(head, text="", bg=BG_CARD, anchor="e",
+                             font=FONT_TEXT)
+        renew_lbl.pack(side="right")
         self.section_titles[title] = title_lbl
         self.section_renews[title] = renew_lbl
         for i, line in enumerate(lines, start=1):
             key, name = line[0], line[1]
             money = len(line) > 2 and line[2] == "money"
             nl = tk.Label(f, text=name, fg=FG_DIM, bg=BG_CARD,
-                          font=("Microsoft YaHei UI", 9), anchor="w")
+                          font=FONT_TEXT, anchor="w")
             nl.grid(row=i, column=0, sticky="w", padx=(7, 0))
             self._name_labels.append(nl)
             self.row_labels[key] = (nl,)
             # One shared, left-aligned numeric column for every card.
             pct = tk.Label(f, text="…", fg=FG_TEXT, bg=BG_CARD,
-                           font=MONEY_FONT if money else ("Microsoft YaHei UI", 9, "bold"),
+                           font=MONEY_FONT if money else FONT_VALUE,
                            anchor="w")
             pct.grid(row=i, column=1, sticky="w", padx=(4, 0))
             rst = tk.Label(f, text="", fg=FG_DIM, bg=BG_CARD,
-                           font=("Microsoft YaHei UI", 9), anchor="w")
+                           font=FONT_TEXT, anchor="w")
             rst.grid(row=i, column=2, sticky="w", padx=(8, 3),
                      pady=(0, 3 if i == len(lines) else 0))
             self.rows[key] = (pct, rst)
@@ -1383,7 +1440,7 @@ class App:
 
         mv = tk.StringVar(value=str(cm))
         dv = tk.StringVar(value=str(cd))
-        lbl = dict(bg=BG, fg=FG_TEXT, font=("Microsoft YaHei UI", 9))
+        lbl = dict(bg=BG, fg=FG_TEXT, font=FONT_TEXT)
         tk.Label(win, text="月", **lbl).grid(row=0, column=0, padx=(12, 4), pady=10)
         mc = ttk.Combobox(win, textvariable=mv, state="readonly", width=3,
                           values=[str(i) for i in range(1, 13)])
@@ -1474,11 +1531,11 @@ class App:
         win.configure(bg=BG)
         win.geometry(f"+{self.root.winfo_x() + 40}+{self.root.winfo_y() + 40}")
         tk.Label(win, text=prompt, bg=BG, fg=FG_TEXT, anchor="w",
-                 font=("Microsoft YaHei UI", 9)).grid(
+                 font=FONT_TEXT).grid(
             row=0, column=0, columnspan=2, sticky="w", padx=12, pady=(10, 2))
         tk.Label(win, text="只保存在本机（Windows 加密），不会写入 config.json。",
                  bg=BG, fg=FG_DIM, anchor="w",
-                 font=("Microsoft YaHei UI", 8)).grid(
+                 font=FONT_HINT).grid(
             row=1, column=0, columnspan=2, sticky="w", padx=12, pady=(0, 6))
         value = tk.StringVar()
         entry = tk.Entry(win, textvariable=value, show="•", width=44)
@@ -1726,20 +1783,19 @@ class App:
         # override and renewal date must still be rendered in that case.
         k_plan = CFG.get("kimi_plan_name") or d.get("k_plan") or ""
         if k_plan or CFG.get("renew_kimi"):
-            self.section_titles["Kimi"].config(
-                text="Kimi · " + k_plan)
+            self._set_title("Kimi", "Kimi · " + k_plan)
             self.section_renews["Kimi"].config(
                 text="续订 " + CFG.get("renew_kimi", ""), fg=KIMI_BLUE_SOFT)
         if d.get("c_plan"):
             c_plan = CFG.get("codex_plan_name") or (
                 d["c_plan"] + CFG.get("codex_plan_suffix", ""))
-            self.section_titles["Codex"].config(text="Codex · " + c_plan)
+            self._set_title("Codex", "Codex · " + c_plan)
             self.section_renews["Codex"].config(
                 text="续订 " + CFG.get("renew_codex", ""), fg=CODEX_GREEN_SOFT)
         if d.get("g_plan"):
             g_title = "GLM" + ((" · " + CFG["glm_plan_name"])
                                if CFG.get("glm_plan_name") else "")
-            self.section_titles["GLM"].config(text=g_title)
+            self._set_title("GLM", g_title)
             renew_g = CFG.get("renew_glm", "")
             self.section_renews["GLM"].config(
                 text=("续订 " + renew_g) if renew_g and renew_g != "MM-DD" else "",
@@ -1771,7 +1827,7 @@ class App:
         self._set_row("gw", d.get("gw_pct"), _fmt_reset(d.get("gw_reset")))
         # DeepSeek is pay-as-you-go: the card shows money, not a percentage.
         if d.get("ds_plan") or d.get("ds_balance") is not None:
-            self.section_titles["DeepSeek"].config(text="DeepSeek")
+            self._set_title("DeepSeek", "DeepSeek")
             self.section_renews["DeepSeek"].config(text="按量付费", fg=DEEPSEEK_SOFT)
         # Both money rows share one integer width, so their currency symbols and
         # decimal points line up (¥114.05 / ¥  4.68).
@@ -1801,9 +1857,9 @@ class App:
         account_times = [self._success_at.get(name) for name in enabled
                          if name in ("kimi", "codex", "glm", "deepseek")]
         if account_times and all(account_times):
-            parts.append("额度更新 " + datetime.fromtimestamp(min(account_times)).strftime("%H:%M"))
+            parts.append("刷新时间 " + datetime.fromtimestamp(min(account_times)).strftime("%H:%M"))
         if stale:
-            labels = {"kimi": "Kimi", "codex": "Codex", "glm": "GLM", "main": "重置雷达",
+            labels = {"kimi": "Kimi", "codex": "Codex", "glm": "GLM", "main": "雷达",
                       "deepseek": "DeepSeek"}
             parts.append("待更新:" + "/".join(labels[name] for name in stale))
         if self._tray_failed:

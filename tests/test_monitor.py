@@ -704,6 +704,36 @@ class UITests(unittest.TestCase):
         self.assertEqual(font.measure(balance.split(".")[0]),
                          font.measure(spend.split(".")[0]))   # same pixel x too
 
+    def test_short_titles_are_left_alone(self):
+        """Titles and the renewal date are packed left/right, so a normal title
+        is never shortened (only an over-long one is)."""
+        a = self.app
+        with patch.dict(monitor.CFG, {"kimi_plan_name": "Pro"}):
+            a._on_result("kimi", {"ok": True, "data": {"kw_pct": 100, "k_plan": "Pro"}}, {})
+            a._on_result("deepseek", {"ok": True, "data": {
+                "ds_balance": 1.0, "ds_currency": "CNY", "ds_available": True}}, {})
+            a._fit()
+            a._fit()
+            self.assertEqual(a.section_titles["Kimi"].cget("text"), "Kimi · Pro")
+            self.assertEqual(a.section_titles["DeepSeek"].cget("text"), "DeepSeek")
+
+    def test_long_plan_name_is_shortened_to_fit(self):
+        """Titles and the renewal date are packed left/right so they cannot
+        overlap; this only pins down the trimming helper and the render path."""
+        a = self.app
+        font = tkfont.Font(font=monitor.FONT_TITLE)
+        self.assertEqual(a._ellipsize(font, "Kimi · Andante", 500), "Kimi · Andante")
+        trimmed = a._ellipsize(font, "Kimi · Allegretto 年度版 超级加长版", 120)
+        self.assertTrue(trimmed.endswith("…"))
+        self.assertLessEqual(font.measure(trimmed), 120)
+        with patch.dict(monitor.CFG, {"kimi_plan_name": "Allegretto 年度版 超级加长版"}):
+            a._on_result("kimi", {"ok": True, "data": {"kw_pct": 100, "k_plan": "Pro"}}, {})
+            a._fit()
+            a._fit()
+            self.assertTrue(a.section_titles["Kimi"].cget("text").endswith("…"),
+                            "long title was not shortened: %r"
+                            % a.section_titles["Kimi"].cget("text"))
+
     def test_every_card_shares_the_same_three_columns(self):
         """The three columns are found by x position, so they must match across
         cards; a card whose content merely exceeded the minimum used to grow and
