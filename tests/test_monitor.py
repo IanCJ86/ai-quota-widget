@@ -704,6 +704,22 @@ class UITests(unittest.TestCase):
         self.assertEqual(font.measure(balance.split(".")[0]),
                          font.measure(spend.split(".")[0]))   # same pixel x too
 
+    def test_every_theme_repaints_the_card_header(self):
+        """The card header row is built from its own frames; if the theme pass
+        forgets them, the light theme shows dark blocks behind the titles."""
+        a = self.app
+        for theme in ("dark", "light", "glass"):
+            a._set_theme(theme)
+            expected = monitor.THEMES[theme]["BG_CARD"]
+            for frame in a._card_frames:
+                self.assertEqual(frame.cget("bg"), expected,
+                                 "%s theme left a card frame unpainted" % theme)
+            for lbl in list(a.section_titles.values()) + list(a.section_renews.values()):
+                self.assertEqual(lbl.cget("bg"), expected,
+                                 "%s theme left a header label unpainted" % theme)
+            for card in a._cards:
+                self.assertEqual(card.cget("bg"), expected)
+
     def test_short_titles_are_left_alone(self):
         """Titles and the renewal date are packed left/right, so a normal title
         is never shortened (only an over-long one is)."""

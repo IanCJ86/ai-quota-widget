@@ -170,19 +170,23 @@ GLM_PURPLE = "#b48cff"
 GLM_PURPLE_SOFT = "#c9b3f2"
 DEEPSEEK_BLUE = "#4d6bfe"
 DEEPSEEK_SOFT = "#8fa2ff"
-# One type scale for the whole widget: 10 for a card's title, 9 for every body
-# row (labels, values, notes, the refresh line), 8 only for secondary hints in
-# dialogs.  Money is monospaced on purpose: padding with spaces only lines the
-# decimal points up when a space is as wide as a digit.
+# One type scale for the whole widget: 9 for a card's title and every body row
+# (labels, values, notes), 8 for the refresh line and dialog hints.  Same-role
+# text uses the same size; the values are bold only (weight, not size).  Money
+# is monospaced because padding with spaces only lines the decimal points up
+# when a space is as wide as a digit - and it is a size up, because monospaced
+# digits of the same nominal size look smaller than the proportional ones.
 FONT_FAMILY = "Microsoft YaHei UI"
-FONT_TITLE = (FONT_FAMILY, 10, "bold")
+FONT_TITLE = (FONT_FAMILY, 9, "bold")
 FONT_TEXT = (FONT_FAMILY, 9)
 FONT_VALUE = (FONT_FAMILY, 9, "bold")
+FONT_STATUS = (FONT_FAMILY, 8)
 FONT_HINT = (FONT_FAMILY, 8)
-MONEY_FONT = ("Consolas", 9, "bold")
-# A card title shares its row with the renewal date. They are packed left and
+MONEY_FONT = ("Cascadia Mono", 10, "bold")      # falls back to Consolas
+MONEY_FALLBACK = ("Consolas", 11, "bold")
+# A card title shares its row with the renewal date. They are placed left and
 # right so they can never overlap; this cap only stops an absurd plan name from
-# stretching the whole window.
+# taking the whole row.
 TITLE_MAX_PX = 220
 PLAN_PRESETS = {
     "kimi": ["Andante", "Moderato", "Allegretto", "Allegro"],
@@ -788,6 +792,15 @@ class App:
         self._cards = []
         self._name_labels = []
         self._bg_frames = []
+        self._card_frames = []      # headers/spacers inside cards (theme colours)
+        # Monospaced digits look smaller than proportional ones at the same
+        # nominal size, so money uses a size up; keep a working fallback font.
+        self.money_font = MONEY_FONT
+        try:
+            if MONEY_FONT[0] not in set(tkfont.families()):
+                self.money_font = MONEY_FALLBACK
+        except Exception:
+            pass
 
         w, h = 232, 212
         sw = self.root.winfo_screenwidth()
@@ -829,10 +842,10 @@ class App:
         bar.grid(row=8, column=0, sticky="ew", padx=(19, 12), pady=(3, 2))
         self._bg_frames.append(bar)
         self.status = tk.Label(bar, text="初始化…", fg=FG_DIM, bg=BG,
-                               font=FONT_TEXT, anchor="w")
+                               font=FONT_STATUS, anchor="w")
         self.status.pack(side="left")
         self.close_btn = tk.Label(bar, text="✕", fg=FG_DIM, bg=BG, cursor="hand2",
-                                  font=FONT_TEXT)
+                                  font=FONT_STATUS)
         self.close_btn.pack(side="right")
         self.close_btn._no_drag = True
         self.close_btn.bind("<Button-1>", lambda e: self._minimize_to_tray())
@@ -840,7 +853,7 @@ class App:
         self._alpha_btns = []
         for sym, d in (("－", -3), ("＋", 3)):
             b = tk.Label(bar, text=sym, fg=FG_DIM, bg=BG, cursor="hand2",
-                         font=FONT_TEXT)
+                         font=FONT_STATUS)
             b.pack(side="right", padx=1)
             b._no_drag = True
             b.bind("<Button-1>", lambda e, dd=d: self._alpha_step(dd))
@@ -1227,6 +1240,8 @@ class App:
         for card in self._cards:
             card.configure(bg=t["BG_CARD"],
                            highlightbackground=t["BORDER"])
+        for fr in self._card_frames:
+            fr.configure(bg=t["BG_CARD"])
         for lbl in self._name_labels:
             lbl.configure(fg=t["FG_DIM"], bg=t["BG_CARD"])
         for pl, rl in self.rows.values():
@@ -1257,8 +1272,10 @@ class App:
         # in the grid) so the header cannot influence the three data columns.
         spacer = tk.Frame(f, bg=BG_CARD, height=self._head_height)
         spacer.grid(row=0, column=0, columnspan=3, pady=(3, 0))
+        self._card_frames.append(spacer)
         head = tk.Frame(f, bg=BG_CARD)
         head.place(x=7, y=3, relwidth=1, width=-10, height=self._head_height)
+        self._card_frames.append(head)
         title_lbl = tk.Label(head, text=title, fg=color, bg=BG_CARD,
                              font=FONT_TITLE, anchor="w")
         title_lbl.pack(side="left")
@@ -1277,7 +1294,7 @@ class App:
             self.row_labels[key] = (nl,)
             # One shared, left-aligned numeric column for every card.
             pct = tk.Label(f, text="…", fg=FG_TEXT, bg=BG_CARD,
-                           font=MONEY_FONT if money else FONT_VALUE,
+                           font=self.money_font if money else FONT_VALUE,
                            anchor="w")
             pct.grid(row=i, column=1, sticky="w", padx=(4, 0))
             rst = tk.Label(f, text="", fg=FG_DIM, bg=BG_CARD,
