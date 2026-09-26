@@ -640,18 +640,18 @@ class UITests(unittest.TestCase):
         self.assertEqual(a.data["cw_pct"], 75)
     def test_tray_renders_only_when_value_or_staleness_changes(self):
         a = self.app
-        a.tray = Mock(title="", visible=True)
-        a._tray_image = Mock(return_value="image")
+        a.tray_controller.icon = Mock(title="", visible=True)
+        a.tray_controller.image = Mock(return_value="image")
         a.data["cw_pct"] = 75
         a._verified.add("codex")
         a._success_at["codex"] = time.time()
         for _ in range(100):
             a._update_tray()
-        self.assertEqual(a._tray_image.call_count, 1)
+        self.assertEqual(a.tray_controller.image.call_count, 1)
         a.errors["codex"] = "Timeout"
         a._update_tray()
-        self.assertEqual(a._tray_image.call_count, 2)
-        self.assertIn("旧数据", a.tray.title)
+        self.assertEqual(a.tray_controller.image.call_count, 2)
+        self.assertIn("旧数据", a.tray_controller.icon.title)
     def test_close_without_tray_does_not_hide_window(self):
         a = self.app
         a.root.deiconify()
@@ -682,11 +682,63 @@ class UITests(unittest.TestCase):
         a._on_result("codex", {"ok": True, "data": {"cw_pct": 75, "c_window_expired": False}}, {})
         self.assertFalse(a._is_stale("codex"))
     def test_glm_menu_exposes_secure_key_commands(self):
-        menu = self.app._provider_menus["glm"]
+        menu = self.app.settings._provider_menus["glm"]
         labels = [menu.entrycget(i, "label") for i in range(menu.index("end") + 1)
                   if menu.type(i) != "separator"]
         self.assertIn("安全保存 API Key…", labels)
         self.assertIn("清除已保存的 Key", labels)
+
+    def test_settings_component_updates_plan_and_renewal(self):
+        settings = self.app.settings
+        settings._set_plan("kimi", "Moderato")
+        self.assertEqual(monitor.CFG["kimi_plan_name"], "Moderato")
+        self.assertEqual(self.app.section_titles["Kimi"].cget("text"), "Kimi · Moderato")
+        settings._set_plan("codex", "Plus")
+        self.assertTrue(self.app.show_codex_5h.get())
+        settings._set_plan("codex", "Pro 20x")
+        self.assertFalse(self.app.show_codex_5h.get())
+        with patch.object(settings.dialogs, "_ask", return_value="Custom Plan"):
+            settings._ask_custom_plan("kimi")
+        self.assertEqual(monitor.CFG["kimi_plan_name"], "Custom Plan")
+        with patch.object(settings.dialogs, "_renew_picker", return_value="10-03"):
+            settings._ask_renew("kimi")
+        self.assertEqual(monitor.CFG["renew_kimi"], "10-03")
+        self.assertIn("10-03", self.app.section_renews["Kimi"].cget("text"))
+
+    def test_settings_key_failure_never_claims_success(self):
+        settings = self.app.settings
+        save, clear = Mock(return_value=False), Mock(return_value=False)
+        with patch.dict(settings.KEY_TOOLS, {"glm": ("GLM API Key", save, clear)}), \
+                patch.object(settings.dialogs, "_ask_secret", return_value="test-only"), \
+                patch.object(settings.dialogs, "_notice") as notice:
+            settings._save_key_secure("glm")
+            save.assert_called_once_with("test-only")
+            self.assertEqual(notice.call_args.args[0], "保存未完成")
+            settings._clear_key("glm")
+            self.assertEqual(notice.call_args.args[0], "清除未完成")
+
+    def test_log_uses_builtin_app_version(self):
+        self.app._write_debug()
+        data = json.loads(Path(monitor.DEBUG_FILE).read_text(encoding="utf-8"))
+        self.assertEqual(data["app_version"], monitor.APP_VERSION)
+        self.assertEqual(data["user_agent"], monitor.USER_AGENT)
+        menu = self.app.menu
+        labels = [menu.entrycget(i, "label") for i in range(menu.index("end") + 1)
+                  if menu.type(i) != "separator"]
+        self.assertIn("版本 " + monitor.APP_VERSION, labels)
+
+    def test_token_unit_is_visible_and_fits(self):
+        a = self.app
+        a._on_result("deepseek", {"ok": True, "data": {
+            "ds_balance": 107.27, "ds_spend": 11.46, "ds_currency": "CNY"}}, {})
+        a._on_result("tokens", {"ok": True, "data": {
+            "ds_tokens_day": monitor.date.today().isoformat(), "ds_tokens_total": 439000000}}, {})
+        a._fit()
+        label = a.rows["ds_spend"][1]
+        self.assertEqual(label.cget("text"), "439M tok")
+        self.assertGreaterEqual(label.winfo_width(), label.winfo_reqwidth())
+        self.assertLessEqual(label.winfo_rootx() + label.winfo_width(),
+                             a.root.winfo_rootx() + a.root.winfo_width())
 
     def test_reset_boundary_expires_only_its_row_and_selected_tray(self):
         a = self.app
@@ -698,10 +750,10 @@ class UITests(unittest.TestCase):
             a._render()
             self.assertEqual(a.rows["c5"][1].cget("text"), "窗口已过期")
             self.assertNotEqual(a.rows["cw"][1].cget("text"), "窗口已过期")
-            a.tray = Mock(title="", visible=True)
-            a._tray_image = Mock(return_value="image")
+            a.tray_controller.icon = Mock(title="", visible=True)
+            a.tray_controller.image = Mock(return_value="image")
             a._update_tray()
-            self.assertFalse(a._tray_image.call_args.args[1])
+            self.assertFalse(a.tray_controller.image.call_args.args[1])
 
     def test_yesterday_tokens_and_spend_are_never_shown_as_today(self):
         a = self.app
@@ -718,7 +770,7 @@ class UITests(unittest.TestCase):
         a._on_result("deepseek", {"ok": True, "data": {
             "ds_balance": 100, "ds_spend": 0,
             "ds_spend_day": monitor.date.today().isoformat()}}, {})
-        self.assertEqual(a.rows["ds_spend"][1].cget("text"), "0")
+        self.assertEqual(a.rows["ds_spend"][1].cget("text"), "0 tok")
 
     def test_optional_token_failure_does_not_poison_balance(self):
         a = self.app
@@ -754,13 +806,13 @@ class UITests(unittest.TestCase):
         a = self.app
         seen = {}
         def fill():
-            win, value, ok = a._secret_prompt
+            win, value, ok = a.settings.dialogs._secret_prompt
             seen["show"] = win.children["!entry"].cget("show")
             value.set("sk-typed")
             ok()
         a.root.after(150, fill)
-        a.root.after(3000, lambda: a._secret_prompt and a._secret_prompt[0].destroy())
-        self.assertEqual(a._ask_secret("GLM API Key", "key:"), "sk-typed")
+        a.root.after(3000, lambda: a.settings.dialogs._secret_prompt and a.settings.dialogs._secret_prompt[0].destroy())
+        self.assertEqual(a.settings.dialogs._ask_secret("GLM API Key", "key:"), "sk-typed")
         self.assertEqual(seen["show"], "•")
     def test_deepseek_card_shows_money_and_warns_when_low(self):
         a = self.app
@@ -805,6 +857,8 @@ class UITests(unittest.TestCase):
         self.assertEqual(monitor._fmt_tokens(1181266882), "1.2B")
         self.assertIsNone(monitor._fmt_tokens(None))
         self.assertIsNone(monitor._fmt_tokens("x"))
+        for invalid in (float("inf"), float("-inf"), float("nan")):
+            self.assertIsNone(monitor._fmt_tokens(invalid))
 
     def test_deepseek_spend_row_shows_todays_tokens(self):
         a = self.app
@@ -816,10 +870,10 @@ class UITests(unittest.TestCase):
             "ds_tokens_day": monitor.date.today().isoformat()}}, {})
         self.assertEqual(a.rows["ds_spend"][0].cget("text"),
                          "¥" + monitor.MONEY_PAD * 2 + "6.64")
-        self.assertEqual(a.rows["ds_spend"][1].cget("text"), "315M")
+        self.assertEqual(a.rows["ds_spend"][1].cget("text"), "315M tok")
         with patch.dict(monitor.CFG, {"deepseek_token_metric": "fresh"}):
             a._render()
-            self.assertEqual(a.rows["ds_spend"][1].cget("text"), "2.4M")
+            self.assertEqual(a.rows["ds_spend"][1].cget("text"), "2.4M tok")
         with patch.dict(monitor.CFG, {"deepseek_token_metric": "off"}):
             a._render()
             self.assertEqual(a.rows["ds_spend"][1].cget("text"), "")
@@ -827,7 +881,7 @@ class UITests(unittest.TestCase):
         with patch.dict(monitor.CFG, {"deepseek_token_metric": "total"}):
             a._on_result("deepseek", {"ok": True, "data": {
                 "ds_balance": 119.9, "ds_spend": 6.64, "ds_currency": "CNY"}}, {})
-            self.assertEqual(a.rows["ds_spend"][1].cget("text"), "315M")
+            self.assertEqual(a.rows["ds_spend"][1].cget("text"), "315M tok")
 
     @unittest.skipUnless(HAVE_ZSTD, "needs zstd support")
     def test_local_harness_tokens_sums_only_today(self):

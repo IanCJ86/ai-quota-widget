@@ -7,7 +7,6 @@ import json
 import math
 import os
 import sys
-import calendar
 import queue
 import re
 import subprocess
@@ -19,6 +18,19 @@ import urllib.error
 from datetime import datetime, date, timezone, timedelta
 from html import unescape
 from html.parser import HTMLParser
+from app_version import APP_VERSION, USER_AGENT
+from widget_style import (
+    TRANSP_KEY, THEMES, BG, BG_CARD, FG_DIM, FG_TEXT,
+    KIMI_BLUE, CODEX_GREEN, KIMI_BLUE_SOFT, CODEX_GREEN_SOFT,
+    GLM_PURPLE, GLM_PURPLE_SOFT, DEEPSEEK_BLUE, DEEPSEEK_SOFT,
+    FONT_TITLE, FONT_TEXT, FONT_VALUE, FONT_STATUS, MONEY_PAD,
+    TITLE_RESERVE_MAX, TITLE_GAP, TITLE_SLACK,
+)
+
+if sys.argv[1:] == ["--version"]:
+    print(APP_VERSION)
+    raise SystemExit(0)
+
 from monitor_runtime import (Scheduler, SingleInstance, atomic_json, dpapi_protect,
                              dpapi_unprotect, validate_result)
 
@@ -26,12 +38,9 @@ QUERY_MODE = len(sys.argv) == 3 and sys.argv[1] == "--query"
 if not QUERY_MODE:
     import tkinter as tk
     from tkinter import font as tkfont
-    from tkinter import messagebox, simpledialog, ttk
-    try:
-        import pystray
-        from PIL import Image, ImageDraw, ImageFont
-    except ImportError:
-        pystray = None  # Main window still works if optional tray packages are absent.
+    from widget_settings import SettingsController
+    from widget_windows import WindowEffects
+    from widget_tray import TrayIcon
 
 # crisp rendering on high-DPI displays (declare per-monitor DPI awareness)
 try:
@@ -147,32 +156,6 @@ _CODEX_PROCESS_LOCK = threading.Lock()
 _CODEX_ACTIVE_PROCESS = None
 
 # colors
-TRANSP_KEY = "#010102"  # glass colorkey: root pixels of this color go transparent
-THEMES = {
-    "dark": dict(BG="#1e1e2e", BG_CARD="#262638", BORDER="#3a3a4e",
-                 FG_DIM="#7a7a90", FG_TEXT="#e8e8f4",
-                 KIMI_SOFT="#8db4e8", CODEX_SOFT="#83d4ab"),
-    "light": dict(BG="#f2f3f7", BG_CARD="#ffffff", BORDER="#d9dae4",
-                  FG_DIM="#8a8a9a", FG_TEXT="#23233a",
-                  KIMI_SOFT="#4a7fc9", CODEX_SOFT="#3a9e6e"),
-    # glass: root/spacer/bar pixels use TRANSP_KEY and become see-through,
-    # acrylic blur is applied behind them; cards stay solid for readability
-    "glass": dict(BG=TRANSP_KEY, BG_CARD="#2b2b3d", BORDER="#55556e",
-                  FG_DIM="#a0a0b8", FG_TEXT="#f2f2f8",
-                  KIMI_SOFT="#8db4e8", CODEX_SOFT="#83d4ab"),
-}
-BG = "#1e1e2e"
-BG_CARD = "#262638"
-FG_DIM = "#7a7a90"
-FG_TEXT = "#e8e8f4"
-KIMI_BLUE = "#5b9dff"
-CODEX_GREEN = "#4ecf8a"
-KIMI_BLUE_SOFT = "#8db4e8"
-CODEX_GREEN_SOFT = "#83d4ab"
-GLM_PURPLE = "#b48cff"
-GLM_PURPLE_SOFT = "#c9b3f2"
-DEEPSEEK_BLUE = "#4d6bfe"
-DEEPSEEK_SOFT = "#8fa2ff"
 # DeepSeek doubles its prices during weekday peak windows (Beijing time); the
 # balance row says which regime the last refresh fell in.
 DEEPSEEK_PEAK = "梁文峰 时段"
@@ -180,36 +163,6 @@ DEEPSEEK_OFFPEAK = "梁文谷 时段"
 BEIJING = timezone(timedelta(hours=8))
 # Local DeepSeek Harness transcripts, used for an optional "tokens today" figure.
 DSH_SESSIONS = os.path.expanduser(r"~\.dsh\sessions")
-# One type scale for the whole widget: card titles 9, every body row (labels,
-# values, notes) and the refresh line 8.  Same-role text uses the same size;
-# values are told apart by weight only.
-FONT_FAMILY = "Microsoft YaHei UI"
-FONT_TITLE = (FONT_FAMILY, 9, "bold")
-FONT_TEXT = (FONT_FAMILY, 8)
-FONT_VALUE = (FONT_FAMILY, 8, "bold")
-FONT_STATUS = (FONT_FAMILY, 8)
-FONT_HINT = (FONT_FAMILY, 8)
-# Money is padded to a shared integer width so its currency symbol and decimal
-# point line up.  An ordinary space cannot do that (it is 3px where a digit is
-# 7px) and a monospaced font makes the amounts look spaced out next to the
-# percentages; U+2002 happens to be exactly one digit wide in this font.
-MONEY_PAD = "\u2002"
-# A card title shares its row with the renewal date. They are placed left and
-# right so they can never overlap; this cap only stops an absurd plan name from
-# taking the whole row.
-TITLE_MAX_PX = 220
-# How much width the widest title may add to the value column so that it can sit
-# left of the renewal date, and the breathing room kept between the two.
-TITLE_RESERVE_MAX = 40
-TITLE_GAP = 8        # minimum space between a title and the renewal date
-TITLE_SLACK = 6      # font metrics can differ a little between processes
-PLAN_PRESETS = {
-    "kimi": ["Andante", "Moderato", "Allegretto", "Allegro"],
-    "codex": ["Go", "Plus", "Pro 5x", "Pro 20x"],
-    "glm": ["Lite", "Pro", "Max"],
-}
-PLAN_CFG_KEY = {"kimi": "kimi_plan_name", "codex": "codex_plan_name",
-                "glm": "glm_plan_name"}
 # The public reset radar is a third-party signal. It does not expose or replace
 # the account-specific Codex quota below.
 CODEX_RADAR_URL = "https://codexreset.org/"
@@ -295,7 +248,7 @@ def fetch_kimi():
         for path in ("/api/oauth/token", "/v1/oauth/token"):
             try:
                 req = urllib.request.Request(KIMI_OAUTH_HOST + path, data=body,
-                                             headers={"Accept": "application/json"})
+                                             headers={"Accept": "application/json", "User-Agent": USER_AGENT})
                 with urllib.request.urlopen(req, timeout=15) as response:
                     r = json.load(response)
                 if r.get("access_token"):
@@ -309,7 +262,8 @@ def fetch_kimi():
             except Exception:
                 continue
     req = urllib.request.Request(KIMI_USAGE_URL,
-                                 headers={"Authorization": "Bearer " + cred["access_token"]})
+                                 headers={"Authorization": "Bearer " + cred["access_token"],
+                                          "User-Agent": USER_AGENT})
     with urllib.request.urlopen(req, timeout=15) as response:
         d = json.load(response)
 
@@ -421,7 +375,7 @@ def fetch_codex():
                     return m.get("result")
             raise TimeoutError("codex rpc timeout")
 
-        send(0, "initialize", {"clientInfo": {"name": "quota-monitor", "version": "1.0"},
+        send(0, "initialize", {"clientInfo": {"name": "quota-monitor", "version": APP_VERSION},
                                "capabilities": {"experimentalApi": True,
                                                 "optOutNotificationMethods": []}})
         read(0)
@@ -513,7 +467,7 @@ def fetch_codex():
 def _fetch_public_text(url, accept):
     req = urllib.request.Request(
         url,
-        headers={"User-Agent": "ai-quota-widget/1.0", "Accept": accept},
+        headers={"User-Agent": USER_AGENT, "Accept": accept},
     )
     with urllib.request.urlopen(req, timeout=8) as response:
         raw = response.read(2 * 1024 * 1024 + 1)
@@ -688,6 +642,7 @@ def fetch_glm():
         return {}
     url = GLM_QUOTA_URLS.get(CFG.get("glm_region"), GLM_QUOTA_URLS["cn"])
     req = urllib.request.Request(url, headers={
+        "User-Agent": USER_AGENT,
         "Authorization": key,
         "Accept-Language": "zh-CN,zh",
         "Content-Type": "application/json",
@@ -834,7 +789,7 @@ def _fmt_tokens(value):
         number = float(value)
     except (TypeError, ValueError):
         return None
-    if number != number or number < 0:          # NaN or nonsense
+    if not math.isfinite(number) or number < 0:          # NaN or nonsense
         return None
     for limit, suffix in ((1e9, "B"), (1e6, "M"), (1e3, "K")):
         if number >= limit:
@@ -852,6 +807,7 @@ def fetch_deepseek():
     if not key:
         return {}
     req = urllib.request.Request(DEEPSEEK_BALANCE_URL, headers={
+        "User-Agent": USER_AGENT,
         "Authorization": "Bearer " + key,
         "Accept": "application/json",
     })
@@ -907,6 +863,7 @@ class App:
         # setting it up before withdrawing produced a brief flash in the top-left
         # corner.  Withdrawn first, nothing is ever painted until deiconify().
         self.root.withdraw()
+        self.effects = WindowEffects(self.root)
         try:
             dpi = ctypes.windll.user32.GetDpiForSystem()
             self.root.tk.call("tk", "scaling", dpi / 72.0)
@@ -947,14 +904,11 @@ class App:
         self._diagnostics = {}
         self._ui_error = None
         self._last_render_minute = None
-        self._tray_value = object()
-        self._tray_thread = None
-        self._tray_failed = False
+        self.tray_controller = TrayIcon(self._commands)
         self.scheduler = Scheduler(os.path.abspath(__file__), self._on_result, REFRESH_SECONDS)
         self._load_cache()
         self._drag = None
         self.theme = "dark"
-        self.tray = None
         self._cards = []
         self._name_labels = []
 
@@ -1015,6 +969,10 @@ class App:
         self._bind(self.root)
 
         self.menu = tk.Menu(self.root, tearoff=0)
+        self.settings = SettingsController(self, CFG, _save_config, {
+            "glm": ("GLM API Key", save_glm_key, clear_glm_key),
+            "deepseek": ("DeepSeek API Key", save_deepseek_key, clear_deepseek_key),
+        })
         self._st = CFG
         self.menu.add_checkbutton(label="置顶", variable=self.topmost,
                                 command=self._toggle_top)
@@ -1053,13 +1011,13 @@ class App:
         self.menu.add_cascade(label="托盘显示", menu=self.tray_menu)
         self.menu.add_separator()
         self.menu.add_cascade(label="Kimi Coding Plan 设置",
-                              menu=self._build_provider_menu("kimi"))
+                              menu=self.settings._build_provider_menu("kimi"))
         self.menu.add_cascade(label="GLM Coding Plan 设置",
-                              menu=self._build_provider_menu("glm"))
+                              menu=self.settings._build_provider_menu("glm"))
         self.menu.add_cascade(label="Codex 设置",
-                              menu=self._build_provider_menu("codex"))
+                              menu=self.settings._build_provider_menu("codex"))
         self.menu.add_cascade(label="DeepSeek 设置",
-                              menu=self._build_deepseek_menu())
+                              menu=self.settings._build_deepseek_menu())
         self.menu.add_separator()
         self._theme_var = tk.StringVar(value=self.theme)
         tm = tk.Menu(self.menu, tearoff=0)
@@ -1068,6 +1026,7 @@ class App:
                                command=lambda n=name: self._set_theme(n))
         self.menu.add_cascade(label="主题", menu=tm)
         self.menu.add_separator()
+        self.menu.add_command(label=f"版本 {APP_VERSION}", state="disabled")
         self.menu.add_command(label="退出", command=self._quit)
 
         self._apply_visibility(persist=False)
@@ -1174,53 +1133,10 @@ class App:
             self._geom = target
 
     def _redraw(self):
-        """Invalidate the whole window (RDW_INVALIDATE|UPDATENOW|ALLCHILDREN)."""
-        try:
-            from ctypes import wintypes
-            hwnd = int(self.root.wm_frame(), 16)
-            redraw = ctypes.windll.user32.RedrawWindow
-            redraw.argtypes = [wintypes.HWND, ctypes.c_void_p, wintypes.HRGN, wintypes.UINT]
-            redraw.restype = wintypes.BOOL
-            redraw(hwnd, None, None, 0x0001 | 0x0100 | 0x0080)
-        except Exception:
-            pass
+        return self.effects._redraw()
 
     def _round_corners(self, radius=8):
-        """Rounded corners: prefer Win11 DWM native rounding (antialiased)."""
-        try:
-            from ctypes import wintypes
-            hwnd = int(self.root.wm_frame(), 16)
-            # DWMWA_WINDOW_CORNER_PREFERENCE = 33, DWMWCP_ROUND = 2
-            pref = ctypes.c_int(2)
-            dwm = ctypes.windll.dwmapi.DwmSetWindowAttribute
-            dwm.argtypes = [wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
-            dwm.restype = ctypes.c_long
-            ok = dwm(
-                hwnd, 33, ctypes.byref(pref), ctypes.sizeof(pref))
-            if ok == 0:
-                return  # DWM handled rounding
-        except Exception:
-            pass
-        # fallback for older Windows: region-based rounding (aliased)
-        try:
-            from ctypes import wintypes
-            hwnd = int(self.root.wm_frame(), 16)
-            w = self.root.winfo_width()
-            h = self.root.winfo_height()
-            create = ctypes.windll.gdi32.CreateRoundRectRgn
-            create.argtypes = [ctypes.c_int] * 6
-            create.restype = wintypes.HRGN
-            assign = ctypes.windll.user32.SetWindowRgn
-            assign.argtypes = [wintypes.HWND, wintypes.HRGN, wintypes.BOOL]
-            assign.restype = ctypes.c_int
-            delete = ctypes.windll.gdi32.DeleteObject
-            delete.argtypes = [wintypes.HANDLE]
-            delete.restype = wintypes.BOOL
-            rgn = create(0, 0, w + 1, h + 1, radius, radius)
-            if rgn and not assign(hwnd, rgn, True):
-                delete(rgn)  # ownership transfers only on successful SetWindowRgn
-        except Exception:
-            pass
+        return self.effects._round_corners(radius)
 
     def _quit(self):
         if self._closed:
@@ -1239,71 +1155,20 @@ class App:
         except Exception:
             pass
         try:
-            if self.tray is not None:
-                self.tray.stop()
+            self.tray_controller.stop()
         except Exception:
             pass
         self.root.destroy()
 
     def _minimize_to_tray(self):
         """Close button hides the main window; tray menu remains available."""
-        if self.tray is not None and self.tray.visible and self._tray_thread.is_alive():
+        if self.tray_controller.available:
             self.root.withdraw()
         else:
             self.status.config(text="托盘不可用，窗口已保留")
 
-    def _tray_image(self, value, stale=False):
-        """Create a transparent tray icon showing the selected percentage."""
-        image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(image)
-        pct = int(value) if value is not None else None
-        color = (131, 212, 171, 255) if pct is None or pct > 30 else (
-            (208, 128, 32, 255) if pct > 15 else (208, 64, 64, 255))
-        if stale:
-            color = (155, 155, 165, 255)
-        text = "--" if pct is None else str(pct)
-        try:
-            size = 46 if pct is not None and len(text) <= 2 else 34
-            font = ImageFont.truetype(r"C:\Windows\Fonts\calibrib.ttf", size)
-        except Exception:
-            font = ImageFont.load_default()
-        box = draw.textbbox((0, 0), text, font=font)
-        x = (64 - (box[2] - box[0])) / 2
-        y = (64 - (box[3] - box[1])) / 2 - 9
-        draw.text((x, y), text, fill=color, font=font)
-        return image
-
     def _init_tray(self):
-        if pystray is None:
-            self._tray_failed = True
-            return
-        menu = pystray.Menu(
-            pystray.MenuItem("显示额度监控", self._tray_show, default=True),
-            pystray.MenuItem("立即刷新", self._tray_refresh),
-            pystray.MenuItem("退出", self._tray_quit),
-        )
-        try:
-            self.tray = pystray.Icon("quota-monitor", self._tray_image(None),
-                                     "Codex 每周 --", menu)
-            def run_tray():
-                try:
-                    self.tray.run()
-                except Exception:
-                    self._commands.put("tray_failed")
-            self._tray_thread = threading.Thread(target=run_tray, daemon=True)
-            self._tray_thread.start()
-        except Exception:
-            self.tray = None
-            self._tray_failed = True
-
-    def _tray_show(self, icon, item):
-        self._commands.put("show")
-
-    def _tray_refresh(self, icon, item):
-        self._commands.put("refresh")
-
-    def _tray_quit(self, icon, item):
-        self._commands.put("quit")
+        self.tray_controller.start()
 
     def _visible_tray_choices(self):
         """Tray metrics offered for the cards that are currently switched on."""
@@ -1348,22 +1213,22 @@ class App:
         self._update_tray()
 
     def _update_tray(self):
-        if self.tray is None or self._closed:
+        if self.tray_controller.icon is None or self._closed:
             return
         metric = CFG.get("tray_metric", "cw_pct")
         value = self.data.get(metric)
         source = "codex" if metric.startswith("c") else "kimi" if metric.startswith("k") else "glm"
         stale = self._transport_stale(source) or self._window_expired(metric.split("_")[0])
         key = (metric, value, stale)
-        if key != self._tray_value:
-            self.tray.icon = self._tray_image(value, stale)
-            self._tray_value = key
+        if key != self.tray_controller.last_value:
+            self.tray_controller.icon.icon = self.tray_controller.image(value, stale)
+            self.tray_controller.last_value = key
         shown = "--" if value is None else f"{int(value)}%"
         stamp = self._success_at.get(source)
         when = datetime.fromtimestamp(stamp).strftime("%m-%d %H:%M") if stamp else "尚无成功数据"
         title = f"{source.title()} {'每周' if 'w_' in metric else '5小时'} {shown} | {'旧数据' if stale else '更新'} {when}"
-        if self.tray.title != title:
-            self.tray.title = title
+        if self.tray_controller.icon.title != title:
+            self.tray_controller.icon.title = title
 
     def _alpha_step(self, delta):
         self.alpha_val = max(40, min(100, self.alpha_val + delta))
@@ -1379,7 +1244,7 @@ class App:
 
     def _codex_5h_default_visible(self):
         """Plan default: Pro has no 5-hour window; other plans do."""
-        plan = (self._current_plan("codex") or "").strip().lower()
+        plan = (self.settings._current_plan("codex") or "").strip().lower()
         return not plan.startswith("pro")
 
     def _codex_5h_visible(self):
@@ -1431,31 +1296,7 @@ class App:
         self._fit()
 
     def _apply_acrylic(self, on):
-        """SetWindowCompositionAttribute: ACCENT_ENABLE_ACRYLICBLURBEHIND (4)
-        when on, ACCENT_DISABLED (0) when off. Returns True on success."""
-        try:
-            hwnd = int(self.root.wm_frame(), 16)
-            # ABGR tint for acrylic: alpha 0x99, color #1e1e2e (dark slate)
-            tint = (0x99 << 24) | (0x2E << 16) | (0x1E << 8) | 0x1E
-
-            class ACCENTPOLICY(ctypes.Structure):
-                _fields_ = [("AccentState", ctypes.c_int),
-                            ("AccentFlags", ctypes.c_int),
-                            ("GradientColor", ctypes.c_uint),
-                            ("AnimationId", ctypes.c_int)]
-
-            class WCA(ctypes.Structure):
-                _fields_ = [("Attribute", ctypes.c_int),
-                            ("Data", ctypes.c_void_p),
-                            ("SizeOfData", ctypes.c_size_t)]
-
-            accent = ACCENTPOLICY(4 if on else 0, 0, tint if on else 0, 0)
-            data = WCA(19, ctypes.cast(ctypes.byref(accent), ctypes.c_void_p),
-                       ctypes.sizeof(accent))
-            return bool(ctypes.windll.user32.SetWindowCompositionAttribute(
-                hwnd, ctypes.byref(data)))
-        except Exception:
-            return False
+        return self.effects._apply_acrylic(on)
 
     def _set_theme(self, name):
         if name not in THEMES:
@@ -1614,279 +1455,6 @@ class App:
     def _toggle_top(self):
         self.root.attributes("-topmost", self.topmost.get())
 
-    # ---------- provider settings submenus (Kimi / Codex / GLM) ----------
-
-    def _current_plan(self, kind):
-        if kind == "kimi":
-            return CFG.get("kimi_plan_name", "")
-        if kind == "glm":
-            return CFG.get("glm_plan_name", "")
-        return (CFG.get("codex_plan_name")
-                or (self.data.get("c_plan") or "Pro")
-                + CFG.get("codex_plan_suffix", ""))
-
-    def _build_provider_menu(self, kind):
-        presets = PLAN_PRESETS[kind]
-        m = tk.Menu(self.menu, tearoff=0)
-        self._provider_menus = getattr(self, "_provider_menus", {})
-        self._provider_menus[kind] = m
-        cur = self._current_plan(kind)
-        var = tk.StringVar(value=cur)
-        setattr(self, f"_plan_var_{kind}", var)
-        for name in presets:
-            m.add_radiobutton(label=name, variable=var, value=name,
-                              command=lambda n=name: self._set_plan(kind, n))
-        # custom input just sets the display name; nothing is remembered in the menu
-        m.add_command(label="自定义…",
-                      command=lambda: self._ask_custom_plan(kind))
-        sub = tk.Menu(m, tearoff=0)
-        sub.add_command(label="设为下个月今天",
-                        command=lambda: self._set_renew(kind, "next_month"))
-        sub.add_command(label="设为本月最后一天",
-                        command=lambda: self._set_renew(kind, "last_day"))
-        sub.add_command(label="选择日期…",
-                        command=lambda: self._ask_renew(kind))
-        m.add_cascade(label="续订日期", menu=sub)
-        if kind == "codex":
-            m.add_separator()
-            self.show_codex_credits = tk.BooleanVar(
-                value=bool(CFG.get("show_codex_credits", True)))
-            m.add_checkbutton(label="显示重置券", variable=self.show_codex_credits,
-                              command=self._toggle_codex_credits)
-        if kind == "glm":
-            m.add_separator()
-            # config.json is plaintext; store new keys encrypted instead.
-            m.add_command(label="安全保存 API Key…",
-                          command=lambda: self._save_key_secure("glm"))
-            m.add_command(label="清除已保存的 Key",
-                          command=lambda: self._clear_key("glm"))
-        return m
-
-    def _toggle_codex_credits(self):
-        CFG["show_codex_credits"] = self.show_codex_credits.get()
-        _save_config(CFG)
-        self._render()
-        self._fit()
-
-    def _build_deepseek_menu(self):
-        """DeepSeek has no plans or renewal dates: only the API key."""
-        m = tk.Menu(self.menu, tearoff=0)
-        m.add_command(label="安全保存 API Key…",
-                      command=lambda: self._save_key_secure("deepseek"))
-        m.add_command(label="清除已保存的 Key",
-                      command=lambda: self._clear_key("deepseek"))
-        return m
-
-    def _set_plan(self, kind, name):
-        getattr(self, f"_plan_var_{kind}").set(name)
-        CFG[PLAN_CFG_KEY[kind]] = name
-        _save_config(CFG)
-        if kind == "codex" and CFG.get("show_codex_5h") is None:
-            self._sync_codex_5h_menu()
-            self._apply_visibility(persist=False)
-        self._render()
-
-    def _ask_custom_plan(self, kind):
-        s = self._ask("自定义套餐", "套餐显示名：",
-                      initial=self._current_plan(kind))
-        if not (s and s.strip()):
-            return  # cancel or empty: no change at all
-        name = s.strip()
-        getattr(self, f"_plan_var_{kind}").set(name)
-        CFG[PLAN_CFG_KEY[kind]] = name
-        _save_config(CFG)
-        self._render()
-
-    def _set_renew(self, kind, mode):
-        today = date.today()
-        if mode == "next_month":
-            y, m = (today.year + 1, 1) if today.month == 12 \
-                else (today.year, today.month + 1)
-            d = min(today.day, calendar.monthrange(y, m)[1])
-        else:  # last_day
-            y, m = today.year, today.month
-            d = calendar.monthrange(y, m)[1]
-        CFG[f"renew_{kind}"] = f"{m:02d}-{d:02d}"
-        _save_config(CFG)
-        self._render()
-
-    def _ask_renew(self, kind):
-        v = self._renew_picker(kind)
-        if v:
-            CFG[f"renew_{kind}"] = v
-            _save_config(CFG)
-            self._render()
-
-    def _renew_picker(self, kind):
-        """Modal month/day picker (no keyboard input, no year involved).
-
-        Returns "MM-DD" or None on cancel. Day overflow (e.g. Feb 31) is
-        clamped to the month's last day with a notice, instead of rejecting.
-        """
-        cur = CFG.get(f"renew_{kind}", "")
-        try:
-            cm, cd = int(cur[:2]), int(cur[3:])
-        except Exception:
-            t = date.today()
-            cm, cd = t.month, t.day
-
-        top = self.topmost.get()
-        self.root.attributes("-topmost", True)
-        self.root.lift()
-        win = tk.Toplevel(self.root)
-        win.title("续订日期")
-        win.attributes("-topmost", True)
-        win.transient(self.root)
-        win.resizable(False, False)
-        win.configure(bg=BG)
-        win.geometry(f"+{self.root.winfo_x() + 40}+{self.root.winfo_y() + 40}")
-
-        mv = tk.StringVar(value=str(cm))
-        dv = tk.StringVar(value=str(cd))
-        lbl = dict(bg=BG, fg=FG_TEXT, font=FONT_TEXT)
-        tk.Label(win, text="月", **lbl).grid(row=0, column=0, padx=(12, 4), pady=10)
-        mc = ttk.Combobox(win, textvariable=mv, state="readonly", width=3,
-                          values=[str(i) for i in range(1, 13)])
-        mc.grid(row=0, column=1, padx=(0, 8))
-        tk.Label(win, text="日", **lbl).grid(row=0, column=2, padx=(4, 4))
-        dc = ttk.Combobox(win, textvariable=dv, state="readonly", width=3,
-                          values=[str(i) for i in range(1, 32)])
-        dc.grid(row=0, column=3, padx=(0, 12))
-
-        result = {}
-
-        def ok():
-            m, d = int(mv.get()), int(dv.get())
-            # no year is involved; use a non-leap reference year so Feb caps at 28
-            last = calendar.monthrange(2023, m)[1]
-            if d > last:
-                messagebox.showinfo("已调整",
-                                    f"{m}月没有{d}日，已设为{m}月{last}日。",
-                                    parent=win)
-                d = last
-            result["v"] = f"{m:02d}-{d:02d}"
-            win.destroy()
-
-        tk.Button(win, text="确定", command=ok, width=6).grid(
-            row=1, column=1, columnspan=2, pady=(0, 10))
-        tk.Button(win, text="取消", command=win.destroy, width=6).grid(
-            row=1, column=3, pady=(0, 10))
-        # expose for smoke tests
-        self._picker = (win, mv, dv, ok)
-
-        # A borderless, topmost parent makes Tk lazy about focus, which left the
-        # dialog unclickable until something else was clicked; raise it, force
-        # focus and only then take the grab.
-        win.update_idletasks()
-        win.lift()
-        win.focus_force()
-        mc.focus_set()
-        win.grab_set()
-        self.root.wait_window(win)
-        self.root.attributes("-topmost", top)
-        return result.get("v")
-
-    def _notice(self, title, text):
-        """messagebox that stays in front of the borderless topmost window."""
-        top = self.topmost.get()
-        self.root.attributes("-topmost", True)
-        self.root.lift()
-        try:
-            messagebox.showinfo(title, text, parent=self.root)
-        finally:
-            self.root.attributes("-topmost", top)
-
-    # Provider key handling shared by the GLM and DeepSeek settings menus.
-    KEY_TOOLS = {
-        "glm": ("GLM API Key", save_glm_key, clear_glm_key),
-        "deepseek": ("DeepSeek API Key", save_deepseek_key, clear_deepseek_key),
-    }
-
-    def _save_key_secure(self, kind):
-        """Store a provider key with DPAPI and remove any plaintext copy."""
-        title, save, _ = self.KEY_TOOLS[kind]
-        key = self._ask_secret(title, title + "：")
-        if not key:
-            return
-        if save(key):
-            self._notice("已保存", "Key 已用当前 Windows 账户加密保存在本机，\n"
-                                   "config.json 里的明文已清除。")
-        else:
-            self._notice("保存未完成", "加密保存或旧明文清理未完成，请检查文件写入权限。\n"
-                                      "可能已生成加密副本；不能确认旧明文已清除。")
-        self._apply_visibility()
-
-    def _clear_key(self, kind):
-        _, _, clear = self.KEY_TOOLS[kind]
-        if clear():
-            self._notice("已清除", "本机保存的 Key 已删除。")
-        else:
-            self._notice("清除未完成", "部分本机文件未能清除，请检查文件写入权限。")
-        self._apply_visibility()
-
-    def _set_glm_key_secure(self):
-        self._save_key_secure("glm")
-
-    def _clear_glm_key(self):
-        self._clear_key("glm")
-
-    def _ask_secret(self, title, prompt):
-        """Masked single-line input (tkinter has no masked simpledialog)."""
-        top = self.topmost.get()
-        self.root.attributes("-topmost", True)
-        self.root.lift()
-        win = tk.Toplevel(self.root)
-        win.title(title)
-        win.attributes("-topmost", True)
-        win.transient(self.root)
-        win.resizable(False, False)
-        win.configure(bg=BG)
-        win.geometry(f"+{self.root.winfo_x() + 40}+{self.root.winfo_y() + 40}")
-        tk.Label(win, text=prompt, bg=BG, fg=FG_TEXT, anchor="w",
-                 font=FONT_TEXT).grid(
-            row=0, column=0, columnspan=2, sticky="w", padx=12, pady=(10, 2))
-        tk.Label(win, text="只保存在本机（Windows 加密），不会写入 config.json。",
-                 bg=BG, fg=FG_DIM, anchor="w",
-                 font=FONT_HINT).grid(
-            row=1, column=0, columnspan=2, sticky="w", padx=12, pady=(0, 6))
-        value = tk.StringVar()
-        entry = tk.Entry(win, textvariable=value, show="•", width=44)
-        entry.grid(row=2, column=0, columnspan=2, padx=12, pady=(0, 8))
-        entry.focus_set()
-        result = {}
-
-        def ok(event=None):
-            result["v"] = value.get().strip()
-            win.destroy()
-
-        tk.Button(win, text="保存", command=ok, width=6).grid(row=3, column=0, pady=(0, 10))
-        tk.Button(win, text="取消", command=win.destroy, width=6).grid(
-            row=3, column=1, pady=(0, 10))
-        win.bind("<Return>", ok)
-        # expose for smoke tests
-        self._secret_prompt = (win, value, ok)
-        # Same focus problem as the date picker: without an explicit lift and
-        # focus_force the entry is not clickable until the window is refocused.
-        win.update_idletasks()
-        win.lift()
-        win.focus_force()
-        entry.focus_set()
-        win.grab_set()
-        self.root.wait_window(win)
-        self.root.attributes("-topmost", top)
-        return result.get("v")
-
-    def _ask(self, title, prompt, initial=""):
-        """simpledialog that stays in front of our borderless topmost window."""
-        top = self.topmost.get()
-        self.root.attributes("-topmost", True)
-        self.root.lift()
-        try:
-            return simpledialog.askstring(title, prompt, initialvalue=initial,
-                                          parent=self.root)
-        finally:
-            self.root.attributes("-topmost", top)
-
     def refresh_async(self):
         if self._closed:
             return
@@ -2010,14 +1578,15 @@ class App:
     def _write_debug(self):
         try:
             atomic_json(DEBUG_FILE, {
+                "app_version": APP_VERSION, "user_agent": USER_AGENT,
                 "updated": datetime.now().isoformat(timespec="seconds"), "pid": os.getpid(),
                 "data": self.data, "errors": self.errors, "ui_error": self._ui_error,
                 "success_at": {name: datetime.fromtimestamp(ts).isoformat(timespec="seconds")
                                for name, ts in self._success_at.items()},
                 "queries": self._diagnostics, "status_text": self.status.cget("text"),
                 "active": [name for name, state in self.scheduler.states.items() if state["worker"]],
-                "tray": {"available": bool(self.tray and self.tray.visible),
-                         "title": self.tray.title if self.tray else None}})
+                "tray": {"available": bool(self.tray_controller.icon and self.tray_controller.icon.visible),
+                         "title": self.tray_controller.icon.title if self.tray_controller.icon else None}})
         except Exception:
             pass
 
@@ -2036,14 +1605,14 @@ class App:
                 elif command == "refresh":
                     self.refresh_async()
                 elif command == "tray_failed":
-                    self._tray_failed = True
+                    self.tray_controller.failed = True
                     self.root.deiconify()
             if self.instance and self.instance.requested():
                 self.root.deiconify()
                 self.root.lift()
                 self._redraw()
-            if self._tray_thread and not self._tray_thread.is_alive() and not self._tray_failed:
-                self._tray_failed = True
+            if self.tray_controller.thread and not self.tray_controller.thread.is_alive() and not self.tray_controller.failed:
+                self.tray_controller.failed = True
                 self.root.deiconify()
             self.scheduler.tick()
             minute = int(time.time() // 60)
@@ -2201,8 +1770,9 @@ class App:
         tokens = d.get("ds_tokens_" + ("fresh" if metric == "fresh" else "total"))
         if self._transport_stale("tokens"):
             tokens = None
+        token_text = _fmt_tokens(tokens) if metric != "off" else None
         self._set_amount("ds_spend", d.get("ds_spend"), d.get("ds_currency") or "",
-                         (_fmt_tokens(tokens) or "") if metric != "off" else "",
+                         (token_text + " tok") if token_text is not None else "",
                          warn=False, whole_width=whole_width)
         self._render_radar()
         enabled = [s for s in self._enabled_sources() if s != "tokens"]
@@ -2240,7 +1810,7 @@ class App:
                 # the window (it shrank again once the names cleared). The rows
                 # themselves are greyed and labelled, so a count is enough.
                 parts.append("待更新:%d 项" % len(stale))
-            if self._tray_failed:
+            if self.tray_controller.failed:
                 parts.append("托盘不可用")
         if not parts:
             parts.append("加载中…")

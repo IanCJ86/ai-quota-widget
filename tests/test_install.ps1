@@ -7,11 +7,19 @@ $resolvedRoot = (Resolve-Path -LiteralPath $testRoot).Path
 try {
     $dest = Join-Path $testRoot "app with spaces"
     & (Join-Path $repo "install.ps1") -Destination $dest -PythonPath $PythonPath -SkipDependencies -NoAutostartPrompt
-    foreach ($file in @("quota_monitor.py", "monitor_runtime.py", "harness_stats.py", "start.bat", "requirements.txt", "config.json")) {
+    $runtimeFiles = @(Get-Content -LiteralPath (Join-Path $repo "runtime-files.txt"))
+    foreach ($file in ($runtimeFiles + @("runtime-files.txt", "start.bat", "requirements.txt", "config.json"))) {
         if (-not (Test-Path -LiteralPath (Join-Path $dest $file))) { throw "Missing installed file: $file" }
     }
-    & $PythonPath -m py_compile (Join-Path $dest "quota_monitor.py") (Join-Path $dest "monitor_runtime.py") (Join-Path $dest "harness_stats.py")
+    $installedModules = @($runtimeFiles | ForEach-Object { Join-Path $dest $_ })
+    & $PythonPath -m py_compile @installedModules
     if ($LASTEXITCODE -ne 0) { throw "Installed source compilation failed" }
+    $expectedVersion = (& $PythonPath (Join-Path $repo "quota_monitor.py") --version).Trim()
+    if ($LASTEXITCODE -ne 0) { throw "Source version query failed" }
+    $installedVersion = (& $PythonPath (Join-Path $dest "quota_monitor.py") --version).Trim()
+    if ($LASTEXITCODE -ne 0 -or $installedVersion -ne $expectedVersion) { throw "Installed version mismatch" }
+    & $PythonPath -c "import sys; sys.path.insert(0, sys.argv[1]); import widget_dialogs, widget_settings, widget_style, widget_tray, widget_windows" $dest
+    if ($LASTEXITCODE -ne 0) { throw "Installed components cannot import" }
     $configPath = Join-Path $dest "config.json"
     $customConfig = '{"kimi_plan_name":"INSTALLER_TEST","glm_api_key":""}'
     [IO.File]::WriteAllText($configPath, $customConfig, [Text.Encoding]::UTF8)

@@ -1,20 +1,24 @@
 # AI Quota Widget（额度监控悬浮窗）
 
-一个 Windows 桌面悬浮小工具，定时显示 **Kimi Code**、**Codex**（可选 **GLM**）的用量额度：
+一个 Windows 桌面悬浮小工具，定时显示 **Kimi Code**、**Codex**、可选 **GLM** 的用量额度，以及 **DeepSeek** 余额和本机 token 统计：
 
 ![screenshot](screenshot.png)
 
-## v1.1.0：稳定性与托盘更新
+## 当前能力
 
 - 通知区域显示透明背景的大号额度数字；✕ 隐藏到托盘，点击图标或再次运行启动器可恢复，退出请用右键菜单。
 - 每个来源独立查询，最多两个查询进程同时运行；查询结束即释放。超时自动终止本工具启动的进程树，不影响其他 Codex 任务。
 - 瞬时错误每轮最多三次，间隔 2 秒、5 秒；仍失败则等待 5 分钟。认证等明确错误等待正常周期，不持续轰击接口。
 - 每个来源保留独立成功时间；失败或启动恢复的缓存显示为灰色旧数据，避免把历史额度误认为实时值。
-- 社区明确没有活跃投票时显示“暂无投票”，与网络失败区分。
+- 重置雷达目前仅使用 codexreset.org，第三方预测与个人实际额度独立。
 - 单实例、休眠返回补查、配置/缓存原子写入；托盘不可用时保留主窗口。
 - 数字/新旧状态不变时不重绘图标，空闲不常驻查询子进程。
 
-升级前先从右键菜单退出旧版，再运行 `install.ps1`，已有 `config.json` 会保留。新版必须同时包含 `quota_monitor.py`、`monitor_runtime.py`、`harness_stats.py`，依赖由安装器安装。
+升级前先从右键菜单退出旧版，再运行 `install.ps1`，已有 `config.json` 会保留。请使用完整源码/安装包，不要只替换 quota_monitor.py：安装器按 `runtime-files.txt` 复制所有运行模块，依赖由安装器安装。
+
+右键菜单可查看内建版本，也可运行 `python quota_monitor.py --version`。`debug.txt` 中的 `app_version` / `user_agent` 表示实际运行代码版本；文件里的其他 `version: 1` 是数据格式版本，不是程序版本。DeepSeek 的 `439M tok` 表示本机累计约4.39亿 token，不是内存大小。
+
+开发模块边界及后续主题方向见 [结构说明](docs/architecture.md)。main 中的待发布版本不等于已经发布的 Release。
 
 ## 30 秒安装（让 AI agent 帮你装）
 
