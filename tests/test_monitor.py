@@ -780,6 +780,37 @@ class UITests(unittest.TestCase):
             # a directory without logs is not an error, just no figure
             self.assertIsNone(monitor.local_harness_tokens(today, directory + "-missing"))
 
+    def test_hidden_cards_are_not_queried(self):
+        """A card that is switched off must cost nothing: no worker, no API call.
+        The tray follows the visible cards so it never points at a stale source."""
+        a = self.app
+        try:
+            for name in ("kimi", "codex", "glm", "deepseek"):
+                getattr(a, "show_" + name).set(False)
+            a._apply_visibility(persist=False)
+            self.assertEqual(a._enabled_sources(), [])
+
+            a.show_codex.set(True)
+            a._apply_visibility(persist=False)
+            self.assertEqual(a._enabled_sources(), ["codex", "main"])
+            self.assertEqual(monitor.CFG["tray_metric"], "cw_pct")
+
+            # Codex goes away: neither its worker nor its tray figure may remain
+            a.show_codex.set(False)
+            a.show_kimi.set(True)
+            a._apply_visibility(persist=False)
+            self.assertEqual(a._enabled_sources(), ["kimi"])
+            self.assertEqual(monitor.CFG["tray_metric"], "kw_pct")
+            self.assertEqual([metric for metric, _l in a._visible_tray_choices()],
+                             ["k5_pct", "kw_pct"])
+        finally:
+            # the UI tests share one App, so put the cards back afterwards
+            for name in ("kimi", "codex", "glm", "deepseek"):
+                getattr(a, "show_" + name).set(True)
+            monitor.CFG["tray_metric"] = "cw_pct"
+            a._tray_var.set("cw_pct")
+            a._apply_visibility(persist=False)
+
     def test_transparency_and_position_are_remembered(self):
         """The alpha buttons and a dragged window are written back to config."""
         a = self.app

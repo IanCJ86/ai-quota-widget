@@ -819,6 +819,13 @@ def deepseek_peak_label(when=None):
     return DEEPSEEK_PEAK if peak else DEEPSEEK_OFFPEAK
 
 
+TRAY_CHOICES = {
+    "kimi": [("k5_pct", "Kimi 每5小时"), ("kw_pct", "Kimi 每周")],
+    "codex": [("c5_pct", "Codex 每5小时"), ("cw_pct", "Codex 每周")],
+    "glm": [("g5_pct", "GLM 每5小时"), ("gw_pct", "GLM 每周")],
+}
+TRAY_DEFAULT = {"kimi": "kw_pct", "codex": "cw_pct", "glm": "gw_pct"}
+
 def clamp_position(x, y, w, h, screen_w, screen_h):
     """Where to put the window given a remembered position, or None.
 
@@ -909,6 +916,9 @@ class App:
         self.root.title("Quota")
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
+        # Build the whole window while it is hidden, then show it once at its
+        # fitted size: otherwise the user sees the placeholder box resize.
+        self.root.withdraw()
         # Transparency and position are remembered between runs.
         try:
             self.alpha_val = max(40, min(100, int(CFG.get("window_alpha", 94))))
@@ -1043,6 +1053,9 @@ class App:
             rw.add_radiobutton(label=label, variable=self._radar_var, value=val,
                                command=lambda v=val: self._set_radar_window(int(v)))
         self.menu.add_cascade(label="雷达窗口", menu=rw)
+        self._tray_var = tk.StringVar(value=CFG.get("tray_metric", "cw_pct"))
+        self.tray_menu = tk.Menu(self.menu, tearoff=0)
+        self.menu.add_cascade(label="托盘显示", menu=self.tray_menu)
         self.menu.add_separator()
         self.menu.add_cascade(label="Kimi Coding Plan 设置",
                               menu=self._build_provider_menu("kimi"))
@@ -1065,7 +1078,12 @@ class App:
         self._apply_visibility(persist=False)
         self._set_theme(CFG.get("theme", "dark"))
         self._init_tray()
+        self._fix_tray_metric()
         self.root.protocol("WM_DELETE_WINDOW", self._minimize_to_tray)
+        self._fit()                      # size it up before it becomes visible
+        self.root.deiconify()
+        if self.theme == "glass":        # acrylic needs the window mapped
+            self._acrylic_on = self._apply_acrylic(True)
         self.refresh_async()
         self.root.after(100, self._poll)
 
@@ -1251,8 +1269,50 @@ class App:
     def _tray_quit(self, icon, item):
         self._commands.put("quit")
 
+    def _visible_tray_choices(self):
+        """Tray metrics offered for the cards that are currently switched on."""
+        choices = []
+        for card in self.CARD_ORDER:
+            shown = getattr(self, "show_" + card, None)
+            if card in TRAY_CHOICES and shown is not None and shown.get():
+                choices.extend(TRAY_CHOICES[card])
+        return choices
+
+    def _rebuild_tray_menu(self):
+        self.tray_menu.delete(0, "end")
+        choices = self._visible_tray_choices()
+        if not choices:
+            self.tray_menu.add_command(label="（没有显示的卡片）", state="disabled")
+            return
+        for metric, label in choices:
+            self.tray_menu.add_radiobutton(label=label, value=metric,
+                                           variable=self._tray_var,
+                                           command=self._set_tray_metric)
+
+    def _set_tray_metric(self):
+        CFG["tray_metric"] = self._tray_var.get()
+        _save_config(CFG)
+        self._update_tray()
+
+    def _fix_tray_metric(self):
+        """Keep the tray pointing at a card that is actually being queried."""
+        choices = dict(self._visible_tray_choices())
+        current = CFG.get("tray_metric", "cw_pct")
+        if choices and current not in choices:
+            first = next(iter(choices))
+            for card in self.CARD_ORDER:
+                shown = getattr(self, "show_" + card, None)
+                if card in TRAY_DEFAULT and shown is not None and shown.get():
+                    first = TRAY_DEFAULT[card]
+                    break
+            CFG["tray_metric"] = first
+            self._tray_var.set(first)
+            _save_config(CFG)
+        self._rebuild_tray_menu()
+        self._update_tray()
+
     def _update_tray(self):
-        if self.tray is None:
+        if self.tray is None or self._closed:
             return
         metric = CFG.get("tray_metric", "cw_pct")
         value = self.data.get(metric)
@@ -1322,6 +1382,8 @@ class App:
             _save_config(CFG)
         if hasattr(self, "scheduler"):
             self.scheduler.configure(self._enabled_sources())
+        if hasattr(self, "tray_menu"):
+            self._fix_tray_metric()      # hidden cards must not feed the tray
         c5_visible = visible["codex"] and self.show_codex_5h.get()
         self._set_row_visible("c5", c5_visible)
         for key in ("cr_main",):
@@ -1652,6 +1714,13 @@ class App:
         # expose for smoke tests
         self._picker = (win, mv, dv, ok)
 
+        # A borderless, topmost parent makes Tk lazy about focus, which left the
+        # dialog unclickable until something else was clicked; raise it, force
+        # focus and only then take the grab.
+        win.update_idletasks()
+        win.lift()
+        win.focus_force()
+        mc.focus_set()
         win.grab_set()
         self.root.wait_window(win)
         self.root.attributes("-topmost", top)
@@ -1734,6 +1803,12 @@ class App:
         win.bind("<Return>", ok)
         # expose for smoke tests
         self._secret_prompt = (win, value, ok)
+        # Same focus problem as the date picker: without an explicit lift and
+        # focus_force the entry is not clickable until the window is refocused.
+        win.update_idletasks()
+        win.lift()
+        win.focus_force()
+        entry.focus_set()
         win.grab_set()
         self.root.wait_window(win)
         self.root.attributes("-topmost", top)
@@ -1759,10 +1834,15 @@ class App:
         self.status.config(text="刷新中…（保留上次数据）")
 
     def _enabled_sources(self):
+        """Only query what the window is actually showing.
+
+        A hidden card costs nothing: no worker process, no API call, no third
+        party request.  The tray icon can only show a source that is queried, so
+        it follows the visible cards too (see _fix_tray_metric)."""
         names = []
-        if CFG.get("show_codex", True) or CFG.get("tray_metric", "cw_pct").startswith("c"):
+        if CFG.get("show_codex", True):
             names.append("codex")
-        if CFG.get("show_kimi", True) or CFG.get("tray_metric", "cw_pct").startswith("k"):
+        if CFG.get("show_kimi", True):
             names.append("kimi")
         if CFG.get("show_codex", True) and CFG.get("show_radar", True):
             names.append("main")
@@ -2051,14 +2131,23 @@ class App:
         parts = []
         account_times = [self._success_at.get(name) for name in enabled
                          if name in ("kimi", "codex", "glm", "deepseek")]
-        if account_times and all(account_times):
-            parts.append("刷新时间 " + datetime.fromtimestamp(min(account_times)).strftime("%H:%M"))
-        if stale:
-            labels = {"kimi": "Kimi", "codex": "Codex", "glm": "GLM", "main": "雷达",
-                      "deepseek": "DeepSeek"}
-            parts.append("待更新:" + "/".join(labels[name] for name in stale))
-        if self._tray_failed:
-            parts.append("托盘不可用")
+        loaded = any(self._success_at.get(name) for name in enabled)
+        if not loaded:
+            # First load: listing every source as 待更新 made the status line
+            # long enough to widen the whole window, which then shrank again
+            # once the data arrived. Say one short thing instead.
+            parts.append("加载中…")
+        else:
+            if account_times and all(account_times):
+                parts.append("刷新时间 "
+                             + datetime.fromtimestamp(min(account_times)).strftime("%H:%M"))
+            if stale:
+                # Naming every stale source made this line the widest thing in
+                # the window (it shrank again once the names cleared). The rows
+                # themselves are greyed and labelled, so a count is enough.
+                parts.append("待更新:%d 项" % len(stale))
+            if self._tray_failed:
+                parts.append("托盘不可用")
         if not parts:
             parts.append("加载中…")
         self.status.config(text="  ".join(parts),
