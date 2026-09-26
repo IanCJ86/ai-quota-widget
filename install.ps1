@@ -1,88 +1,38 @@
-# install.ps1 - one-shot installer for ai-quota-widget (pure ASCII)
-# Usage: powershell -ExecutionPolicy Bypass -File install.ps1
+# Bootstrap only; quota_install.py owns all copying, verification and rollback.
 param(
-    [string]$Destination = (Join-Path $env:USERPROFILE "Desktop\quota-widget"),
-    [string]$PythonPath = "",
+    [string]$Destination = (Join-Path ([Environment]::GetFolderPath('Desktop')) 'quota-widget'),
+    [string]$PythonPath = '',
     [switch]$NoAutostartPrompt,
     [switch]$SkipDependencies
 )
-$ErrorActionPreference = "Stop"
-
-Write-Host "== ai-quota-widget installer =="
-
-# 1. check python
+$ErrorActionPreference = 'Stop'
+$src = Split-Path -Parent $MyInvocation.MyCommand.Path
 $py = $PythonPath
 if (-not $py) {
     $cmd = Get-Command python.exe -ErrorAction SilentlyContinue
     if ($cmd) { $py = $cmd.Source }
 }
 if (-not $py) {
-    Write-Host "ERROR: Python 3 not found on PATH."
-    Write-Host "Install it from https://www.python.org/downloads/ (tick 'Add to PATH'), then re-run this script."
-    exit 1
+    $launcher = Get-Command py.exe -ErrorAction SilentlyContinue
+    if ($launcher) { $py = (& $launcher.Source -3 -c 'import sys; print(sys.executable)').Trim() }
 }
-Write-Host "Python found: $py"
-& $py -c "import sys, tkinter; assert sys.version_info >= (3, 10), 'Python 3.10+ required'"
-if ($LASTEXITCODE -ne 0) { throw "Python 3.10+ with tkinter is required." }
-$src = Split-Path -Parent $MyInvocation.MyCommand.Path
-$runtimeFiles = @(Get-Content -LiteralPath (Join-Path $src "runtime-files.txt") | Where-Object { $_.Trim() })
-foreach ($file in $runtimeFiles) {
-    if ($file -notmatch '^[a-z_]+\.py$' -or -not (Test-Path -LiteralPath (Join-Path $src $file))) {
-        throw "Invalid or missing runtime file: $file; no application files replaced."
+if (-not $py) {
+    Write-Host 'Python 3.10+ with Tk is required. Install Python, then run this installer again.'
+    Write-Host 'Suggested command: winget install --id Python.Python.3.14 --exact --scope user'
+    Write-Host 'Official alternative: https://www.python.org/downloads/windows/'
+    throw 'Python is not available; no widget files changed.'
+}
+$installArgs = @((Join-Path $src 'quota_monitor.py'), '--install', '--dest', $Destination, '--no-autostart')
+if ($SkipDependencies) { $installArgs += '--skip-deps' }
+& $py @installArgs
+if ($LASTEXITCODE -ne 0) { throw 'Installation failed; read the message above. Existing app files are preserved.' }
+if (-not $NoAutostartPrompt) {
+    $answer = Read-Host 'Start automatically at login? [y/N]'
+    if ($answer -match '^[yY]') {
+        $shellObject = New-Object -ComObject WScript.Shell
+        $shortcut = $shellObject.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Startup')) 'ai-quota-widget.lnk'))
+        $shortcut.TargetPath = Join-Path $Destination 'start.bat'
+        $shortcut.WorkingDirectory = $Destination
+        $shortcut.Save()
     }
 }
-if (-not $SkipDependencies) {
-    & $py -m pip install --disable-pip-version-check -r (Join-Path $src "requirements.txt")
-    if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed; no application files replaced." }
-}
-& $py -c "import PIL, pystray, sys; __import__('backports.zstd' if sys.version_info < (3, 14) else 'compression.zstd')"
-if ($LASTEXITCODE -ne 0) { throw "Pillow/pystray/zstd missing. Run without -SkipDependencies." }
-# Use the same interpreter for launch and dependency installation.
-$resolvedPy = (& $py -c "import sys; print(sys.executable)").Trim()
-$pyw = Join-Path (Split-Path -Parent $resolvedPy) "pythonw.exe"
-if (-not (Test-Path -LiteralPath $pyw)) { $pyw = $resolvedPy }
-
-# 2. copy files to Desktop\quota-widget
-$dest = [IO.Path]::GetFullPath($Destination)
-New-Item -ItemType Directory -Force -Path $dest | Out-Null
-if ([IO.Path]::GetFullPath($src).TrimEnd('\') -ne $dest.TrimEnd('\')) {
-    foreach ($file in ($runtimeFiles + @("runtime-files.txt", "requirements.txt", "README.md", "LICENSE"))) {
-        Copy-Item -LiteralPath (Join-Path $src $file) -Destination $dest -Force
-    }
-}
-if (-not (Test-Path (Join-Path $dest "config.json"))) {
-    Copy-Item (Join-Path $src "config.json") $dest -Force
-    Write-Host "Created default config.json (edit it to set renewal dates / plan names)."
-} else {
-    Write-Host "Kept existing config.json"
-}
-
-# 3. generate start.bat
-$bat = @"
-@echo off
-rem Launch the quota monitor widget without a console window.
-set "PY=$pyw"
-start "" "%PY%" "%~dp0quota_monitor.py"
-"@
-# cmd.exe uses the Windows ANSI code page; preserve non-ASCII interpreter paths.
-[IO.File]::WriteAllText((Join-Path $dest "start.bat"), $bat, [Text.Encoding]::Default)
-
-# 4. optional autostart
-$ans = "N"
-if (-not $NoAutostartPrompt) { $ans = Read-Host "Start automatically at login? [y/N]" }
-if ($ans -match "^[yY]") {
-    $startup = [Environment]::GetFolderPath("Startup")
-    $lnk = Join-Path $startup "ai-quota-widget.lnk"
-    $ws = New-Object -ComObject WScript.Shell
-    $sc = $ws.CreateShortcut($lnk)
-    $sc.TargetPath = Join-Path $dest "start.bat"
-    $sc.WorkingDirectory = $dest
-    $sc.Save()
-    Write-Host "Autostart shortcut created: $lnk"
-}
-
-Write-Host ""
-Write-Host "Done. Installed to: $dest"
-Write-Host "Next: edit config.json there (renewal dates / plan name), then double-click start.bat"
-Write-Host "Upgrade: quit the old widget from its tray menu before starting this version."
-Write-Host "Verify: debug.txt contains per-source success times and errors (no credentials)."

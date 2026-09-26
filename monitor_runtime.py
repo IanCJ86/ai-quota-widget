@@ -282,7 +282,11 @@ class Scheduler:
                 if future:
                     state["due"] = min(state["due"], now + min(future))
         elif payload.get("retryable", True) and state["attempt"] < 3:
-            state["due"] = now + (2 if state["attempt"] == 1 else 5)
+            delay = 2 if state['attempt'] == 1 else 5
+            retry_after = payload.get('retry_after')
+            if isinstance(retry_after, (int, float)) and math.isfinite(retry_after):
+                delay = max(delay, min(300, max(0, retry_after)))
+            state["due"] = now + delay
         else:
             # Exhausted rounds back off five minutes; auth errors wait normal interval.
             state.update(attempt=0, due=now + (300 if payload.get("retryable", True) else self.interval))

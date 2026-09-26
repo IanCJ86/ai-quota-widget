@@ -14,13 +14,17 @@
 | widget_style.py | 各皮肤颜色、字体和菜单名称；不创建界面 |
 | widget_themes.py | ThemePainter 组合对象：静态矢量、主题配色和按数据变化绘制；不查询、不新增定时器 |
 | app_version.py | 应用版本与 UA 的唯一来源，不混用数据格式版本 |
+| quota_state.py | GUI/CLI共用的配置校验、新旧状态、窗口过期与券期限计算，不创建界面 |
+| quota_cli.py | 标准库无界面入口、脱敏诊断、一次性查询；不启动GUI调度器 |
+| quota_install.py | 安装、持久环境预检、清单哈希与失败回滚；PowerShell仅作入口 |
+| widget_viewport.py | 工作区边界、滚动容器及DPI变化处理 |
 | monitor_runtime.py / harness_stats.py | 原有调度/进程/安全持久化，以及独立日志统计 |
 
 安装清单 `runtime-files.txt` 由安装器与测试共同使用，新增运行模块必须进入清单。发布包也必须包含该清单全部文件。查询模式和 `--version` 不加载 Tk/PIL/pystray；没有新增轮询、动画或驻留进程。
 
 仍存在的结构债：provider 适配和 App 渲染在主文件里，SettingsController 仍依赖 App 的几个明确回调。本次不把接口全部重写，也不声称已经彻底解耦。下一步可先将 provider 适配拆离入口，再提取无副作用的展示数据模型。
 
-## 五套主题（1.3.0-dev 实现）
+## 五套主题（1.3.0 实现）
 
 共同底线：同一份数据和查询流程，主题不能改变金额/额度语义；数字和单位优先，错误/旧数据必须明确。采用静态素材缓存与数据变更重绘，不启用常驻蒸汽/齿轮动画。
 

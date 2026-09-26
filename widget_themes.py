@@ -8,7 +8,7 @@ class ThemePainter:
     def __init__(self, app):
         self.app = app
         self.scale = float(app.root.tk.call("tk", "scaling")) / (96 / 72)
-        self.canvas = tk.Canvas(app.root, width=236 * self.scale, height=50 * self.scale,
+        self.canvas = tk.Canvas(app.content, width=236 * self.scale, height=50 * self.scale,
                                 highlightthickness=0, bd=0)
         self.canvas.grid(row=0, column=0, sticky="ew", padx=12, pady=(8, 0))
         self.snapshot = ("", None, True)

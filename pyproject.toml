@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-quota-widget"
+dynamic = ["version"]
+description = "Windows AI quota widget by 临界思潮"
+requires-python = ">=3.10"
+license = "MIT"
+dependencies = []
+
+[project.scripts]
+quota_monitor = "quota_cli:main"
+
+[tool.setuptools]
+packages = ["quota_assets", "quota_build"]
+py-modules = ["app_version", "quota_cli", "quota_install", "quota_state", "quota_monitor", "monitor_runtime", "harness_stats", "widget_dialogs", "widget_settings", "widget_style", "widget_themes", "widget_tray", "widget_windows", "widget_viewport"]
+
+[tool.setuptools.dynamic]
+version = {attr = "app_version.APP_VERSION"}
+
+[tool.setuptools.cmdclass]
+build_py = "quota_build.Build"

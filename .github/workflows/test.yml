@@ -21,3 +21,6 @@ jobs:
       - run: python -m unittest discover -s tests -v
       - shell: powershell
         run: ./tests/test_install.ps1 -PythonPath (Get-Command python.exe).Source
+      - run: python -m pip wheel --no-deps . --wheel-dir dist
+      - shell: powershell
+        run: python tests/package_smoke.py (Get-ChildItem dist/*.whl | Select-Object -First 1).FullName

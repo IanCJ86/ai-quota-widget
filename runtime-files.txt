@@ -1,4 +1,7 @@
 app_version.py
+quota_cli.py
+quota_install.py
+quota_state.py
 harness_stats.py
 monitor_runtime.py
 quota_monitor.py
@@ -8,3 +11,4 @@ widget_style.py
 widget_themes.py
 widget_tray.py
 widget_windows.py
+widget_viewport.py
