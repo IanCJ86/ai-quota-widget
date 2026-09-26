@@ -37,7 +37,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 - 显示 Kimi Code / Codex 的 **每 5 小时** 与 **每周** 额度剩余百分比
 - **Codex 重置券**：显示账户里可用的「全额重置」券张数与到期日；0 张时该行自动隐藏，可在 `Codex 设置` 里关掉
 - **Codex 全球重置雷达**：显示 [codexreset.org](https://codexreset.org) 的 24/48 小时预测。这是第三方公共信号，不统计个人赠送/补偿重置卡，也不代表个人账户真值
-- **可选 DeepSeek 余额卡片**：填入 API Key（见「配置项」）后显示账户余额与**今日消耗**；DeepSeek 是按量付费，官方只有余额、没有百分比额度与用量接口，所以这张卡片显示金额，余额偏低时自动变色提醒
+- **可选 DeepSeek 余额卡片**：填入 API Key（见「配置项」）后显示账户余额与**今日消耗**；DeepSeek 是按量付费，官方只有余额、没有百分比额度与用量接口，所以这张卡片显示金额，余额偏低时自动变色提醒。余额行右侧显示当前计费时段：**梁文峰**（北京时间周一至周五 9:00–12:00、14:00–18:00，单价翻倍）或**梁文谷**（其余时段、含周末，半价）；「今日」行右侧可选显示**本机 DeepSeek Harness 当天用掉的 token 数**（`deepseek_token_metric`）
 - **可选 GLM Coding Plan 卡片**：在 config.json 填入 `glm_api_key` 并启用 `show_glm`，显示 5 小时 / 每周额度与重置时间（需有效的 GLM Coding Plan Key，见「配置项」）
 - 显示额度重置时间（5 小时窗显示倒计时，每周窗显示具体时间）
 - 显示套餐名与续订日期（接口不返回；**右键 → Kimi / Codex / GLM 设置 里直接选**，也可在 `config.json` 里改）
@@ -74,6 +74,8 @@ python quota_monitor.py
 - 雷达数据来自 `codexreset.org` 的第三方公开页面，不含任何个人凭证
 - GLM 数据来自 `open.bigmodel.cn/api/monitor/usage/quota/limit`（国际版 `api.z.ai` 同路径），用配置的 apiKey 鉴权
 - DeepSeek 数据来自官方 `api.deepseek.com/user/balance`（Bearer Key）；官方没有用量/额度接口（实测 `/user/usage`、`/dashboard/billing/usage` 均为 404），所以只能显示余额。「今日消耗」是本机估算：以当天第一次读到的余额为起点，按之后每次余额的减少量累加，充值会自动抬高起点（不会出现负数），跨天归零；起点之前（当天 Widget 没运行时）的消耗统计不到
+- DeepSeek 的**计费时段**按官方规则判断：高峰 = 北京时间周一至周五 9:00–12:00 与 14:00–18:00，其余（含周末）为空闲、单价减半。**中国法定节假日没有内置日历**，所以节假日的白天会按高峰显示（实际按空闲计费）
+- 「今日」行的 token 数来自**本机 DeepSeek Harness 的会话记录**（`~/.dsh/sessions`，每条请求都带 token 用量），因此它只覆盖这台机器上 Harness 的用量，不代表账户全部消耗；需要 zstd 支持（Python 3.14+ 或 `zstandard` 包），不支持时该位置留空。缓存读取量通常远大于新 token（同一段上下文每轮都会命中缓存），`total` 会把它们算进去，所以数字可能很大而金额很小
 - CLI 凭证只从本机读取，仅用于对应官方服务的认证，不发送给雷达网站，不打印或写入诊断文件
 
 ## 配置项
@@ -104,6 +106,7 @@ python quota_monitor.py
 | `show_deepseek` | 是否显示 DeepSeek 余额卡片 | `true` / `false` |
 | `deepseek_api_key` | 可选，DeepSeek API Key。**明文仅为兼容**；推荐右键菜单或环境变量 `DEEPSEEK_API_KEY` | `"sk-..."` |
 | `deepseek_low_balance` | 余额低于此金额显示橙色、低于四分之一显示红色；`0` = 关闭变色提醒 | `20.0` |
+| `deepseek_token_metric` | 「今日」行右侧显示本机 Harness 当天的 token：`total` 含缓存读取、`fresh` 只算新输入+输出、`off` 不显示 | `"total"` / `"fresh"` / `"off"` |
 
 注意：直接编辑 config.json 里 `renew_*` / 套餐名 / `glm_*` / `deepseek_*` 需要重启 widget 生效；右键菜单的所有操作（套餐、续订日期、显示开关）即时生效。
 

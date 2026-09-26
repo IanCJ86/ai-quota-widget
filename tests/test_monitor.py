@@ -2,6 +2,7 @@ import ctypes
 import io
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 import subprocess
 import sys
@@ -16,6 +17,25 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import monitor_runtime as runtime
 import quota_monitor as monitor
+
+# zstd is stdlib from 3.14 (compression.zstd) and otherwise a third-party module;
+# the local-token test is skipped where neither is available.
+try:
+    from compression import zstd as _zstd
+
+    HAVE_ZSTD = True
+    zstd_compress = _zstd.compress
+except Exception:
+    try:
+        import zstandard as _zstandard
+
+        HAVE_ZSTD = True
+        zstd_compress = _zstandard.ZstdCompressor().compress
+    except Exception:
+        HAVE_ZSTD = False
+
+        def zstd_compress(data):
+            raise RuntimeError("no zstd support")
 
 
 class Clock:
@@ -678,7 +698,9 @@ class UITests(unittest.TestCase):
         self.assertEqual(a.section_titles["DeepSeek"].cget("text"), "DeepSeek")
         self.assertEqual(a.section_renews["DeepSeek"].cget("text"), "按量付费")
         self.assertEqual(a.rows["ds"][0].cget("text"), "¥119.90")
-        self.assertEqual(a.rows["ds"][1].cget("text"), "可用")
+        # the note reports which DeepSeek price regime the refresh fell into
+        self.assertIn(a.rows["ds"][1].cget("text"),
+                      (monitor.DEEPSEEK_PEAK, monitor.DEEPSEEK_OFFPEAK))
         self.assertNotEqual(a.rows["ds"][0].cget("fg"), "#d08020")
         with patch.dict(monitor.CFG, {"deepseek_low_balance": 200.0}):
             a._render()
@@ -686,6 +708,78 @@ class UITests(unittest.TestCase):
         with patch.dict(monitor.CFG, {"deepseek_low_balance": 500.0}):
             a._render()
             self.assertEqual(a.rows["ds"][0].cget("fg"), "#d04040")   # below a quarter
+    def test_peak_label_follows_beijing_windows(self):
+        """梁文峰 09:00-12:00 and 14:00-18:00 Beijing time on weekdays, 梁文谷
+        the rest of the time ( weekends included )."""
+        utc = timezone.utc
+        peak, off = monitor.DEEPSEEK_PEAK, monitor.DEEPSEEK_OFFPEAK
+        cases = [
+            (datetime(2026, 9, 28, 1, 30, tzinfo=utc), peak),    # Mon 09:30
+            (datetime(2026, 9, 28, 3, 59, tzinfo=utc), peak),    # Mon 11:59
+            (datetime(2026, 9, 28, 4, 0, tzinfo=utc), off),      # Mon 12:00
+            (datetime(2026, 9, 28, 7, 0, tzinfo=utc), peak),     # Mon 15:00
+            (datetime(2026, 9, 28, 10, 0, tzinfo=utc), off),     # Mon 18:00
+            (datetime(2026, 9, 26, 2, 0, tzinfo=utc), off),      # Sat 10:00
+            (datetime(2026, 9, 27, 7, 0, tzinfo=utc), off),      # Sun 15:00
+        ]
+        for when, expected in cases:
+            self.assertEqual(monitor.deepseek_peak_label(when), expected, when)
+
+    def test_token_formatter(self):
+        self.assertEqual(monitor._fmt_tokens(0), "0")
+        self.assertEqual(monitor._fmt_tokens(999), "999")
+        self.assertEqual(monitor._fmt_tokens(75682437), "75.7M")
+        self.assertEqual(monitor._fmt_tokens(347035191), "347M")
+        self.assertEqual(monitor._fmt_tokens(1181266882), "1.2B")
+        self.assertIsNone(monitor._fmt_tokens(None))
+        self.assertIsNone(monitor._fmt_tokens("x"))
+
+    def test_deepseek_spend_row_shows_todays_tokens(self):
+        a = self.app
+        a._on_result("deepseek", {"ok": True, "data": {
+            "ds_balance": 119.9, "ds_spend": 6.64, "ds_currency": "CNY",
+            "ds_tokens_total": 314826023, "ds_tokens_fresh": 2352423}}, {})
+        self.assertEqual(a.rows["ds_spend"][0].cget("text"),
+                         "¥" + monitor.MONEY_PAD * 2 + "6.64")
+        self.assertEqual(a.rows["ds_spend"][1].cget("text"), "315M")
+        with patch.dict(monitor.CFG, {"deepseek_token_metric": "fresh"}):
+            a._render()
+            self.assertEqual(a.rows["ds_spend"][1].cget("text"), "2.4M")
+        with patch.dict(monitor.CFG, {"deepseek_token_metric": "off"}):
+            a._render()
+            self.assertEqual(a.rows["ds_spend"][1].cget("text"), "")
+        # a later payload without token figures keeps the last known number
+        with patch.dict(monitor.CFG, {"deepseek_token_metric": "total"}):
+            a._on_result("deepseek", {"ok": True, "data": {
+                "ds_balance": 119.9, "ds_spend": 6.64, "ds_currency": "CNY"}}, {})
+            self.assertEqual(a.rows["ds_spend"][1].cget("text"), "315M")
+
+    @unittest.skipUnless(HAVE_ZSTD, "needs zstd support")
+    def test_local_harness_tokens_sums_only_today(self):
+        import datetime as dt
+        today = dt.date(2026, 9, 26)
+        inside = int(dt.datetime(2026, 9, 26, 12, 0).timestamp() * 1000)
+        before = int(dt.datetime(2026, 9, 25, 23, 0).timestamp() * 1000)
+        records = [
+            {"time": inside, "data": {"usage": {"inputTokens": 100, "outputTokens": 50,
+                                                "cacheReadTokens": 900,
+                                                "totalTokens": 1050}}},
+            {"time": inside, "data": {"usage": {"inputTokens": 10, "outputTokens": 5,
+                                                "totalTokens": 15}}},
+            {"time": before, "data": {"usage": {"inputTokens": 9999, "outputTokens": 9999,
+                                                "totalTokens": 19998}}},
+            {"time": inside, "data": {"message": "no usage here"}},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "session.v4.jsonl.zstd"
+            path.write_bytes(zstd_compress((json.dumps(records[0]) + "\n"
+                                            + "\n".join(json.dumps(r)
+                                                        for r in records[1:])).encode("utf-8")))
+            self.assertEqual(monitor.local_harness_tokens(today, directory),
+                             {"total": 1065, "fresh": 165})
+            # a directory without logs is not an error, just no figure
+            self.assertIsNone(monitor.local_harness_tokens(today, directory + "-missing"))
+
     def test_money_rows_align_on_symbol_and_decimal_point(self):
         """Balance and spend must line up like a ledger: the currency symbol and
         the decimal point sit at the same place in both rows."""

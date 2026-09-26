@@ -15,7 +15,7 @@ import time
 import urllib.request
 import urllib.parse
 import urllib.error
-from datetime import datetime, date, timezone
+from datetime import datetime, date, timezone, timedelta
 from html import unescape
 from monitor_runtime import (Scheduler, SingleInstance, atomic_json, dpapi_protect,
                              dpapi_unprotect, validate_result)
@@ -170,6 +170,14 @@ GLM_PURPLE = "#b48cff"
 GLM_PURPLE_SOFT = "#c9b3f2"
 DEEPSEEK_BLUE = "#4d6bfe"
 DEEPSEEK_SOFT = "#8fa2ff"
+# DeepSeek doubles its prices during weekday peak windows (Beijing time); the
+# balance row says which regime the last refresh fell in.
+DEEPSEEK_PEAK = "梁文峰"
+DEEPSEEK_OFFPEAK = "梁文谷"
+BEIJING = timezone(timedelta(hours=8))
+# Local DeepSeek Harness transcripts, used for an optional "tokens today" figure.
+DSH_SESSIONS = os.path.expanduser(r"~\.dsh\sessions")
+_ZSTD = None
 # One type scale for the whole widget: card titles 9, every body row (labels,
 # values, notes) and the refresh line 8.  Same-role text uses the same size;
 # values are told apart by weight only.
@@ -722,6 +730,112 @@ def deepseek_spend(balance, today=None):
     return round(max(0.0, state["open"] - balance), 2)
 
 
+def local_harness_tokens(day=None, root=None):
+    """Tokens this machine's DeepSeek Harness used on `day`, or None.
+
+    The Harness writes one JSON line per request under ~/.dsh/sessions, usage
+    included, so the widget can show a real number instead of guessing one from
+    the balance.  Needs zstd (Python 3.14+ or the `zstandard` package); when the
+    codec or the logs are missing this simply returns None.
+    """
+    root = root or DSH_SESSIONS
+    if not os.path.isdir(root):
+        return None
+    day = day or date.today()
+    start = int(datetime.combine(day, datetime.min.time()).timestamp() * 1000)
+    end = start + 24 * 60 * 60 * 1000
+    total = fresh = 0
+    for base, _dirs, files in os.walk(root):
+        for name in files:
+            if not name.endswith(".jsonl.zstd"):
+                continue
+            path = os.path.join(base, name)
+            try:
+                if os.path.getmtime(path) * 1000 < start:
+                    continue          # untouched today, so nothing of today in it
+                raw = _zstd_decompress(path)
+            except Exception:
+                continue
+            if raw is None:
+                return None
+            for line in raw.splitlines():
+                if '"usage"' not in line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                stamp = record.get("time")
+                usage = (record.get("data") or {}).get("usage")
+                if not isinstance(stamp, (int, float)) or not isinstance(usage, dict):
+                    continue
+                if not start <= stamp < end:
+                    continue
+                total += int(usage.get("totalTokens") or 0)
+                fresh += (int(usage.get("inputTokens") or 0)
+                          + int(usage.get("outputTokens") or 0))
+    if not total and not fresh:
+        return None
+    return {"total": total, "fresh": fresh}
+
+
+def _zstd_decompress(path):
+    """Decompress one Harness transcript, or None if no codec is available."""
+    global _ZSTD
+    if _ZSTD is False:
+        return None
+    if _ZSTD is None:
+        try:
+            from compression import zstd
+            _ZSTD = lambda data: zstd.decompress(data)
+        except Exception:
+            try:
+                import zstandard
+                _ZSTD = lambda data: zstandard.ZstdDecompressor().decompress(
+                    data, max_output_size=256 << 20)
+            except Exception:
+                _ZSTD = False
+                return None
+    with open(path, "rb") as handle:
+        return _ZSTD(handle.read()).decode("utf-8", "replace")
+
+
+def deepseek_peak_label(when=None):
+    """梁文峰 during DeepSeek's double-price windows, 梁文谷 otherwise.
+
+    Peak is Beijing time Monday-Friday 09:00-12:00 and 14:00-18:00; weekends and
+    every other hour are billed at half price.  Chinese public holidays are not
+    special-cased (no holiday calendar ships with the widget), so a holiday
+    weekday still reports 梁文峰 even though it is billed off-peak.
+    """
+    if when is None:
+        when = datetime.now(timezone.utc)
+    elif when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    local = when.astimezone(BEIJING)
+    minutes = local.hour * 60 + local.minute
+    peak = local.weekday() < 5 and (9 * 60 <= minutes < 12 * 60
+                                    or 14 * 60 <= minutes < 18 * 60)
+    return DEEPSEEK_PEAK if peak else DEEPSEEK_OFFPEAK
+
+
+def _fmt_tokens(value):
+    """Compact token counts: 75682437 -> "75.7M", 1181266882 -> "1.2B"."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number or number < 0:          # NaN or nonsense
+        return None
+    for limit, suffix in ((1e9, "B"), (1e6, "M"), (1e3, "K")):
+        if number >= limit:
+            scaled = number / limit
+            if scaled >= 100:
+                return "%d%s" % (round(scaled), suffix)
+            return "%.1f%s" % (scaled, suffix)
+    return "%d" % round(number)
+
+
 def fetch_deepseek():
     """DeepSeek API balance. There is no percentage quota and no public usage
     endpoint; `/user/balance` returns money, so the card shows money."""
@@ -748,7 +862,7 @@ def fetch_deepseek():
             return 0.0
 
     balance = amount("total_balance")
-    return {
+    result = {
         "ds_balance": balance,
         "ds_spend": deepseek_spend(balance),
         "ds_granted": amount("granted_balance"),
@@ -757,6 +871,13 @@ def fetch_deepseek():
         "ds_available": bool(d.get("is_available")),
         "ds_plan": "按量付费",
     }
+    # Optional local figure: what this machine's Harness spent today, in tokens.
+    if CFG.get("deepseek_token_metric", "total") != "off":
+        tokens = local_harness_tokens()
+        if tokens:
+            result["ds_tokens_total"] = tokens["total"]
+            result["ds_tokens_fresh"] = tokens["fresh"]
+    return result
 
 
 # ---------------- UI ----------------
@@ -1854,12 +1975,25 @@ class App:
                  if isinstance(v, (int, float)) and not isinstance(v, bool)]
         whole_width = max([len(f"{v:,.2f}".partition(".")[0]) for v in money] or [3])
         if d.get("ds_balance") is not None:
+            # Peak hours cost double, so the note says which regime the last
+            # refresh fell into; a dead account still reports that instead.
+            if d.get("ds_available", True):
+                note = deepseek_peak_label(self._success_at.get("deepseek")
+                                           and datetime.fromtimestamp(
+                                               self._success_at["deepseek"],
+                                               timezone.utc))
+            else:
+                note = "账号不可用"
             self._set_amount("ds", d.get("ds_balance"), d.get("ds_currency") or "",
-                             "可用" if d.get("ds_available", True) else "账号不可用",
-                             whole_width=whole_width)
+                             note, whole_width=whole_width)
         # Today's spend is estimated from balance changes, never colour-warned.
+        # Its note shows how many tokens the local Harness used today, when that
+        # can be read (see local_harness_tokens); otherwise it stays empty.
+        metric = CFG.get("deepseek_token_metric", "total")
+        tokens = d.get("ds_tokens_" + ("fresh" if metric == "fresh" else "total"))
         self._set_amount("ds_spend", d.get("ds_spend"), d.get("ds_currency") or "",
-                         "", warn=False, whole_width=whole_width)
+                         (_fmt_tokens(tokens) or "") if metric != "off" else "",
+                         warn=False, whole_width=whole_width)
         self._render_radar()
         enabled = self._enabled_sources()
         for source, keys in {"kimi": ("k5", "kw"),

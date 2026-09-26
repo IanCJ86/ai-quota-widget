@@ -44,6 +44,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1
   "show_deepseek": true,
   "deepseek_api_key": "",
   "deepseek_low_balance": 20.0,
+  "deepseek_token_metric": "total",
   "show_codex_credits": true
 }
 ```
@@ -64,6 +65,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 | `show_deepseek` | 是否显示 DeepSeek 卡片。DeepSeek 是按量付费，卡片显示**余额金额**而不是百分比 |
 | `deepseek_api_key` | 可选。DeepSeek API Key，**明文仅兼容**。优先用环境变量 `DEEPSEEK_API_KEY`（用户机器上通常已有）或 `AI_QUOTA_WIDGET_DEEPSEEK_API_KEY`，或让用户点右键菜单「DeepSeek 设置 → 安全保存 API Key…」 |
 | `deepseek_low_balance` | 余额低于此金额显示橙色、低于四分之一显示红色；`0` = 关闭变色提醒 |
+| `deepseek_token_metric` | DeepSeek「今日」行右侧显示本机 Harness 当天 token：`"total"`（含缓存读取，默认）/ `"fresh"`（只算新输入+输出）/ `"off"`。余额行右侧固定显示计费时段：**梁文峰**（北京时间工作日 9:00–12:00、14:00–18:00）或**梁文谷**（其余时段）；需要 zstd（Python 3.14+ 或 `zstandard`），没有时该位置留空 |
 | `show_codex_credits` | 是否显示 Codex「重置券」行（可用券为 0 时该行本就不显示）。重置券需要较新的 codex 运行时：程序优先用 `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe` 里最新的那个 |
 
 注意：GLM 卡片只有在**能取到 Key**（环境变量 / `glm-key.dpapi` / `glm_api_key` 任一来源）且 `show_glm` 为 true 时才出现；DeepSeek 卡片同理（`DEEPSEEK_API_KEY`、`deepseek-key.dpapi`、`deepseek_api_key` 任一 + `show_deepseek`）。需要**有效的 GLM Coding Plan** 才能取到 GLM 数据。不要主动把用户的 Key 明文写进 config.json——让用户自己在右键菜单里保存。
