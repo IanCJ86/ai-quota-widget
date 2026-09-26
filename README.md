@@ -45,6 +45,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 - 各信源成功后每 15 分钟自动刷新，不再对齐整刻钟
 - 双击窗口立即刷新；右键菜单：置顶 / 立即刷新 / 主题 / 退出
 - 右键可分别勾选显示 Kimi / Codex / GLM 卡片，选择写回 `config.json`，重启后自动沿用
+- 菜单里的选择（卡片开关、主题、套餐、续订日期、雷达窗口、托盘指标）以及**透明度与窗口位置**都会记进 `config.json`，下次启动照旧；窗口位置只在屏幕范围内复用（换了显示器不会跑到屏幕外）
 - 右键可控制 Codex 每 5 小时窗口；未手动覆盖时 Pro 默认隐藏，其他套餐默认显示；雷达可选择 24 小时或 48 小时窗口
 - **三套主题**：黑夜 / 白天 / 毛玻璃（亚克力模糊，透出桌面背景；老系统不支持 Acrylic 时自动降级为普通纯色渲染，不影响使用）
 - 底部 ＋ / － 按钮微调窗口透明度（3% 步进），✕ 隐藏到托盘
@@ -101,6 +102,8 @@ python quota_monitor.py
 | `show_codex_credits` | 是否显示「重置券」行（0 张时无论如何都不显示） | `true` / `false` |
 | `show_radar` / `radar_window` | 显示雷达 / 预测窗口 | `true` / `24` 或 `48` |
 | `tray_metric` | 托盘显示的额度字段，默认 Codex 每周 | `"cw_pct"` |
+| `window_alpha` | 窗口透明度（40–100），用右下角 ＋/－ 调过之后自动记下 | `94` |
+| `window_x` / `window_y` | 窗口左上角坐标，拖动后自动记下（**程序自己维护，不建议手改**） | `1586` / `812` |
 | `glm_api_key` | 可选，GLM Coding Plan API Key。**明文存储，仅为兼容旧配置保留**；推荐用右键菜单「安全保存 API Key…」或环境变量 `AI_QUOTA_WIDGET_GLM_API_KEY` | `"sk-..."` |
 | `glm_region` | `"cn"` → open.bigmodel.cn，`"intl"` → api.z.ai | `"cn"` |
 | `show_deepseek` | 是否显示 DeepSeek 余额卡片 | `true` / `false` |

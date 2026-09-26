@@ -819,6 +819,22 @@ def deepseek_peak_label(when=None):
     return DEEPSEEK_PEAK if peak else DEEPSEEK_OFFPEAK
 
 
+def clamp_position(x, y, w, h, screen_w, screen_h):
+    """Where to put the window given a remembered position, or None.
+
+    A remembered spot can end up off-screen after a monitor change, so it is only
+    reused when a useful part of the window would still be visible; the result is
+    then pulled inside the working area the way _fit does."""
+    if x is None or y is None:
+        return None
+    if min(x + w, screen_w) - max(x, 0) < 40:
+        return None
+    if min(y + h, screen_h) - max(y, 0) < 40:
+        return None
+    return (min(max(x, 0), max(screen_w - w - 8, 0)),
+            min(max(y, 0), max(screen_h - h - 48, 0)))
+
+
 def _fmt_tokens(value):
     """Compact token counts: 75682437 -> "75.7M", 1181266882 -> "1.2B"."""
     try:
@@ -893,7 +909,12 @@ class App:
         self.root.title("Quota")
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
-        self.root.attributes("-alpha", 0.94)
+        # Transparency and position are remembered between runs.
+        try:
+            self.alpha_val = max(40, min(100, int(CFG.get("window_alpha", 94))))
+        except (TypeError, ValueError):
+            self.alpha_val = 94
+        self.root.attributes("-alpha", self.alpha_val / 100)
         self.root.configure(bg=BG)
         self.topmost = tk.BooleanVar(value=True)
         self.data = {}
@@ -923,7 +944,15 @@ class App:
         w, h = 232, 212
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        self.root.geometry(f"{w}x{h}+{sw - w - 40}+{sh - h - 90}")
+        # Reuse the remembered spot when it is still usable (a monitor change can
+        # leave it off-screen), otherwise fall back to the bottom-right corner.
+        try:
+            remembered = clamp_position(int(CFG.get("window_x", -1)),
+                                        int(CFG.get("window_y", -1)), w, h, sw, sh)
+        except (TypeError, ValueError):
+            remembered = None
+        x, y = remembered or (sw - w - 40, sh - h - 90)
+        self.root.geometry(f"{w}x{h}+{x}+{y}")
 
         sp1 = tk.Frame(self.root, bg=BG, height=6)
         sp1.grid(row=0, column=0)
@@ -964,7 +993,6 @@ class App:
         self.close_btn.pack(side="right")
         self.close_btn._no_drag = True
         self.close_btn.bind("<Button-1>", lambda e: self._minimize_to_tray())
-        self.alpha_val = 94
         self._alpha_btns = []
         for sym, d in (("－", -3), ("＋", 3)):
             b = tk.Label(bar, text=sym, fg=FG_DIM, bg=BG, cursor="hand2",
@@ -1244,6 +1272,9 @@ class App:
     def _alpha_step(self, delta):
         self.alpha_val = max(40, min(100, self.alpha_val + delta))
         self.root.attributes("-alpha", self.alpha_val / 100)
+        if CFG.get("window_alpha") != self.alpha_val:
+            CFG["window_alpha"] = self.alpha_val
+            _save_config(CFG)
 
     def _set_radar_window(self, hours):
         CFG["radar_window"] = hours
@@ -1430,6 +1461,7 @@ class App:
             return
         wgt.bind("<ButtonPress-1>", self._drag_start)
         wgt.bind("<B1-Motion>", self._drag_move)
+        wgt.bind("<ButtonRelease-1>", self._drag_end)
         wgt.bind("<Double-Button-1>", lambda e: self.refresh_async())
         wgt.bind("<Button-3>", self._menu)
         for child in wgt.winfo_children():
@@ -1443,6 +1475,16 @@ class App:
             x = self.root.winfo_x() + e.x - self._drag[0]
             y = self.root.winfo_y() + e.y - self._drag[1]
             self.root.geometry(f"+{x}+{y}")
+
+    def _drag_end(self, _event=None):
+        """Remember where the window was dropped, so it reopens there."""
+        if not self._drag:
+            return
+        self._drag = None
+        x, y = self.root.winfo_x(), self.root.winfo_y()
+        if CFG.get("window_x") != x or CFG.get("window_y") != y:
+            CFG["window_x"], CFG["window_y"] = x, y
+            _save_config(CFG)
 
     def _menu(self, e):
         self.menu.tk_popup(e.x_root, e.y_root)

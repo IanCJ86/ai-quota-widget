@@ -780,6 +780,35 @@ class UITests(unittest.TestCase):
             # a directory without logs is not an error, just no figure
             self.assertIsNone(monitor.local_harness_tokens(today, directory + "-missing"))
 
+    def test_transparency_and_position_are_remembered(self):
+        """The alpha buttons and a dragged window are written back to config."""
+        a = self.app
+        monitor.CFG.pop("window_alpha", None)
+        a._alpha_step(-3)
+        self.assertEqual(monitor.CFG["window_alpha"], a.alpha_val)
+        self.assertLess(a.alpha_val, 94)
+        for _ in range(30):                         # clamps at 40
+            a._alpha_step(-3)
+        self.assertEqual(a.alpha_val, 40)
+        self.assertEqual(monitor.CFG["window_alpha"], 40)
+
+        a._drag = (0, 0)
+        a._drag_end()
+        self.assertIn("window_x", monitor.CFG)
+        self.assertIn("window_y", monitor.CFG)
+
+    def test_remembered_position_is_clamped_on_screen(self):
+        # mostly off-screen (monitor changed): fall back to the default corner
+        self.assertIsNone(monitor.clamp_position(1900, 100, 200, 300, 1920, 1080))
+        self.assertIsNone(monitor.clamp_position(100, 1070, 200, 300, 1920, 1080))
+        self.assertEqual(monitor.clamp_position(100, 200, 200, 300, 1920, 1080),
+                         (100, 200))
+        # hanging off an edge is pulled back inside
+        self.assertEqual(monitor.clamp_position(-1, 100, 200, 300, 1920, 1080),
+                         (0, 100))
+        self.assertEqual(monitor.clamp_position(1800, 900, 200, 300, 1920, 1080),
+                         (1712, 732))
+
     def test_money_rows_align_on_symbol_and_decimal_point(self):
         """Balance and spend must line up like a ledger: the currency symbol and
         the decimal point sit at the same place in both rows."""
