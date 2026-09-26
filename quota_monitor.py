@@ -172,8 +172,8 @@ DEEPSEEK_BLUE = "#4d6bfe"
 DEEPSEEK_SOFT = "#8fa2ff"
 # DeepSeek doubles its prices during weekday peak windows (Beijing time); the
 # balance row says which regime the last refresh fell in.
-DEEPSEEK_PEAK = "梁文峰"
-DEEPSEEK_OFFPEAK = "梁文谷"
+DEEPSEEK_PEAK = "梁文峰 时段"
+DEEPSEEK_OFFPEAK = "梁文谷 时段"
 BEIJING = timezone(timedelta(hours=8))
 # Local DeepSeek Harness transcripts, used for an optional "tokens today" figure.
 DSH_SESSIONS = os.path.expanduser(r"~\.dsh\sessions")
