@@ -71,7 +71,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 | `deepseek_token_metric` | DeepSeek「今日」行右侧显示本机 Harness 当天 token：`"total"`（含缓存读取，默认）/ `"fresh"`（只算新输入+输出）/ `"off"`。依赖 Python 3.14 标准库或 `backports.zstd`，安装器自动处理；扫描失败留空、不阻断余额。计费标签离线覆盖2026年节假日；未覆盖年份的可能高峰时段留空，需更新官方年度日历 |
 | `show_codex_credits` | 是否显示 Codex「重置券」行（可用券为 0 时该行本就不显示）。重置券需要较新的 codex 运行时：程序优先用 `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe` 里最新的那个 |
 
-注意：GLM 卡片只有在**能取到 Key**（环境变量 / `glm-key.dpapi` / `glm_api_key` 任一来源）且 `show_glm` 为 true 时才出现；DeepSeek 卡片同理（`DEEPSEEK_API_KEY`、`deepseek-key.dpapi`、`deepseek_api_key` 任一 + `show_deepseek`）。需要**有效的 GLM Coding Plan** 才能取到 GLM 数据。不要主动把用户的 Key 明文写进 config.json——让用户自己在右键菜单里保存。
+注意：GLM / DeepSeek卡片开关不代表凭据已配置；开启但没有可用Key时可能只有`--`，不会凭空得到数据。来源支持环境变量、DPAPI和旧配置字段；GLM需有效Coding Plan。不要主动把Key明文写进config.json，让用户自己在右键菜单安全保存。
 
 ### 4. 启动并验证
 
