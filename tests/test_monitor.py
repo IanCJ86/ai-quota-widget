@@ -7,6 +7,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import tkinter
+from tkinter import font as tkfont
 import unittest
 from unittest.mock import Mock, patch
 
@@ -191,13 +193,90 @@ class DataTests(unittest.TestCase):
         self.assertIsNone(data["cw_pct"])
         p.kill.assert_called_once()
 
-    def _codex_proc(self, result):
+    def _codex_proc(self, result, usage=None):
+        messages = [{"id": 0, "result": {}}, {"id": 1, "result": result},
+                    {"id": 2, "error": {"message": "unavailable"}}]
+        if usage is not None:
+            messages.append({"id": 3, "result": usage})
         p = Mock()
         p.stdin = io.StringIO()
-        p.stdout = io.StringIO("\n".join(json.dumps(x) for x in [
-            {"id": 0, "result": {}}, {"id": 1, "result": result},
-            {"id": 2, "error": {"message": "unavailable"}}]))
+        p.stdout = io.StringIO("\n".join(json.dumps(x) for x in messages))
         return p
+
+    def test_codex_reset_credits_and_daily_tokens(self):
+        result = {
+            "rateLimitsByLimitId": {"codex": {"primary": {
+                "usedPercent": 14, "windowDurationMins": 10080,
+                "resetsAt": int(time.time()) + 3600}}},
+            "rateLimitResetCredits": {"availableCount": 2, "credits": [
+                {"status": "available", "title": "Full reset", "expiresAt": 1792700757},
+                {"status": "available", "expiresAt": 1790000000},
+                {"status": "used", "expiresAt": 1780000000}]},
+        }
+        usage = {"summary": {"peakDailyTokens": 1181266882},
+                 "dailyUsageBuckets": [{"startDate": "2026-09-23", "tokens": 254250474},
+                                       {"startDate": "2026-09-24", "tokens": 347035191}]}
+        with patch.object(monitor.subprocess, "Popen",
+                          return_value=self._codex_proc(result, usage)):
+            data = monitor.fetch_codex()
+        self.assertEqual(data["cr_credit_count"], 2)
+        self.assertEqual(data["cr_credit_expiry"], 1790000000)   # soonest first
+        self.assertEqual(data["c_tokens_latest"], 347035191)     # newest bucket
+        self.assertEqual(data["c_tokens_date"], "2026-09-24")
+        runtime.validate_result("codex", data)
+
+    def test_codex_usage_failure_keeps_quota_data(self):
+        """account/usage/read is optional: its failure must not lose the quota."""
+        result = {"rateLimitsByLimitId": {"codex": {"primary": {
+            "usedPercent": 12, "windowDurationMins": 10080,
+            "resetsAt": int(time.time()) + 3600}}}}
+        with patch.object(monitor.subprocess, "Popen",
+                          return_value=self._codex_proc(result)):   # no id 3 reply
+            data = monitor.fetch_codex()
+        self.assertEqual(data["cw_pct"], 88)
+        self.assertIsNone(data["c_tokens_latest"])
+        self.assertIsNone(data["cr_credit_count"])
+
+    def test_codex_runtime_prefers_newest_versioned_binary(self):
+        """An outdated bin\\codex.exe must not shadow the runtime in use.
+
+        The old CLI (found on this machine: 0.130 vs 0.158) has no
+        account/usage/read and no reset credits, which silently blanked both
+        new rows."""
+        with tempfile.TemporaryDirectory() as directory:
+            bin_dir = Path(directory)
+            legacy = bin_dir / "codex.exe"
+            old = bin_dir / "aaaa" / "codex.exe"
+            new = bin_dir / "bbbb" / "codex.exe"
+            for path in (legacy, old, new):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("", encoding="utf-8")
+            os.utime(legacy, (1_600_000_000, 1_600_000_000))
+            os.utime(old, (1_700_000_000, 1_700_000_000))
+            os.utime(new, (1_800_000_000, 1_800_000_000))
+
+            with patch.object(monitor, "CODEX_BIN_DIR", str(bin_dir)), \
+                    patch.object(monitor, "CODEX_EXE_CANDIDATES", [str(legacy)]):
+                self.assertEqual(monitor._find_codex_exe(), str(new))   # newest wins
+                new.unlink()
+                self.assertEqual(monitor._find_codex_exe(), str(old))
+                old.unlink()
+                self.assertEqual(monitor._find_codex_exe(), str(legacy))  # fallback
+                legacy.unlink()
+                self.assertEqual(monitor._find_codex_exe(), "codex")     # PATH
+
+    def test_token_and_day_formatting(self):
+        self.assertEqual(monitor._fmt_tokens(0), "0")
+        self.assertEqual(monitor._fmt_tokens(999), "999")
+        self.assertEqual(monitor._fmt_tokens(75682437), "75.7M")
+        self.assertEqual(monitor._fmt_tokens(347035191), "347M")
+        self.assertEqual(monitor._fmt_tokens(1181266882), "1.2B")
+        self.assertIsNone(monitor._fmt_tokens(None))
+        self.assertIsNone(monitor._fmt_tokens("x"))
+        self.assertEqual(monitor._fmt_day("2026-09-24"), "09-24")
+        self.assertEqual(monitor._fmt_day(1792700757),
+                         time.strftime("%m-%d", time.localtime(1792700757)))
+        self.assertEqual(monitor._fmt_day(None), "")
 
     def test_codex_window_that_already_reset_is_declared(self):
         """The app-server has no capture time, so an ended window is the only
@@ -651,6 +730,57 @@ class UITests(unittest.TestCase):
         with patch.dict(monitor.CFG, {"deepseek_low_balance": 500.0}):
             a._render()
             self.assertEqual(a.rows["ds"][0].cget("fg"), "#d04040")   # below a quarter
+    def test_money_labels_fit_their_column(self):
+        """Regression: "¥118.73" was clipped because Tk width=4 means four
+        average characters, which is narrower than the money string."""
+        a = self.app
+        font = tkfont.Font(family="Microsoft YaHei UI", size=9, weight="bold")
+        for balance in (118.73, 1234.56, 99999.99):
+            a._on_result("deepseek", {"ok": True, "data": {
+                "ds_balance": balance, "ds_spend": 3.5, "ds_currency": "CNY",
+                "ds_available": True, "ds_plan": "按量付费"}}, {})
+            a.root.update_idletasks()
+            for key in ("ds", "ds_spend"):
+                label = a.rows[key][0]
+                text = label.cget("text")
+                self.assertLessEqual(font.measure(text), label.winfo_reqwidth(),
+                                     "%s is clipped in row %s" % (text, key))
+
+    def test_codex_credit_row_follows_count_and_toggle(self):
+        a = self.app
+        def shown(widget):
+            return bool(widget.winfo_manager())
+        a._on_result("codex", {"ok": True, "data": {
+            "cw_pct": 86, "cr_credit_count": 1,
+            "cr_credit_expiry": time.time() + 30 * 86400}}, {})
+        self.assertTrue(shown(a.rows["cr_credit"][0]))
+        self.assertEqual(a.rows["cr_credit"][0].cget("text"), "1 张")
+        self.assertTrue(a.rows["cr_credit"][1].cget("text").endswith("到期"))
+        # Expiring inside a week is flagged.
+        a._on_result("codex", {"ok": True, "data": {
+            "cw_pct": 86, "cr_credit_count": 1,
+            "cr_credit_expiry": time.time() + 3 * 86400}}, {})
+        self.assertEqual(a.rows["cr_credit"][0].cget("fg"), "#d08020")
+        # No vouchers left: the row disappears instead of showing 0.
+        a._on_result("codex", {"ok": True, "data": {"cw_pct": 86, "cr_credit_count": 0}}, {})
+        self.assertFalse(shown(a.rows["cr_credit"][0]))
+        with patch.dict(monitor.CFG, {"show_codex_credits": False}):
+            a._on_result("codex", {"ok": True, "data": {
+                "cw_pct": 86, "cr_credit_count": 2}}, {})
+            self.assertFalse(shown(a.rows["cr_credit"][0]))
+
+    def test_codex_token_row_reports_latest_bucket_with_its_date(self):
+        a = self.app
+        a._on_result("codex", {"ok": True, "data": {
+            "cw_pct": 86, "c_tokens_latest": 347035191,
+            "c_tokens_date": "2026-09-24"}}, {})
+        self.assertEqual(a.rows["c_tokens"][0].cget("text"), "347M")
+        self.assertEqual(a.rows["c_tokens"][1].cget("text"), "09-24")
+        # Like every other value, the last known number is kept (and greyed by
+        # the staleness pass) when a later payload does not carry a new one.
+        a._on_result("codex", {"ok": True, "data": {"cw_pct": 86}}, {})
+        self.assertEqual(a.rows["c_tokens"][0].cget("text"), "347M")
+
     def test_deepseek_spend_row_is_never_colour_warned(self):
         a = self.app
         a._on_result("deepseek", {"ok": True, "data": {

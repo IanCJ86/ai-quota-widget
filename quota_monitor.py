@@ -46,8 +46,12 @@ KIMI_USAGE_URL = "https://api.kimi.com/coding/v1/usages"
 KIMI_OAUTH_HOST = "https://auth.kimi.com"
 KIMI_CLIENT_ID = "17e5f671-d194-4dfb-9706-5516cb48c098"  # public OAuth client id of the CLI
 CODEX_HOME = os.path.expanduser(r"~\.codex")
+CODEX_BIN_DIR = os.path.expandvars(r"%LOCALAPPDATA%\OpenAI\Codex\bin")
+# Legacy location: the desktop app now keeps versioned runtimes in
+# bin\<hash>\codex.exe and can leave an outdated codex.exe here, so this is only
+# a fallback (see _find_codex_exe).
 CODEX_EXE_CANDIDATES = [
-    os.path.expandvars(r"%LOCALAPPDATA%\OpenAI\Codex\bin\codex.exe"),
+    os.path.join(CODEX_BIN_DIR, "codex.exe"),
 ]
 DEBUG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug.txt")
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
@@ -85,6 +89,8 @@ DEFAULT_CONFIG = {
     # None = follow the selected plan: Pro hidden, other plans shown.
     # A boolean is a user's explicit menu override.
     "show_codex_5h": None,
+    # Reset vouchers ("full reset" credits) and the daily token row.
+    "show_codex_credits": True,
     "show_radar": True,
     "radar_window": 24,   # 24 or 48 hours
     "tray_metric": "cw_pct",  # Codex weekly percentage in the Windows tray
@@ -193,6 +199,33 @@ def _fmt_reset(iso_or_ts):
         return "?"
 
 
+def _fmt_day(iso_or_ts):
+    """Format a date, or unix seconds, as MM-DD local."""
+    try:
+        if isinstance(iso_or_ts, (int, float)):
+            dt = datetime.fromtimestamp(iso_or_ts, tz=timezone.utc).astimezone()
+        else:
+            dt = datetime.fromisoformat(str(iso_or_ts).replace("Z", "+00:00")).astimezone()
+        return dt.strftime("%m-%d")
+    except Exception:
+        return ""
+
+
+def _fmt_tokens(value):
+    """Compact token counts: 75682437 -> '75.7M', 1181266882 -> '1.2B'."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number or number < 0:      # NaN or nonsense
+        return None
+    for limit, suffix in ((1e9, "B"), (1e6, "M"), (1e3, "K")):
+        if number >= limit:
+            scaled = number / limit
+            return ("%d%s" if scaled >= 100 else "%.1f%s") % (scaled, suffix)
+    return "%d" % number
+
+
 def _countdown(iso_or_ts):
     try:
         if isinstance(iso_or_ts, (int, float)):
@@ -297,15 +330,24 @@ def fetch_kimi():
 # ---------------- Codex ----------------
 
 def _find_codex_exe():
-    for c in CODEX_EXE_CANDIDATES:
-        if os.path.exists(c):
-            return c
-    root = os.path.expandvars(r"%LOCALAPPDATA%\OpenAI\Codex\bin")
-    if os.path.isdir(root):
-        cands = [os.path.join(root, e, "codex.exe") for e in os.listdir(root)]
-        cands = [c for c in cands if os.path.exists(c)]
-        if cands:
-            return max(cands, key=os.path.getmtime)
+    """Locate the codex CLI the account actually uses.
+
+    Versioned runtimes live in bin\\<hash>\\codex.exe and the newest one is what
+    the desktop app and the CLI itself run; an outdated bin\\codex.exe can be
+    left behind for months and its app-server lacks newer methods such as
+    account/usage/read or reset credits, so the legacy path is a fallback only.
+    """
+    try:
+        names = os.listdir(CODEX_BIN_DIR) if os.path.isdir(CODEX_BIN_DIR) else []
+    except OSError:
+        names = []
+    runtimes = [os.path.join(CODEX_BIN_DIR, name, "codex.exe") for name in names]
+    runtimes = [path for path in runtimes if os.path.exists(path)]
+    if runtimes:
+        return max(runtimes, key=os.path.getmtime)
+    for candidate in CODEX_EXE_CANDIDATES:
+        if os.path.exists(candidate):
+            return candidate
     return "codex"
 
 
@@ -374,6 +416,14 @@ def fetch_codex():
             account = (read(2, timeout=3) or {}).get("account") or {}
         except Exception:
             pass  # Optional plan name must not discard valid quota data.
+        usage = {}
+        try:
+            # Daily buckets lag by a day or more, and a failure here must not
+            # discard the quota numbers we already have.
+            send(3, "account/usage/read", {})
+            usage = read(3, timeout=8) or {}
+        except Exception:
+            pass
     finally:
         try:
             p.kill()
@@ -422,6 +472,23 @@ def fetch_codex():
             return False
 
     shown = [w for w in (five_h, weekly) if w]
+
+    # Reset credits: granted "full reset" vouchers with an expiry.
+    credit = (result or {}).get("rateLimitResetCredits") or {}
+    try:
+        credit_count = int(credit.get("availableCount"))
+    except (TypeError, ValueError):
+        credit_count = None
+    expiries = []
+    for item in credit.get("credits") or []:
+        if isinstance(item, dict) and item.get("status", "available") == "available":
+            expiries.append(item.get("expiresAt"))
+
+    # Daily usage buckets from the Codex client. They lag by a day or more, so
+    # the newest bucket is reported together with its own date.
+    buckets = [b for b in (usage.get("dailyUsageBuckets") or []) if isinstance(b, dict)]
+    newest = buckets[-1] if buckets else {}
+
     return {
         "c5_pct": five_h["pct"] if five_h else None,
         "c5_reset": five_h["reset"] if five_h else None,
@@ -431,6 +498,11 @@ def fetch_codex():
         # Any displayed window that already reset makes the snapshot stale; the
         # UI greys it instead of passing it off as the current value.
         "c_window_expired": bool(shown) and any(expired(w) for w in shown),
+        "cr_credit_count": credit_count,
+        "cr_credit_expiry": min([e for e in expiries if isinstance(e, (int, float))],
+                                default=None),
+        "c_tokens_latest": newest.get("tokens"),
+        "c_tokens_date": newest.get("startDate"),
     }
 
 
@@ -784,13 +856,14 @@ class App:
         self._divider2.grid(row=4, column=0, sticky="ew", padx=10, pady=1)
         self._section(5, "Codex", CODEX_GREEN,
                       [("c5", "每5小时"), ("cw", "每周"),
+                       ("c_tokens", "token 用量"), ("cr_credit", "重置券"),
                        ("cr_main", "主源"),
                        ("cr_resets", "社区")])
         self._divider3 = tk.Frame(self.root, bg="#3a3a4e", height=1)
         self._divider3.grid(row=6, column=0, sticky="ew", padx=10, pady=1)
         # DeepSeek is pay-as-you-go, so this card shows a money balance.
         self._section(7, "DeepSeek", DEEPSEEK_BLUE,
-                      [("ds", "余额"), ("ds_spend", "今日消耗")])
+                      [("ds", "余额", 8), ("ds_spend", "今日消耗", 8)])
         self._dividers = [self._divider, self._divider2, self._divider3]
 
         bar = tk.Frame(self.root, bg=BG)
@@ -1180,7 +1253,12 @@ class App:
                        padx=(12, 7), pady=(3, 0))
         self.section_titles[title] = title_lbl
         self.section_renews[title] = renew_lbl
-        for i, (key, name) in enumerate(lines, start=1):
+        for i, line in enumerate(lines, start=1):
+            key, name = line[0], line[1]
+            # Money is wider than a percentage: those rows ask for more room
+            # (Tk's width unit is an average character, so "¥118.73" does not
+            # fit in the 4 used by "100%") and right-align for a tidy column.
+            width = line[2] if len(line) > 2 else 4
             nl = tk.Label(f, text=name, fg=FG_DIM, bg=BG_CARD,
                           font=("Microsoft YaHei UI", 9), anchor="w", width=9)
             nl.grid(row=i, column=0, sticky="w", padx=(7, 0))
@@ -1188,8 +1266,8 @@ class App:
             self.row_labels[key] = (nl,)
             pct = tk.Label(f, text="…", fg=FG_TEXT, bg=BG_CARD,
                            font=("Microsoft YaHei UI", 9, "bold"),
-                           anchor="w", width=4)
-            pct.grid(row=i, column=1, sticky="w", padx=(6, 0))
+                           anchor="e" if width > 4 else "w", width=width)
+            pct.grid(row=i, column=1, sticky="w" if width <= 4 else "e", padx=(6, 0))
             rst = tk.Label(f, text="", fg=FG_DIM, bg=BG_CARD,
                            font=("Microsoft YaHei UI", 9), anchor="w", width=11)
             rst.grid(row=i, column=2, sticky="w", padx=(12, 7),
@@ -1254,6 +1332,12 @@ class App:
         sub.add_command(label="选择日期…",
                         command=lambda: self._ask_renew(kind))
         m.add_cascade(label="续订日期", menu=sub)
+        if kind == "codex":
+            m.add_separator()
+            self.show_codex_credits = tk.BooleanVar(
+                value=bool(CFG.get("show_codex_credits", True)))
+            m.add_checkbutton(label="显示重置券", variable=self.show_codex_credits,
+                              command=self._toggle_codex_credits)
         if kind == "glm":
             m.add_separator()
             # config.json is plaintext; store new keys encrypted instead.
@@ -1262,6 +1346,12 @@ class App:
             m.add_command(label="清除已保存的 Key",
                           command=lambda: self._clear_key("glm"))
         return m
+
+    def _toggle_codex_credits(self):
+        CFG["show_codex_credits"] = self.show_codex_credits.get()
+        _save_config(CFG)
+        self._render()
+        self._fit()
 
     def _build_deepseek_menu(self):
         """DeepSeek has no plans or renewal dates: only the API key."""
@@ -1530,7 +1620,7 @@ class App:
     @staticmethod
     def _source_keys(name):
         return {"kimi": ("k5_", "kw_", "k_plan"),
-                "codex": ("c5_", "cw_", "c_plan", "c_window"),
+                "codex": ("c5_", "cw_", "c_plan", "c_window", "c_tokens", "cr_credit"),
                 "glm": ("g5_", "gw_", "g_plan"), "main": ("cr_main",),
                 "community": ("cr_resets",), "deepseek": ("ds_",)}[name]
 
@@ -1653,6 +1743,13 @@ class App:
         pl.config(text=text, fg=color)
         rl.config(text=note)
 
+    def _set_custom(self, key, value, note="", color=None):
+        """Rows that are neither a percentage nor money (counts, token volume)."""
+        pl, rl = self.rows[key]
+        pl.config(text="--" if value is None else str(value),
+                  fg=color or THEMES[getattr(self, "theme", "dark")]["FG_TEXT"])
+        rl.config(text=note or "")
+
     def _render_radar(self):
         """Show the selected primary source plus the community signal."""
         win = CFG.get("radar_window", 24)
@@ -1705,6 +1802,22 @@ class App:
         self._set_row("c5", d.get("c5_pct"),
                       _countdown(d.get("c5_reset")) if d.get("c5_reset") else "")
         self._set_row("cw", d.get("cw_pct"), _fmt_reset(d.get("cw_reset")))
+        # Codex-side daily tokens. The buckets lag by a day or more, so the row
+        # shows the newest bucket next to its own date.
+        self._set_custom("c_tokens", _fmt_tokens(d.get("c_tokens_latest")),
+                         _fmt_day(d.get("c_tokens_date")))
+        # Reset vouchers: hide the row when there are none (or when disabled).
+        count = d.get("cr_credit_count")
+        show_credits = bool(CFG.get("show_codex_credits", True)) and bool(count)
+        self._set_row_visible("cr_credit", show_credits)
+        if show_credits:
+            expiry = d.get("cr_credit_expiry")
+            note, color = "", THEMES[self.theme]["FG_TEXT"]
+            if isinstance(expiry, (int, float)):
+                note = _fmt_day(expiry) + " 到期"
+                if expiry - time.time() <= 7 * 86400:
+                    color = "#d08020"     # about to expire
+            self._set_custom("cr_credit", f"{int(count)} 张", note, color)
         self._set_row("g5", d.get("g5_pct"),
                       _countdown(d.get("g5_reset")) if d.get("g5_reset") else "")
         self._set_row("gw", d.get("gw_pct"), _fmt_reset(d.get("gw_reset")))
@@ -1720,7 +1833,8 @@ class App:
                          "", warn=False)
         self._render_radar()
         enabled = self._enabled_sources()
-        for source, keys in {"kimi": ("k5", "kw"), "codex": ("c5", "cw"),
+        for source, keys in {"kimi": ("k5", "kw"),
+                             "codex": ("c5", "cw", "c_tokens", "cr_credit"),
                              "glm": ("g5", "gw"), "main": ("cr_main",),
                              "community": ("cr_resets",),
                              "deepseek": ("ds", "ds_spend")}.items():
