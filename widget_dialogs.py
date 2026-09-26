@@ -3,12 +3,16 @@ import calendar
 from datetime import date
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
-from widget_style import BG, FG_TEXT, FG_DIM, FONT_TEXT, FONT_HINT
+from widget_style import THEMES, FONT_TEXT, FONT_HINT
 
 
 class WidgetDialogs:
     def __init__(self, root, topmost, config):
         self.root, self.topmost, self.config = root, topmost, config
+
+    @property
+    def palette(self):
+        return THEMES.get(self.config.get("theme"), THEMES["dark"])
 
     def _renew_picker(self, kind):
         """Modal month/day picker (no keyboard input, no year involved).
@@ -31,12 +35,12 @@ class WidgetDialogs:
         win.attributes("-topmost", True)
         win.transient(self.root)
         win.resizable(False, False)
-        win.configure(bg=BG)
+        win.configure(bg=self.palette["BG_CARD"])
         win.geometry(f"+{self.root.winfo_x() + 40}+{self.root.winfo_y() + 40}")
 
         mv = tk.StringVar(value=str(cm))
         dv = tk.StringVar(value=str(cd))
-        lbl = dict(bg=BG, fg=FG_TEXT, font=FONT_TEXT)
+        lbl = dict(bg=self.palette["BG_CARD"], fg=self.palette["FG_TEXT"], font=FONT_TEXT)
         tk.Label(win, text="月", **lbl).grid(row=0, column=0, padx=(12, 4), pady=10)
         mc = ttk.Combobox(win, textvariable=mv, state="readonly", width=3,
                           values=[str(i) for i in range(1, 13)])
@@ -99,13 +103,13 @@ class WidgetDialogs:
         win.attributes("-topmost", True)
         win.transient(self.root)
         win.resizable(False, False)
-        win.configure(bg=BG)
+        win.configure(bg=self.palette["BG_CARD"])
         win.geometry(f"+{self.root.winfo_x() + 40}+{self.root.winfo_y() + 40}")
-        tk.Label(win, text=prompt, bg=BG, fg=FG_TEXT, anchor="w",
+        tk.Label(win, text=prompt, bg=self.palette["BG_CARD"], fg=self.palette["FG_TEXT"], anchor="w",
                  font=FONT_TEXT).grid(
             row=0, column=0, columnspan=2, sticky="w", padx=12, pady=(10, 2))
         tk.Label(win, text="只保存在本机（Windows 加密），不会写入 config.json。",
-                 bg=BG, fg=FG_DIM, anchor="w",
+                 bg=self.palette["BG_CARD"], fg=self.palette["FG_DIM"], anchor="w",
                  font=FONT_HINT).grid(
             row=1, column=0, columnspan=2, sticky="w", padx=12, pady=(0, 6))
         value = tk.StringVar()

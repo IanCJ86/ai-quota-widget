@@ -16,11 +16,27 @@
 
 升级前先从右键菜单退出旧版，再运行 `install.ps1`，已有 `config.json` 会保留。请使用完整源码/安装包，不要只替换 quota_monitor.py：安装器按 `runtime-files.txt` 复制所有运行模块，依赖由安装器安装。
 
-右键菜单可查看内建版本，也可运行 `python quota_monitor.py --version`。`debug.txt` 中的 `app_version` / `user_agent` 表示实际运行代码版本；文件里的其他 `version: 1` 是数据格式版本，不是程序版本。DeepSeek 的 `439M tok` 表示本机累计约4.39亿 token，不是内存大小。
+右键菜单可查看内建版本，也可运行 `python quota_monitor.py --version`。`debug.txt` 中的 `app_version` / `user_agent` 表示实际运行代码版本；文件里的其他 `version: 1` 是数据格式版本，不是程序版本。DeepSeek 的 `439M tok` 表示本机Harness当日约4.39亿 token，不是内存大小。
 
-开发模块边界及后续主题方向见 [结构说明](docs/architecture.md)。main 中的待发布版本不等于已经发布的 Release。
+开发模块边界见 [结构说明](docs/architecture.md)。待发布分支不等于已经发布的 Release。
 
-## 30 秒安装（让 AI agent 帮你装）
+v1.3的安装、wheel/uvx入口、离线诊断、CLI查询和异常显示语义见 [技术使用说明](docs/cli-and-install.md)。日常使用双击安装目录的 `start.bat`；诊断可用右键“复制脱敏诊断”。
+
+## 五套主题（1.3.0）
+
+右键面板 → **主题** 即时切换，选择自动保存；旧配置的 `dark` / `light` 对应月之暗面 / 月之亮面，毛玻璃保留为兼容项。
+
+| 主题 | 风格 | 实际界面（测试数据） |
+| --- | --- | --- |
+| 月之暗面 `dark` | 石墨黑、月牙、柔和品牌色 | [预览](docs/themes/dark-100.png) |
+| 月之亮面 `light` | 白色卡片、浅蓝灰背景、满月 | [预览](docs/themes/light-100.png) |
+| 蒸汽算力机 `steam` | 黄铜仪表、铆钉、棕黑面板 | [预览](docs/themes/steam-100.png) |
+| Token 加油站 `fuel` | 油枪图标、荧光油量条、深蓝面板 | [预览](docs/themes/fuel-100.png) |
+| 电子墨水账本 `ink` | 暖纸白、墨黑数字、细线账本 | [预览](docs/themes/ink-100.png) |
+
+所有皮肤仍显示相同额度、金额、token、重置券和雷达；上方仪表依次选取已显示的 Codex / Kimi / GLM 周余量，并标明来源。不把 DeepSeek 金额当作百分比。过期或查询失败显示待更新，不画有效指针/油量。静态矢量绘制，没有常驻动画、额外查询或新依赖；透明度越低，可读性越容易受桌面背景影响。
+
+## 安装（让 AI agent 帮你装）
 
 不想自己动手？把这句话发给你的 AI agent（Kimi Code / Codex / Claude Code 等均可）：
 
@@ -54,7 +70,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 - 启动时窗口直接以最终大小出现（先建好、再显示，不会先闪一个占位大小的框）
 - 拖动窗口时**暂时取消半透明**：无边框＋半透明＋置顶的窗口在被拖动时会被 Windows 分块重绘，看起来像“同一个界面在屏幕上闪”；现在拖动期间不透明、松手恢复原值。右键「锁定位置（拖动不移动）」可以彻底禁止拖动。
 - 右键可控制 Codex 每 5 小时窗口；未手动覆盖时 Pro 默认隐藏，其他套餐默认显示；雷达可选择 24 小时或 48 小时窗口
-- **三套主题**：黑夜 / 白天 / 毛玻璃（亚克力模糊，透出桌面背景；老系统不支持 Acrylic 时自动降级为普通纯色渲染，不影响使用）
+- **五套主题与毛玻璃兼容项**：见上方主题表；老系统不支持 Acrylic 时自动降级为普通背景渲染。
 - 底部 ＋ / － 按钮微调窗口透明度（3% 步进），✕ 隐藏到托盘
 - 无边框、可拖动、可置顶、圆角（Win11 原生抗锯齿）
 - 高 DPI 屏幕原生渲染，字体清晰不毛边；窗口尺寸自动贴合内容
@@ -92,7 +108,7 @@ python quota_monitor.py
 
 - **套餐**：单选预设（Kimi：Andante / Moderato / Allegretto / Allegro；Codex：Go / Plus / Pro 5x / Pro 20x；GLM：Lite / Pro / Max），或「自定义…」输入并保存显示名
 - **续订日期**：「设为下个月今天」「设为本月最后一天」一键搞定，或「选择日期…」弹出月/日下拉选择器（免键盘输入，初始值回填当前日期；选到 2月31日 这类不存在的日期时自动调整为该月最后一天并提示）
-- **主题**：右键 → `主题` → 黑夜 / 白天 / 毛玻璃，重启后沿用
+- **主题**：右键 → `主题` → 月之暗面 / 月之亮面 / 蒸汽算力机 / Token 加油站 / 电子墨水账本，另保留毛玻璃兼容项，重启后沿用
 
 所有选择立即生效并写回 `config.json`。
 
@@ -103,7 +119,7 @@ python quota_monitor.py
 | `renew_kimi` / `renew_codex` / `renew_glm` | 各续订日期，仅用于显示（右键菜单可改） | `"09-01"` |
 | `kimi_plan_name` / `codex_plan_name` / `glm_plan_name` | 套餐显示名（右键菜单可改）；codex 留空 = 接口值 + 后缀 | `"Allegro"` |
 | `codex_plan_suffix` | Codex 套餐名后缀，追加在接口返回值后 | `" 20x"` |
-| `theme` | 主题：`dark` / `light` / `glass` | `"dark"` |
+| `theme` | 主题：`dark` / `light` / `steam` / `fuel` / `ink`；`glass` 为毛玻璃兼容项 | `"dark"` |
 | `show_kimi` / `show_codex` / `show_glm` | 各卡片是否显示 | `true` / `false` |
 | `show_codex_5h` | Codex 每 5 小时行；`null` 按套餐自动（Pro 隐藏，其余显示） | `null` / `true` / `false` |
 | `show_codex_credits` | 是否显示「重置券」行（0 张时无论如何都不显示） | `true` / `false` |
@@ -167,7 +183,7 @@ Kimi / Codex 凭证来自本机已登录的 CLI；可选 GLM / DeepSeek 需要�
 - 程序运行时读取本机凭证（`~/.kimi-code`、`~/.codex`），只用于对应官方服务认证，不发送给第三方雷达，不打印或记录到日志
 - Kimi 侧仅访问官方域名 `api.kimi.com` 与 `auth.kimi.com`
 - Codex 侧通过本机 `codex app-server` 获取额度，由该客户端与官方服务通信
-- 雷达、GLM 与 DeepSeek 请求分别发往两个第三方公开域名与智谱 / DeepSeek 官方域名；GLM / DeepSeek 的 Key 保存在本机，只用于对应官方认证
+- 雷达请求发往 **codexreset.org**（社区维护的第三方公开站点，**非 OpenAI 官方、与本项目无关联**）；GLM / DeepSeek 请求发往智谱 / DeepSeek 官方域名；GLM / DeepSeek 的 Key 保存在本机，只用于对应官方认证
 - GLM / DeepSeek 的 Key 可用右键菜单「安全保存 API Key…」以 Windows DPAPI 加密写入本机 `glm-key.dpapi` / `deepseek-key.dpapi`（仅当前账户可解密）并清空 config.json 中的明文，也可用环境变量完全不落盘；明文 `glm_api_key` / `deepseek_api_key` 字段仅为兼容旧配置保留
 - Kimi 凭证过期时，程序可能用 refresh_token 自动续期并**更新本地凭证文件**
 - 这是个人自用工具：不建议直接运行未经检查的第三方修改版，改完自己看一遍代码再用
@@ -188,4 +204,7 @@ Kimi / Codex 凭证来自本机已登录的 CLI；可选 GLM / DeepSeek 需要�
 
 ## License
 
-MIT © IanCJ86
+MIT © 临界思潮 (IanCJ86)
+---
+
+作者：**临界思潮**（GitHub [@IanCJ86](https://github.com/IanCJ86)）

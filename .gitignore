@@ -7,6 +7,9 @@ deepseek-spend.json
 harness-totals.json
 .review-deps/
 dist/
+build/
+*.egg-info/
+.venv/
 
 # python
 __pycache__/
