@@ -20,6 +20,25 @@ import widget_windows
 
 
 class IdentityTests(unittest.TestCase):
+    def test_public_gif_keeps_tall_theme_footer(self):
+        import tempfile
+        from PIL import Image
+        from render_readme import save_theme_gif
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'themes.gif'
+            small = Image.new('RGB', (10, 10), 'black')
+            tall = Image.new('RGB', (10, 16), 'white')
+            try:
+                save_theme_gif([small, tall], path)
+                with Image.open(path) as result:
+                    self.assertEqual(result.size, (10, 16))
+                    self.assertEqual(result.n_frames, 2)
+                    result.seek(1)
+                    self.assertEqual(result.convert('RGB').getpixel((0, 15)), (255, 255, 255))
+            finally:
+                small.close()
+                tall.close()
+
     def test_new_install_defaults_to_glass_and_keeps_existing_choice(self):
         from quota_state import validate_config
         self.assertEqual(monitor.DEFAULT_CONFIG['theme'], 'glass')
