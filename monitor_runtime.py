@@ -25,6 +25,53 @@ def atomic_json(path, value):
             os.unlink(tmp)
 
 
+class _DataBlob(ctypes.Structure):
+    _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
+
+
+def _dpapi(name, data):
+    """Call CryptProtectData/CryptUnprotectData for the current Windows user.
+
+    Returns None on any failure (non-Windows, empty input, API error) so callers
+    can decide what to do instead of silently storing a plaintext secret.
+    """
+    if os.name != "nt" or not data:
+        return None
+    try:
+        crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        call = getattr(crypt32, name)
+        call.argtypes = [ctypes.POINTER(_DataBlob), ctypes.c_void_p, ctypes.c_void_p,
+                         ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD,
+                         ctypes.POINTER(_DataBlob)]
+        call.restype = wintypes.BOOL
+        kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+        kernel32.LocalFree.restype = ctypes.c_void_p
+        source = ctypes.create_string_buffer(data, len(data))
+        in_blob = _DataBlob(len(data), ctypes.cast(source, ctypes.POINTER(ctypes.c_char)))
+        out_blob = _DataBlob()
+        if not call(ctypes.byref(in_blob), None, None, None, None, 0, ctypes.byref(out_blob)):
+            return None
+        try:
+            return ctypes.string_at(out_blob.pbData, out_blob.cbData)
+        finally:
+            kernel32.LocalFree(ctypes.cast(out_blob.pbData, ctypes.c_void_p))
+    except Exception:
+        return None
+
+
+def dpapi_protect(secret):
+    """Encrypt a secret (str/bytes) for the current user; None when unavailable."""
+    if isinstance(secret, str):
+        secret = secret.encode("utf-8")
+    return _dpapi("CryptProtectData", bytes(secret or b""))
+
+
+def dpapi_unprotect(blob):
+    """Decrypt a blob produced by dpapi_protect; None when unavailable/corrupt."""
+    return _dpapi("CryptUnprotectData", bytes(blob or b""))
+
+
 class KillJob:
     """Windows closes the entire owned query tree, even if the GUI crashes."""
     def __init__(self):

@@ -191,6 +191,121 @@ class DataTests(unittest.TestCase):
         self.assertIsNone(data["cw_pct"])
         p.kill.assert_called_once()
 
+    def _codex_proc(self, result):
+        p = Mock()
+        p.stdin = io.StringIO()
+        p.stdout = io.StringIO("\n".join(json.dumps(x) for x in [
+            {"id": 0, "result": {}}, {"id": 1, "result": result},
+            {"id": 2, "error": {"message": "unavailable"}}]))
+        return p
+
+    def test_codex_window_that_already_reset_is_declared(self):
+        """The app-server has no capture time, so an ended window is the only
+        freshness signal; the payload must say so instead of hiding it."""
+        def payload(resets_at):
+            node = {"usedPercent": 12, "windowDurationMins": 10080}
+            if resets_at is not None:
+                node["resetsAt"] = resets_at
+            return {"rateLimitsByLimitId": {"codex": {"primary": node}}}
+
+        with patch.object(monitor.subprocess, "Popen",
+                          return_value=self._codex_proc(payload(int(time.time()) + 3600))):
+            fresh = monitor.fetch_codex()
+        with patch.object(monitor.subprocess, "Popen",
+                          return_value=self._codex_proc(payload(int(time.time()) - 60))):
+            ended = monitor.fetch_codex()
+        with patch.object(monitor.subprocess, "Popen",
+                          return_value=self._codex_proc(payload(None))):
+            unknown = monitor.fetch_codex()
+
+        self.assertFalse(fresh["c_window_expired"])
+        self.assertTrue(ended["c_window_expired"])
+        self.assertEqual(ended["cw_pct"], 88)      # value kept, but marked
+        self.assertFalse(unknown["c_window_expired"])  # unknown is not "ended"
+
+
+class SecretTests(unittest.TestCase):
+    """The GLM key must never end up on disk as plaintext."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.key_file = Path(self.tmp.name) / "glm-key.dpapi"
+        self.patches = [patch.object(monitor, "GLM_KEY_FILE", str(self.key_file)),
+                        patch.object(monitor, "CFG", dict(monitor.DEFAULT_CONFIG)),
+                        patch.object(monitor, "_save_config")]
+        for item in self.patches:
+            item.start()
+        # Some sessions (locked-down CI, non-interactive service accounts) have
+        # no usable DPAPI; only the tests that need real encryption skip.
+        self.dpapi = runtime.dpapi_protect(b"probe") is not None
+    def tearDown(self):
+        for item in reversed(self.patches):
+            item.stop()
+        self.tmp.cleanup()
+    def require_dpapi(self):
+        if os.name != "nt" or not self.dpapi:
+            self.skipTest("Windows DPAPI unavailable in this session")
+
+    def test_resolution_order_env_then_encrypted_then_legacy(self):
+        self.require_dpapi()
+        monitor.CFG["glm_api_key"] = "sk-legacy"
+        self.assertEqual(monitor.glm_api_key(), "sk-legacy")
+        self.assertTrue(monitor.save_glm_key("sk-encrypted"))
+        self.assertEqual(monitor.CFG["glm_api_key"], "")   # plaintext copy dropped
+        self.assertEqual(monitor.glm_api_key(), "sk-encrypted")
+        with patch.dict(os.environ, {monitor.GLM_KEY_ENV: "sk-env"}):
+            self.assertEqual(monitor.glm_api_key(), "sk-env")
+
+    def test_stored_key_is_encrypted_on_disk(self):
+        self.require_dpapi()
+        self.assertTrue(monitor.save_glm_key("sk-secret-value"))
+        raw = self.key_file.read_text(encoding="utf-8")
+        self.assertNotIn("sk-secret-value", raw)
+        self.assertEqual(json.loads(raw)["scheme"], "dpapi")
+        self.assertEqual(monitor.glm_api_key(), "sk-secret-value")
+
+    def test_save_refuses_to_fall_back_to_plaintext(self):
+        with patch.object(monitor, "dpapi_protect", return_value=None):
+            self.assertFalse(monitor.save_glm_key("sk-secret-value"))
+        self.assertFalse(self.key_file.exists())
+        self.assertEqual(monitor.CFG["glm_api_key"], "")
+
+    def test_clear_removes_both_copies(self):
+        self.require_dpapi()
+        monitor.CFG["glm_api_key"] = "sk-legacy"
+        self.assertTrue(monitor.save_glm_key("sk-encrypted"))
+        self.assertTrue(monitor.clear_glm_key())
+        self.assertFalse(self.key_file.exists())
+        self.assertEqual(monitor.CFG["glm_api_key"], "")
+        self.assertEqual(monitor.glm_api_key(), "")
+
+    def test_dpapi_round_trip(self):
+        self.require_dpapi()
+        blob = runtime.dpapi_protect("sk-round-trip")
+        self.assertIsNotNone(blob)
+        self.assertEqual(runtime.dpapi_unprotect(blob).decode("utf-8"), "sk-round-trip")
+        self.assertIsNone(runtime.dpapi_unprotect(b"not a blob"))
+
+    def test_fetch_glm_uses_the_resolved_key(self):
+        seen = {}
+
+        class Response(io.StringIO):
+            def __enter__(self):
+                return self
+            def __exit__(self, *exc):
+                return False
+
+        def fake_urlopen(req, timeout=None):
+            seen["auth"] = req.get_header("Authorization")
+            return Response(json.dumps({"limits": [
+                {"type": "TOKENS_LIMIT", "remaining_percent": 80, "reset_time": 1000},
+                {"type": "TOKENS_LIMIT", "remaining_percent": 50, "reset_time": 2000}]}))
+
+        with patch.dict(os.environ, {monitor.GLM_KEY_ENV: "sk-env"}), \
+                patch.object(monitor.urllib.request, "urlopen", side_effect=fake_urlopen):
+            data = monitor.fetch_glm()
+        self.assertEqual(seen["auth"], "sk-env")
+        self.assertEqual((data["g5_pct"], data["gw_pct"]), (80, 50))
+
 
 def alive(pid):
     api = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -347,6 +462,35 @@ class UITests(unittest.TestCase):
             "cr_resets_pct": None, "cr_resets_mode": "no_watch"}}, {})
         self.assertIsNone(a.data["cr_resets_pct"])
         self.assertEqual(a.rows["cr_resets"][1].cget("text"), "暂无投票")
+
+
+    def test_codex_expired_snapshot_is_greyed_with_reason(self):
+        """An ended window must not be presented as the current value."""
+        a = self.app
+        a._on_result("codex", {"ok": True, "data": {"cw_pct": 75, "c_window_expired": True}}, {})
+        self.assertTrue(a._is_stale("codex"))
+        self.assertEqual(a.rows["cw"][1].cget("text"), "窗口已过期")
+        self.assertIn("待更新", a.status.cget("text"))
+        a._on_result("codex", {"ok": True, "data": {"cw_pct": 75, "c_window_expired": False}}, {})
+        self.assertFalse(a._is_stale("codex"))
+    def test_glm_menu_exposes_secure_key_commands(self):
+        menu = self.app._provider_menus["glm"]
+        labels = [menu.entrycget(i, "label") for i in range(menu.index("end") + 1)
+                  if menu.type(i) != "separator"]
+        self.assertIn("安全保存 API Key…", labels)
+        self.assertIn("清除已保存的 Key", labels)
+    def test_secret_dialog_masks_input(self):
+        a = self.app
+        seen = {}
+        def fill():
+            win, value, ok = a._secret_prompt
+            seen["show"] = win.children["!entry"].cget("show")
+            value.set("sk-typed")
+            ok()
+        a.root.after(150, fill)
+        a.root.after(3000, lambda: a._secret_prompt and a._secret_prompt[0].destroy())
+        self.assertEqual(a._ask_secret("GLM API Key", "key:"), "sk-typed")
+        self.assertEqual(seen["show"], "•")
 
 
 class EventLoopTests(unittest.TestCase):

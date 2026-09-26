@@ -67,7 +67,7 @@ python quota_monitor.py
 - 启动时恢复缓存并立即查询；每个来源成功后 15 分钟再查，失败只重试对应来源
 - 双击窗口任意位置立即刷新
 - Kimi 数据来自官方接口 `api.kimi.com/coding/v1/usages`；access_token 过期时会用本地 refresh_token 自动续期（client_id 为 CLI 公开值）
-- Codex 数据通过本机 `codex app-server`（stdio JSON-RPC）读取 `account/rateLimits/read`
+- Codex 数据通过本机 `codex app-server`（stdio JSON-RPC）读取 `account/rateLimits/read`。该接口返回的是本机 Codex 保存的**快照**，不带采集时间：某个窗口的重置时间若已经过去，说明这份数字属于上一个窗口，界面会把该卡片标灰并显示「窗口已过期」，同时计入底部「待更新」，不把历史额度当成实时值（窗口尚未结束的滞后无法被识别，见「支持范围与局限」）
 - 雷达数据来自 `codexreset.org` 和 `codex-resets.com` 的第三方公开页面/API，不含任何个人凭证；主源使用 24/48 小时预测，复数域名使用社区投票信号
 - GLM 数据来自 `open.bigmodel.cn/api/monitor/usage/quota/limit`（国际版 `api.z.ai` 同路径），用 config.json 里的 apiKey 鉴权
 - CLI 凭证只从本机读取，仅用于对应官方服务的认证，不发送给雷达网站，不打印或写入诊断文件
@@ -94,10 +94,18 @@ python quota_monitor.py
 | `show_codex_5h` | Codex 每 5 小时行；`null` 按套餐自动（Pro 隐藏，其余显示） | `null` / `true` / `false` |
 | `show_radar` / `radar_window` | 显示雷达 / 主源预测窗口 | `true` / `24` 或 `48` |
 | `tray_metric` | 托盘显示的额度字段，默认 Codex 每周 | `"cw_pct"` |
-| `glm_api_key` | 可选，GLM Coding Plan API Key；填了 GLM 卡片才可能出现 | `"sk-..."` |
+| `glm_api_key` | 可选，GLM Coding Plan API Key。**明文存储，仅为兼容旧配置保留**；推荐用右键菜单「安全保存 API Key…」或环境变量 `AI_QUOTA_WIDGET_GLM_API_KEY` | `"sk-..."` |
 | `glm_region` | `"cn"` → open.bigmodel.cn，`"intl"` → api.z.ai | `"cn"` |
 
 注意：直接编辑 config.json 里 `renew_*` / 套餐名 / `glm_*` 需要重启 widget 生效；右键菜单的所有操作（套餐、续订日期、显示开关）即时生效。
+
+**GLM Key 的存放顺序**（先命中者生效）：
+
+1. 环境变量 `AI_QUOTA_WIDGET_GLM_API_KEY`（完全不落盘，最推荐）
+2. 本机加密文件 `glm-key.dpapi`（Windows DPAPI 加密，只有当前 Windows 账户能解密）
+3. `config.json` 的 `glm_api_key`（旧版明文，仅兼容）
+
+右键菜单 `GLM Coding Plan 设置` → 「安全保存 API Key…」会弹出口令输入框（输入内容不回显），加密保存到第 2 项并**清空 config.json 里的明文**；「清除已保存的 Key」删除全部副本。系统加密不可用时程序会明确报错并且**不会退回明文写入**。
 
 ### 关于 GLM 卡片
 
@@ -118,6 +126,7 @@ GLM 额度接口（`monitor/usage/quota/limit`）是智谱官方 Claude Code 插
 
 - 支持 Kimi Code、Codex，可选 GLM Coding Plan；暂无 Claude / DeepSeek 等方案
 - 仅支持 Windows（依赖本机 CLI 凭证与 tkinter）
+- Codex 额度是本机 Codex 保存的快照，不含采集时间，可能滞后于真实值；只有「窗口已重置」这种情况能被自动识别并标灰
 - 套餐名与续订日期无法从接口自动读取，需要手动配置（见上文「配置项」）
 
 欢迎 issue / PR 扩展更多服务商。
@@ -128,7 +137,8 @@ GLM 额度接口（`monitor/usage/quota/limit`）是智谱官方 Claude Code 插
 - 程序运行时读取本机凭证（`~/.kimi-code`、`~/.codex`），只用于对应官方服务认证，不发送给第三方雷达，不打印或记录到日志
 - Kimi 侧仅访问官方域名 `api.kimi.com` 与 `auth.kimi.com`
 - Codex 侧通过本机 `codex app-server` 获取额度，由该客户端与官方服务通信
-- 雷达与 GLM 请求分别发往两个第三方公开域名与智谱官方域名；GLM Key 保存在本机 config.json，只用于智谱认证
+- 雷达与 GLM 请求分别发往两个第三方公开域名与智谱官方域名；GLM Key 保存在本机，只用于智谱认证
+- GLM Key 可用右键菜单「安全保存 API Key…」以 Windows DPAPI 加密写入本机 `glm-key.dpapi`（仅当前账户可解密）并清空 config.json 中的明文，也可用环境变量 `AI_QUOTA_WIDGET_GLM_API_KEY` 完全不落盘；明文 `glm_api_key` 字段仅为兼容旧配置保留
 - Kimi 凭证过期时，程序可能用 refresh_token 自动续期并**更新本地凭证文件**
 - 这是个人自用工具：不建议直接运行未经检查的第三方修改版，改完自己看一遍代码再用
 
@@ -136,7 +146,7 @@ GLM 额度接口（`monitor/usage/quota/limit`）是智谱官方 Claude Code 插
 
 - `debug.txt`：最近结果、每个来源的成功时间、查询耗时、错误类别和重试间隔。
 - `last-good.json`：本机最近成功数据缓存；旧值会明确标识，不能作为实时额度。
-- 不要上传个人 `config.json`、凭据、缓存或诊断文件。仓库中的 config.json 仅为占位模板。
+- 不要上传个人 `config.json`、凭据、缓存、`glm-key.dpapi` 或诊断文件。仓库中的 config.json 仅为占位模板。
 - 单次查询硬上限：Kimi 65 秒、Codex 50 秒、其他来源 25 秒；Windows Job Object 回收整个查询树，包括主程序意外退出的情况。
 - 离线回归测试：`python -m unittest discover -s tests -v`，需要 Windows、tkinter 和托盘依赖，不访问真实账号或网络。
 - v1.1.0 本机验证：25 项测试通过；独立调度器连续 90 轮查询句柄数稳定；真实四源查询成功（包含社区明确无活跃投票）。单机空闲 30 秒样本约 69 MiB 工作集、0.016 秒 CPU 时间，不代表所有电脑或查询峰值。
