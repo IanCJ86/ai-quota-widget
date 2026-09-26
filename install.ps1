@@ -25,6 +25,12 @@ Write-Host "Python found: $py"
 & $py -c "import sys, tkinter; assert sys.version_info >= (3, 10), 'Python 3.10+ required'"
 if ($LASTEXITCODE -ne 0) { throw "Python 3.10+ with tkinter is required." }
 $src = Split-Path -Parent $MyInvocation.MyCommand.Path
+$runtimeFiles = @(Get-Content -LiteralPath (Join-Path $src "runtime-files.txt") | Where-Object { $_.Trim() })
+foreach ($file in $runtimeFiles) {
+    if ($file -notmatch '^[a-z_]+\.py$' -or -not (Test-Path -LiteralPath (Join-Path $src $file))) {
+        throw "Invalid or missing runtime file: $file; no application files replaced."
+    }
+}
 if (-not $SkipDependencies) {
     & $py -m pip install --disable-pip-version-check -r (Join-Path $src "requirements.txt")
     if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed; no application files replaced." }
@@ -40,7 +46,7 @@ if (-not (Test-Path -LiteralPath $pyw)) { $pyw = $resolvedPy }
 $dest = [IO.Path]::GetFullPath($Destination)
 New-Item -ItemType Directory -Force -Path $dest | Out-Null
 if ([IO.Path]::GetFullPath($src).TrimEnd('\') -ne $dest.TrimEnd('\')) {
-    foreach ($file in @("quota_monitor.py", "monitor_runtime.py", "harness_stats.py", "requirements.txt", "README.md", "LICENSE")) {
+    foreach ($file in ($runtimeFiles + @("runtime-files.txt", "requirements.txt", "README.md", "LICENSE"))) {
         Copy-Item -LiteralPath (Join-Path $src $file) -Destination $dest -Force
     }
 }

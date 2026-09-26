@@ -24,7 +24,7 @@ cd ai-quota-widget
 powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
-脚本会：检查 Python 3.10+/tkinter → 安装 Pillow、pystray 及旧版 Python 的 backports.zstd → 复制 quota_monitor.py、monitor_runtime.py、harness_stats.py 到 `%USERPROFILE%\Desktop\quota-widget\` → 生成使用同一解释器的 `start.bat` → 询问是否开机自启（默认 N）。无交互安装使用 `-NoAutostartPrompt`；支持 `-PythonPath` 和 `-Destination` 指定解释器与安装目录。依赖已安装时可加 `-SkipDependencies`。升级前从托盘菜单退出旧版，已有 config.json 不覆盖。
+脚本会：检查 Python 3.10+/tkinter → 安装 Pillow、pystray 及旧版 Python 的 backports.zstd → 按 runtime-files.txt 清单复制全部运行模块（包含内建版本、UI组件与查询模块） 到 `%USERPROFILE%\Desktop\quota-widget\` → 生成使用同一解释器的 `start.bat` → 询问是否开机自启（默认 N）。无交互安装使用 `-NoAutostartPrompt`；支持 `-PythonPath` 和 `-Destination` 指定解释器与安装目录。依赖已安装时可加 `-SkipDependencies`。升级前从托盘菜单退出旧版，已有 config.json 不覆盖。
 
 ### 3. 根据用户口述写 config.json
 

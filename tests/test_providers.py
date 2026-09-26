@@ -45,6 +45,7 @@ class KimiAdapterTests(unittest.TestCase):
         self.assertEqual((result["kw_reset"], result["k5_reset"]), ("week", "five"))
         self.assertEqual(result["k_plan"], "")
         self.assertEqual(self.http.call_args.args[0].get_header("Authorization"), "Bearer fake-old")
+        self.assertEqual(self.http.call_args.args[0].get_header("User-agent"), monitor.USER_AGENT)
 
     def test_zero_or_malformed_limit_is_unknown_not_full_quota(self):
         self.http.return_value = response({"usage": {"used": 1, "limit": 0},
@@ -64,6 +65,8 @@ class KimiAdapterTests(unittest.TestCase):
         self.assertEqual(json.loads(self.cred.read_text())["refresh_token"], "fake-rotated")
         self.assertEqual(self.http.call_args.args[0].get_header("Authorization"), "Bearer fake-new")
         self.assertEqual(self.http.call_count, 3)
+        for call in self.http.call_args_list:
+            self.assertEqual(call.args[0].get_header("User-agent"), monitor.USER_AGENT)
 
     def test_failed_refresh_keeps_existing_credential_file(self):
         self.cred.write_text(json.dumps({"access_token": "fake-old", "refresh_token": "fake-refresh",
@@ -110,6 +113,7 @@ class RadarAdapterTests(unittest.TestCase):
             req = http.call_args.args[0]
             self.assertIsNone(req.get_header("Authorization"))
             self.assertIsNone(req.get_header("Cookie"))
+            self.assertEqual(req.get_header("User-agent"), monitor.USER_AGENT)
             self.assertEqual(http.call_args.kwargs["timeout"], 8)
         with patch.object(monitor.urllib.request, "urlopen", return_value=io.BytesIO(b"x" * (2 * 1024 * 1024 + 1))):
             with self.assertRaises(ValueError):
