@@ -686,11 +686,54 @@ class UITests(unittest.TestCase):
         with patch.dict(monitor.CFG, {"deepseek_low_balance": 500.0}):
             a._render()
             self.assertEqual(a.rows["ds"][0].cget("fg"), "#d04040")   # below a quarter
+    def test_money_rows_align_on_symbol_and_decimal_point(self):
+        """Balance and spend must line up like a ledger: the currency symbol and
+        the decimal point sit at the same place in both rows."""
+        a = self.app
+        a._on_result("deepseek", {"ok": True, "data": {
+            "ds_balance": 113.83, "ds_spend": 4.9, "ds_currency": "CNY",
+            "ds_available": True, "ds_plan": "按量付费"}}, {})
+        balance = a.rows["ds"][0].cget("text")
+        spend = a.rows["ds_spend"][0].cget("text")
+        self.assertEqual(balance, "¥113.83")
+        self.assertEqual(spend, "¥  4.90")          # padded to the same width
+        self.assertEqual(balance.index("."), spend.index("."))
+        # The money font is monospaced, so equal character counts really are
+        # equal pixel widths (a YaHei space is 4px while a digit is 9px).
+        font = tkfont.Font(font=a.rows["ds"][0].cget("font"))
+        self.assertEqual(font.measure(balance.split(".")[0]),
+                         font.measure(spend.split(".")[0]))   # same pixel x too
+
+    def test_every_card_shares_the_same_three_columns(self):
+        """The three columns are found by x position, so they must match across
+        cards; a card whose content merely exceeded the minimum used to grow and
+        break that."""
+        a = self.app
+        for name, payload in (("kimi", {"k5_pct": 100, "kw_pct": 100}),
+                              ("codex", {"cw_pct": 82, "cr_credit_count": 1,
+                                         "cr_credit_expiry": 1792700757}),
+                              ("deepseek", {"ds_balance": 113.83, "ds_spend": 4.9,
+                                            "ds_currency": "CNY"})):
+            a._on_result(name, {"ok": True, "data": payload}, {})
+        a._fit()
+        a.root.update_idletasks()
+        label_x, value_x, note_x = set(), set(), set()
+        for card in a._cards:
+            if not card.winfo_manager():
+                continue
+            for key, (value, note) in a.rows.items():
+                if value.master is card and value.winfo_manager():
+                    label_x.add(a.row_labels[key][0].winfo_x())
+                    value_x.add(value.winfo_x())
+                    note_x.add(note.winfo_x())
+        self.assertEqual(len(label_x), 1, "label column differs: %s" % label_x)
+        self.assertEqual(len(value_x), 1, "value column differs: %s" % value_x)
+        self.assertEqual(len(note_x), 1, "note column differs: %s" % note_x)
+
     def test_money_labels_fit_their_column(self):
         """Regression: "¥118.73" was clipped because Tk width=4 means four
         average characters, which is narrower than the money string."""
         a = self.app
-        font = tkfont.Font(family="Microsoft YaHei UI", size=9, weight="bold")
         for balance in (118.73, 1234.56, 99999.99):
             a._on_result("deepseek", {"ok": True, "data": {
                 "ds_balance": balance, "ds_spend": 3.5, "ds_currency": "CNY",
@@ -699,6 +742,7 @@ class UITests(unittest.TestCase):
             for key in ("ds", "ds_spend"):
                 label = a.rows[key][0]
                 text = label.cget("text")
+                font = tkfont.Font(font=label.cget("font"))
                 self.assertLessEqual(font.measure(text), label.winfo_reqwidth(),
                                      "%s is clipped in row %s" % (text, key))
 

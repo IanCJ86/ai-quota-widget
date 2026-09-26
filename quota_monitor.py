@@ -169,6 +169,9 @@ GLM_PURPLE = "#b48cff"
 GLM_PURPLE_SOFT = "#c9b3f2"
 DEEPSEEK_BLUE = "#4d6bfe"
 DEEPSEEK_SOFT = "#8fa2ff"
+# Money values are monospaced on purpose: padding with spaces only lines the
+# decimal points up when a space is as wide as a digit.
+MONEY_FONT = ("Consolas", 9, "bold")
 PLAN_PRESETS = {
     "kimi": ["Andante", "Moderato", "Allegretto", "Allegro"],
     "codex": ["Go", "Plus", "Pro 5x", "Pro 20x"],
@@ -797,9 +800,12 @@ class App:
                        ("cr_credit", "重置券"), ("cr_main", "重置雷达")])
         self._divider3 = tk.Frame(self.root, bg="#3a3a4e", height=1)
         self._divider3.grid(row=6, column=0, sticky="ew", padx=10, pady=1)
-        # DeepSeek is pay-as-you-go, so this card shows a money balance.
+        # DeepSeek is pay-as-you-go, so this card shows a money balance. Money
+        # rows are marked so their values use the monospaced font: only there do
+        # a space and a digit have the same width, which is what lets "¥113.83"
+        # and "¥  4.90" share a currency symbol position AND a decimal point.
         self._section(7, "DeepSeek", DEEPSEEK_BLUE,
-                      [("ds", "余额"), ("ds_spend", "今日")])
+                      [("ds", "余额", "money"), ("ds_spend", "今日", "money")])
         self._dividers = [self._divider, self._divider2, self._divider3]
 
         bar = tk.Frame(self.root, bg=BG)
@@ -887,8 +893,25 @@ class App:
         self.refresh_async()
         self.root.after(100, self._poll)
 
+    def _sync_columns(self):
+        """Give every card the same three columns, each only as wide as needed.
+
+        Labels and values are laid out at their natural width and the column
+        widths are the largest of those plus the cell padding, so the cards line
+        up with each other without the slack the old fixed widths used to
+        leave."""
+        # Padding must be part of the minimum, or a card whose content is wider
+        # than the minimum grows a few pixels and stops matching its neighbours.
+        label_w = max([lbl.winfo_reqwidth() for lbl in self._name_labels] or [0]) + 7
+        value_w = max([pl.winfo_reqwidth() for pl, _ in self.rows.values()] or [0]) + 4
+        for card in self._cards:
+            card.grid_columnconfigure(0, minsize=label_w)
+            card.grid_columnconfigure(1, minsize=value_w)
+
     def _fit(self):
         """Resize window to fit content, clamped fully on-screen."""
+        self.root.update_idletasks()
+        self._sync_columns()
         self.root.update_idletasks()
         w = self.root.winfo_reqwidth() + 6
         h = self.root.winfo_reqheight() + 6
@@ -1175,10 +1198,8 @@ class App:
                      highlightbackground="#33334a", highlightthickness=1)
         f.grid(row=row, column=0, sticky="ew", padx=10, pady=(4, 0))
         self._cards.append(f)
-        # fixed pixel column widths so titles never distort alignment across cards
-        f.grid_columnconfigure(0, minsize=64)
-        f.grid_columnconfigure(1, minsize=34)
-        f.grid_columnconfigure(2, minsize=100)
+        # Column widths are equalised across cards in _sync_columns(); nothing is
+        # fixed here, so each column is only as wide as its content needs.
         title_lbl = tk.Label(f, text=title, fg=color, bg=BG_CARD,
                              font=("Microsoft YaHei UI", 9, "bold"), anchor="w")
         title_lbl.grid(row=0, column=0, columnspan=3, sticky="w",
@@ -1186,26 +1207,25 @@ class App:
         renew_lbl = tk.Label(f, text="", bg=BG_CARD, anchor="w",
                              font=("Microsoft YaHei UI", 9))
         renew_lbl.grid(row=0, column=2, sticky="w",
-                       padx=(12, 7), pady=(3, 0))
+                       padx=(8, 3), pady=(3, 0))
         self.section_titles[title] = title_lbl
         self.section_renews[title] = renew_lbl
-        for i, (key, name) in enumerate(lines, start=1):
+        for i, line in enumerate(lines, start=1):
+            key, name = line[0], line[1]
+            money = len(line) > 2 and line[2] == "money"
             nl = tk.Label(f, text=name, fg=FG_DIM, bg=BG_CARD,
-                          font=("Microsoft YaHei UI", 9), anchor="w", width=9)
+                          font=("Microsoft YaHei UI", 9), anchor="w")
             nl.grid(row=i, column=0, sticky="w", padx=(7, 0))
             self._name_labels.append(nl)
             self.row_labels[key] = (nl,)
-            # One shared numeric column for every card: wide enough for money
-            # ("¥118.73" needs ~45px, four average characters only give 38) and
-            # left-aligned, so percentages, counts and amounts all start at the
-            # same x as each other and as the labels above them.
+            # One shared, left-aligned numeric column for every card.
             pct = tk.Label(f, text="…", fg=FG_TEXT, bg=BG_CARD,
-                           font=("Microsoft YaHei UI", 9, "bold"),
-                           anchor="w", width=8)
-            pct.grid(row=i, column=1, sticky="w", padx=(6, 0))
+                           font=MONEY_FONT if money else ("Microsoft YaHei UI", 9, "bold"),
+                           anchor="w")
+            pct.grid(row=i, column=1, sticky="w", padx=(4, 0))
             rst = tk.Label(f, text="", fg=FG_DIM, bg=BG_CARD,
-                           font=("Microsoft YaHei UI", 9), anchor="w", width=11)
-            rst.grid(row=i, column=2, sticky="w", padx=(12, 7),
+                           font=("Microsoft YaHei UI", 9), anchor="w")
+            rst.grid(row=i, column=2, sticky="w", padx=(8, 3),
                      pady=(0, 3 if i == len(lines) else 0))
             self.rows[key] = (pct, rst)
 
@@ -1656,15 +1676,20 @@ class App:
         for wgt in widgets:
             (wgt.grid if visible else wgt.grid_remove)()
 
-    def _set_amount(self, key, amount, currency, note="", warn=True):
-        """Render money instead of a percentage (pay-as-you-go balances)."""
+    def _set_amount(self, key, amount, currency, note="", warn=True, whole_width=3):
+        """Render money instead of a percentage (pay-as-you-go balances).
+
+        Both money rows pad their integer part to the same width, so all of them
+        share the currency symbol position and the decimal point."""
         pl, rl = self.rows[key]
         if amount is None:
             pl.config(text="--")
             rl.config(text="")
             return
         symbols = {"CNY": "¥", "USD": "$"}
-        text = f"{symbols.get(currency, currency + ' ' if currency else '')}{amount:,.2f}"
+        symbol = symbols.get(currency, currency + " " if currency else "")
+        whole, _, cents = f"{amount:,.2f}".partition(".")
+        text = "%s%*s.%s" % (symbol, max(whole_width, len(whole)), whole, cents)
         base = THEMES[getattr(self, "theme", "dark")]["FG_TEXT"]
         # Money has no natural percentage, so warn on an absolute threshold.
         limit = CFG.get("deepseek_low_balance") or 0
@@ -1748,12 +1773,18 @@ class App:
         if d.get("ds_plan") or d.get("ds_balance") is not None:
             self.section_titles["DeepSeek"].config(text="DeepSeek")
             self.section_renews["DeepSeek"].config(text="按量付费", fg=DEEPSEEK_SOFT)
+        # Both money rows share one integer width, so their currency symbols and
+        # decimal points line up (¥114.05 / ¥  4.68).
+        money = [v for v in (d.get("ds_balance"), d.get("ds_spend"))
+                 if isinstance(v, (int, float)) and not isinstance(v, bool)]
+        whole_width = max([len(f"{v:,.2f}".partition(".")[0]) for v in money] or [3])
         if d.get("ds_balance") is not None:
             self._set_amount("ds", d.get("ds_balance"), d.get("ds_currency") or "",
-                             "可用" if d.get("ds_available", True) else "账号不可用")
+                             "可用" if d.get("ds_available", True) else "账号不可用",
+                             whole_width=whole_width)
         # Today's spend is estimated from balance changes, never colour-warned.
         self._set_amount("ds_spend", d.get("ds_spend"), d.get("ds_currency") or "",
-                         "", warn=False)
+                         "", warn=False, whole_width=whole_width)
         self._render_radar()
         enabled = self._enabled_sources()
         for source, keys in {"kimi": ("k5", "kw"),
