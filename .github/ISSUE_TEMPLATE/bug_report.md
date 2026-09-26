@@ -8,7 +8,7 @@ labels: bug
 <!--
 请先做两件事，它们能让问题基本自证：
 
-1. 提供安装目录下 debug.txt 的内容（里面没有你的 Key；如果担心，可只贴 errors / status_text / data 三个字段）
+1. 提供右键“复制脱敏诊断”的输出；不要公开原始debug.txt、config.json、凭据或含余额JSON
 2. 说明你用的是哪个版本（右键菜单里可查看版本）
 
 感谢！
@@ -32,33 +32,24 @@ labels: bug
 
 - 程序版本（右键菜单可查看）：
 - Windows 版本：
-- Python 版本（`python --version`）：
+- 安装环境的Python版本（脱敏诊断会显示，不以其他全局Python代替）：
 - 显示器缩放（100% / 125% / 150%）与屏幕数量：
-- 已登录的 AI CLI（勾选）：Kimi Code ☐　Codex ☐　GLM ☐　DeepSeek ☐
+- 已配置来源：Kimi Code登录 ☐　Codex登录 ☐　GLM Coding Plan Key ☐　DeepSeek Key ☐
 
 ## 5. 脱敏诊断输出（推荐用这个）
 
-请在程序目录运行下面这条命令，把输出**整段贴进来**（它本身已脱敏，不含密钥/路径/账号/余额）：
+优先使用右键“复制脱敏诊断”（不含密钥/路径/账号/余额）。窗口打不开时，让协助安装的AI读取安装目录start.bat绑定的Python，并执行下列命令（替换占位路径）：
 
 ```powershell
-python quota_monitor.py --doctor --data-dir "<安装目录>"
+& "<start.bat绑定的python.exe>" "<安装目录>\quota_monitor.py" --doctor --data-dir "<安装目录>"
 ```
 
-或：右键菜单 →「复制脱敏诊断」。
+doctor离线，不代表联网查询成功；不要换用其他全局Python诊断而误报依赖缺失。
 
 > ⚠️ **请不要贴原始 `debug.txt` 或含余额的 JSON** —— 按仓库隐私指引，公开渠道只放脱敏信息。
 
-## 5b. 如果你更愿意贴 debug.txt 的摘要字段
-
-<!--
-命令：Get-Content "$env:USERPROFILE\Desktop\quota-widget\debug.txt" -Raw
-只需贴这几个字段，不要整份贴：
--->
-
 ```
-# 只贴这四行即可，不要整份粘贴
-errors:
-status_text:
+在此粘贴脱敏诊断
 ```
 
 ## 6. 截图（如果有）
