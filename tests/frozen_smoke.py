@@ -150,9 +150,18 @@ def smoke(bundle):
         run([str(powershell),'-NoProfile','-ExecutionPolicy','Bypass','-File',str(bundle/'setup.ps1'),
              '-Destination',str(destination),'-NoLaunch','-NoShortcut'],(1,))
         assert license_file.read_bytes()==b'fixture changed file', 'must not overwrite a conflicting existing version'
+        old=root/'old source'; old.mkdir()
+        (old/'config.json').write_bytes(b'{"theme":"steam"}')
+        (old/'deepseek-key.dpapi').write_bytes(b'not-a-real-key-fixture')
+        migration = [str(powershell),'-NoProfile','-ExecutionPolicy','Bypass','-File',str(bundle/'setup.ps1'),
+                     '-Destination',str(root/'migrated program'),'-ExistingDataDir',str(old),'-NoLaunch','-NoShortcut']
+        run(migration)
+        for filename in ('config.json','deepseek-key.dpapi'):
+            assert (old/filename).read_bytes()==(root/'local/AIQuotaWidget'/filename).read_bytes()
+        run(migration,(1,))  # existing personal data must never be replaced
         print(json.dumps(dict(version=version,offline_install_seconds=round(install_seconds,2),
             no_python_path=True,worker_pipe=True,chinese_setup=True,startup_debug=True,
-            skip_setup=True,second_launch=True,config_preserved=True)))
+            skip_setup=True,second_launch=True,config_preserved=True,migration=True,conflict_rejected=True)))
 
 
 if __name__ == '__main__':
