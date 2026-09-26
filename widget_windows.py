@@ -7,14 +7,19 @@ class WindowEffects:
         self.root = root
 
     def _redraw(self):
-        """Invalidate the whole window (RDW_INVALIDATE|UPDATENOW|ALLCHILDREN)."""
+        """Queue a whole-window repaint, without re-entering Tk from ctypes.
+
+        RDW_UPDATENOW dispatches paint messages synchronously. Inside a native
+        popup callback that can re-enter Tk with its Python thread state
+        detached and abort the interpreter. Let Tk's event loop paint instead.
+        """
         try:
             from ctypes import wintypes
             hwnd = int(self.root.wm_frame(), 16)
             redraw = ctypes.windll.user32.RedrawWindow
             redraw.argtypes = [wintypes.HWND, ctypes.c_void_p, wintypes.HRGN, wintypes.UINT]
             redraw.restype = wintypes.BOOL
-            redraw(hwnd, None, None, 0x0001 | 0x0100 | 0x0080)
+            redraw(hwnd, None, None, 0x0001 | 0x0080)
         except Exception:
             pass
 
@@ -50,7 +55,9 @@ class WindowEffects:
             delete.argtypes = [wintypes.HANDLE]
             delete.restype = wintypes.BOOL
             rgn = create(0, 0, w + 1, h + 1, radius, radius)
-            if rgn and not assign(hwnd, rgn, True):
+            # _fit queues repaint next; do not dispatch paint from this FFI
+            # call either (also covers pre-Win11 fallback).
+            if rgn and not assign(hwnd, rgn, False):
                 delete(rgn)  # ownership transfers only on successful SetWindowRgn
         except Exception:
             pass

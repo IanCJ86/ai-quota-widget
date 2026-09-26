@@ -1476,7 +1476,16 @@ class App:
         self._render()
 
     def _menu(self, e):
-        self.menu.tk_popup(e.x_root, e.y_root)
+        try:
+            self.menu.tk_popup(e.x_root, e.y_root)
+        finally:
+            try:
+                self.menu.grab_release()
+            except tk.TclError:
+                pass  # The Exit command has already destroyed the interpreter.
+        # Labels and their toplevel both have this binding. Do not open a
+        # second native popup when the same right-click bubbles to the root.
+        return "break"
 
     def _toggle_top(self):
         self.root.attributes("-topmost", self.topmost.get())
