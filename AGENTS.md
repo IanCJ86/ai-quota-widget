@@ -40,7 +40,10 @@ powershell -ExecutionPolicy Bypass -File install.ps1
   "show_codex": true,
   "show_glm": false,
   "glm_api_key": "",
-  "glm_region": "cn"
+  "glm_region": "cn",
+  "show_deepseek": true,
+  "deepseek_api_key": "",
+  "deepseek_low_balance": 20.0
 }
 ```
 
@@ -57,8 +60,11 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 | `show_kimi` / `show_codex` / `show_glm` | 各卡片是否显示（右键菜单也可切换） |
 | `glm_api_key` | 可选。GLM Coding Plan API Key；**明文存储，仅兼容旧配置**。优先用环境变量 `AI_QUOTA_WIDGET_GLM_API_KEY`，或让用户点右键菜单「GLM Coding Plan 设置 → 安全保存 API Key…」（DPAPI 加密，且会清空这里的明文） |
 | `glm_region` | `"cn"` 用 open.bigmodel.cn，`"intl"` 用 api.z.ai |
+| `show_deepseek` | 是否显示 DeepSeek 卡片。DeepSeek 是按量付费，卡片显示**余额金额**而不是百分比 |
+| `deepseek_api_key` | 可选。DeepSeek API Key，**明文仅兼容**。优先用环境变量 `DEEPSEEK_API_KEY`（用户机器上通常已有）或 `AI_QUOTA_WIDGET_DEEPSEEK_API_KEY`，或让用户点右键菜单「DeepSeek 设置 → 安全保存 API Key…」 |
+| `deepseek_low_balance` | 余额低于此金额显示橙色、低于四分之一显示红色；`0` = 关闭变色提醒 |
 
-注意：GLM 卡片只有在**能取到 Key**（环境变量 / `glm-key.dpapi` / `glm_api_key` 任一来源）且 `show_glm` 为 true 时才出现。需要**有效的 GLM Coding Plan** 才能取到数据。不要主动把用户的 Key 明文写进 config.json——让用户自己在右键菜单里保存。
+注意：GLM 卡片只有在**能取到 Key**（环境变量 / `glm-key.dpapi` / `glm_api_key` 任一来源）且 `show_glm` 为 true 时才出现；DeepSeek 卡片同理（`DEEPSEEK_API_KEY`、`deepseek-key.dpapi`、`deepseek_api_key` 任一 + `show_deepseek`）。需要**有效的 GLM Coding Plan** 才能取到 GLM 数据。不要主动把用户的 Key 明文写进 config.json——让用户自己在右键菜单里保存。
 
 ### 4. 启动并验证
 
@@ -69,9 +75,10 @@ cd "%USERPROFILE%\Desktop\quota-widget" && start.bat
 
 等待约 20 秒后检查同目录 `debug.txt`：
 
-- `"errors": {}` 且 `"data"` 里有 `k5_pct` / `c5_pct` 等数值 → 安装成功，告诉用户完成。
+- `"errors": {}` 且 `"data"` 里有 `k5_pct` / `c5_pct` / `ds_balance` 等数值 → 安装成功，告诉用户完成。
 - `errors` 里出现 `kimi` → 用户没登录 Kimi Code CLI，让其先运行一次 Kimi Code 登录。
 - `errors` 里出现 `codex` → 检查 CLI 安装与登录。默认托盘也查询 Codex；仅隐藏卡片不会关闭托盘需要的查询。
+- `errors` 里出现 `deepseek` → 用户机器上没有可用的 DeepSeek Key（环境变量 `DEEPSEEK_API_KEY`、`deepseek-key.dpapi`、`deepseek_api_key` 都没有）；`HTTP401` 表示 Key 无效。
 - 社区显示“暂无投票”表示接口明确无活跃投票；“待更新”或“旧 HH:MM”表示尚未取得新数据。查看对应来源的错误，不把所有 `--` 当成同一种故障。
 
 ### 5. 完成

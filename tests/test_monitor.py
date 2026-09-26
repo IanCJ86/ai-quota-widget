@@ -225,11 +225,14 @@ class DataTests(unittest.TestCase):
 
 
 class SecretTests(unittest.TestCase):
-    """The GLM key must never end up on disk as plaintext."""
+    """Provider keys must never end up on disk as plaintext."""
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.key_file = Path(self.tmp.name) / "glm-key.dpapi"
+        self.deepseek_key_file = Path(self.tmp.name) / "deepseek-key.dpapi"
         self.patches = [patch.object(monitor, "GLM_KEY_FILE", str(self.key_file)),
+                        patch.object(monitor, "DEEPSEEK_KEY_FILE",
+                                     str(self.deepseek_key_file)),
                         patch.object(monitor, "CFG", dict(monitor.DEFAULT_CONFIG)),
                         patch.object(monitor, "_save_config")]
         for item in self.patches:
@@ -305,6 +308,86 @@ class SecretTests(unittest.TestCase):
             data = monitor.fetch_glm()
         self.assertEqual(seen["auth"], "sk-env")
         self.assertEqual((data["g5_pct"], data["gw_pct"]), (80, 50))
+
+    def test_deepseek_key_resolution_and_secure_save(self):
+        """DeepSeek reuses the encrypted store and accepts DEEPSEEK_API_KEY."""
+        blank = {monitor.DEEPSEEK_ENV: "", monitor.DEEPSEEK_KEY_ENV: ""}
+        with patch.object(monitor, "_windows_env", return_value=""), \
+                patch.dict(os.environ, blank):
+            self.assertEqual(monitor.deepseek_api_key(), "")   # nothing configured
+            self.assertEqual(monitor.fetch_deepseek(), {})     # no key, no request
+        with patch.object(monitor, "_windows_env", return_value=""), \
+                patch.dict(os.environ, dict(blank, **{monitor.DEEPSEEK_ENV: "sk-cli-env"})):
+            self.assertEqual(monitor.deepseek_api_key(), "sk-cli-env")
+        # HKCU\Environment is read directly: a widget started before the variable
+        # was added would not see it in os.environ.
+        with patch.object(monitor, "_windows_env", return_value="sk-registry"), \
+                patch.dict(os.environ, blank):
+            self.assertEqual(monitor.deepseek_api_key(), "sk-registry")
+
+        self.require_dpapi()
+        with patch.object(monitor, "_windows_env", return_value=""), \
+                patch.dict(os.environ, blank):
+            monitor.CFG["deepseek_api_key"] = "sk-legacy"
+            self.assertEqual(monitor.deepseek_api_key(), "sk-legacy")
+            self.assertTrue(monitor.save_deepseek_key("sk-encrypted"))
+            self.assertEqual(monitor.CFG["deepseek_api_key"], "")
+            self.assertNotIn("sk-encrypted",
+                             self.deepseek_key_file.read_text(encoding="utf-8"))
+            self.assertEqual(monitor.deepseek_api_key(), "sk-encrypted")
+            self.assertTrue(monitor.clear_deepseek_key())
+            self.assertFalse(self.deepseek_key_file.exists())
+            self.assertEqual(monitor.deepseek_api_key(), "")
+
+    def test_fetch_deepseek_reports_money(self):
+        seen = {}
+
+        class Response(io.StringIO):
+            def __enter__(self):
+                return self
+            def __exit__(self, *exc):
+                return False
+
+        def fake_urlopen(req, timeout=None):
+            seen["auth"] = req.get_header("Authorization")
+            return Response(json.dumps({"is_available": True, "balance_infos": [
+                {"currency": "USD", "total_balance": "3.5", "granted_balance": "0",
+                 "topped_up_balance": "3.5"},
+                {"currency": "CNY", "total_balance": "119.901", "granted_balance": "1.5",
+                 "topped_up_balance": "118.401"}]}))
+
+        with patch.object(monitor, "_windows_env", return_value=""), \
+                patch.dict(os.environ, {monitor.DEEPSEEK_ENV: "sk-env"}), \
+                patch.object(monitor.urllib.request, "urlopen", side_effect=fake_urlopen):
+            data = monitor.fetch_deepseek()
+        self.assertEqual(seen["auth"], "Bearer sk-env")
+        self.assertEqual(data["ds_currency"], "CNY")     # CNY preferred
+        self.assertEqual(data["ds_balance"], 119.9)
+        self.assertEqual(data["ds_granted"], 1.5)
+        self.assertEqual(data["ds_plan"], "按量付费")
+        runtime.validate_result("deepseek", data)
+
+    def test_deepseek_balance_validation(self):
+        runtime.validate_result("deepseek", {"ds_balance": 119.9, "ds_currency": "CNY"})
+        runtime.validate_result("deepseek", {"ds_balance": 0})
+        for bad in (-1, "12", True, None):
+            with self.assertRaises(ValueError):
+                runtime.validate_result("deepseek", {"ds_balance": bad})
+
+    def test_deepseek_without_balance_is_an_error(self):
+        class Response(io.StringIO):
+            def __enter__(self):
+                return self
+            def __exit__(self, *exc):
+                return False
+
+        with patch.object(monitor, "_windows_env", return_value=""), \
+                patch.dict(os.environ, {monitor.DEEPSEEK_ENV: "sk-env"}), \
+                patch.object(monitor.urllib.request, "urlopen",
+                             side_effect=lambda req, timeout=None: Response(
+                                 '{"is_available": true, "balance_infos": []}')):
+            with self.assertRaises(ValueError):
+                monitor.fetch_deepseek()
 
 
 def alive(pid):
@@ -491,6 +574,43 @@ class UITests(unittest.TestCase):
         a.root.after(3000, lambda: a._secret_prompt and a._secret_prompt[0].destroy())
         self.assertEqual(a._ask_secret("GLM API Key", "key:"), "sk-typed")
         self.assertEqual(seen["show"], "•")
+    def test_deepseek_card_shows_money_and_warns_when_low(self):
+        a = self.app
+        a._on_result("deepseek", {"ok": True, "data": {
+            "ds_balance": 119.9, "ds_granted": 0.0, "ds_currency": "CNY",
+            "ds_available": True, "ds_plan": "按量付费"}}, {})
+        self.assertEqual(a.section_titles["DeepSeek"].cget("text"), "DeepSeek")
+        self.assertEqual(a.section_renews["DeepSeek"].cget("text"), "按量付费")
+        self.assertEqual(a.rows["ds"][0].cget("text"), "¥119.90")
+        self.assertEqual(a.rows["ds"][1].cget("text"), "可用")
+        self.assertNotEqual(a.rows["ds"][0].cget("fg"), "#d08020")
+        with patch.dict(monitor.CFG, {"deepseek_low_balance": 200.0}):
+            a._render()
+            self.assertEqual(a.rows["ds"][0].cget("fg"), "#d08020")   # below limit
+        with patch.dict(monitor.CFG, {"deepseek_low_balance": 500.0}):
+            a._render()
+            self.assertEqual(a.rows["ds"][0].cget("fg"), "#d04040")   # below a quarter
+    def test_dividers_need_a_visible_card_on_both_sides(self):
+        a = self.app
+        def shown(widget):
+            return bool(widget.winfo_manager())
+        with patch.dict(monitor.CFG, {}, clear=False):
+            for name in ("show_kimi", "show_glm", "show_codex", "show_deepseek"):
+                getattr(a, name).set(True)
+            a._apply_visibility()
+            self.assertTrue(all(shown(d) for d in a._dividers))
+            # Hiding a card in the middle keeps the divider between the two
+            # cards that remain neighbours.
+            a.show_glm.set(False)
+            a._apply_visibility()
+            self.assertFalse(shown(a._dividers[0]))
+            self.assertTrue(shown(a._dividers[1]))
+            self.assertTrue(shown(a._dividers[2]))
+            # A single visible card needs no dividers at all.
+            a.show_kimi.set(False)
+            a.show_deepseek.set(False)
+            a._apply_visibility()
+            self.assertFalse(any(shown(d) for d in a._dividers))
 
 
 class EventLoopTests(unittest.TestCase):
@@ -506,7 +626,10 @@ class EventLoopTests(unittest.TestCase):
                 events.append(args)
                 callback(*args)
             return runtime.Scheduler(str(ROOT / "tests" / "query_fixture.py"), record, interval=.3)
-        cfg = dict(monitor.DEFAULT_CONFIG, show_kimi=False, show_radar=False)
+        # Only Codex is enabled: the source set must not depend on whichever
+        # API keys this machine happens to have (env vars are read live).
+        cfg = dict(monitor.DEFAULT_CONFIG, show_kimi=False, show_glm=False,
+                   show_deepseek=False, show_radar=False)
         with tempfile.TemporaryDirectory() as directory, \
                 patch.object(monitor, "CFG", cfg), \
                 patch.object(monitor, "CACHE_FILE", str(Path(directory) / "cache.json")), \

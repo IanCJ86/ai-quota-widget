@@ -57,6 +57,11 @@ CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "last-good
 # key with Windows DPAPI instead (user-scoped, decryptable only on this account).
 GLM_KEY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "glm-key.dpapi")
 GLM_KEY_ENV = "AI_QUOTA_WIDGET_GLM_API_KEY"   # preferred: no secret on disk at all
+# DeepSeek is pay-as-you-go: its API reports a money balance, not a percentage.
+DEEPSEEK_KEY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "deepseek-key.dpapi")
+DEEPSEEK_KEY_ENV = "AI_QUOTA_WIDGET_DEEPSEEK_API_KEY"
+DEEPSEEK_ENV = "DEEPSEEK_API_KEY"             # name used by the official CLI/SDK
+DEEPSEEK_BALANCE_URL = "https://api.deepseek.com/user/balance"
 
 DEFAULT_CONFIG = {
     # ---- personal display options (edit config.json, not this file) ----
@@ -81,11 +86,18 @@ DEFAULT_CONFIG = {
     "radar_window": 24,   # 24 or 48 hours
     "tray_metric": "cw_pct",  # Codex weekly percentage in the Windows tray
     "show_glm": False,            # GLM card visibility; rows show "--" until a key works
+    # DeepSeek has no percentage quota, so the card shows money instead.
+    "show_deepseek": True,
     # ---- GLM Coding Plan (optional) ----
     # Legacy plaintext field: still honoured, but the settings menu stores new
     # keys encrypted (GLM_KEY_FILE) and clears this one on save.
     "glm_api_key": "",
     "glm_region": "cn",           # "cn" -> open.bigmodel.cn, "intl" -> api.z.ai
+    # ---- DeepSeek (pay-as-you-go balance) ----
+    "deepseek_api_key": "",       # legacy plaintext field, same rules as glm_api_key
+    # Money cannot be a percentage: warn below this amount and alarm below a
+    # quarter of it. Set to 0 to switch the colour warning off.
+    "deepseek_low_balance": 20.0,
 }
 
 
@@ -146,6 +158,8 @@ KIMI_BLUE_SOFT = "#8db4e8"
 CODEX_GREEN_SOFT = "#83d4ab"
 GLM_PURPLE = "#b48cff"
 GLM_PURPLE_SOFT = "#c9b3f2"
+DEEPSEEK_BLUE = "#4d6bfe"
+DEEPSEEK_SOFT = "#8fa2ff"
 PLAN_PRESETS = {
     "kimi": ["Andante", "Moderato", "Allegretto", "Allegro"],
     "codex": ["Go", "Plus", "Pro 5x", "Pro 20x"],
@@ -483,12 +497,30 @@ def fetch_community_radar():
             "cr_resets_updated": (d.get("meta") or {}).get("generated_at")}
 
 
-# ---------------- GLM Coding Plan (optional) ----------------
+# ---------------- provider API keys (GLM / DeepSeek) ----------------
 
-def _read_protected_key():
-    """Read the DPAPI-protected GLM key written by the settings menu."""
+def _windows_env(name):
+    """Read a user environment variable straight from the registry.
+
+    A widget started before the variable was added keeps its old environment,
+    and Explorer only picks up HKCU\\Environment changes after a settings
+    broadcast, so read the value directly instead of trusting os.environ.
+    """
+    if os.name != "nt":
+        return ""
     try:
-        with open(GLM_KEY_FILE, encoding="utf-8") as stream:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
+            value, _ = winreg.QueryValueEx(key, name)
+        return str(value or "").strip()
+    except Exception:
+        return ""
+
+
+def _read_protected_key(path):
+    """Read a DPAPI-protected key written by the settings menu."""
+    try:
+        with open(path, encoding="utf-8") as stream:
             record = json.load(stream)
         if record.get("scheme") != "dpapi":
             return ""
@@ -498,21 +530,24 @@ def _read_protected_key():
         return ""
 
 
-def glm_api_key():
-    """Resolve the GLM key: environment, then encrypted file, then legacy config.
+def provider_key(path, env_names, field):
+    """Resolve an API key: environment, then encrypted file, then legacy config.
 
     config.json is plaintext on disk, so the settings menu writes keys through
     Windows DPAPI and drops the plaintext copy; the legacy field keeps working
     for existing installs.
     """
-    for candidate in (os.environ.get(GLM_KEY_ENV, ""), _read_protected_key(),
-                      CFG.get("glm_api_key") or ""):
-        if candidate and candidate.strip():
-            return candidate.strip()
-    return ""
+    for name in env_names:
+        value = (os.environ.get(name) or _windows_env(name) or "").strip()
+        if value:
+            return value
+    stored = _read_protected_key(path)
+    if stored:
+        return stored
+    return (CFG.get(field) or "").strip()
 
 
-def save_glm_key(key):
+def save_provider_key(path, field, key):
     """Encrypt the key for the current user. Never falls back to plaintext."""
     key = (key or "").strip()
     if not key:
@@ -521,29 +556,54 @@ def save_glm_key(key):
     if not blob:
         return False
     try:
-        atomic_json(GLM_KEY_FILE, {"version": 1, "scheme": "dpapi",
-                                   "data": base64.b64encode(blob).decode("ascii")})
+        atomic_json(path, {"version": 1, "scheme": "dpapi",
+                           "data": base64.b64encode(blob).decode("ascii")})
     except OSError:
         return False
-    if CFG.get("glm_api_key"):
-        CFG["glm_api_key"] = ""   # the encrypted copy replaces the plaintext one
+    if CFG.get(field):
+        CFG[field] = ""   # the encrypted copy replaces the plaintext one
         _save_config(CFG)
     return True
 
 
-def clear_glm_key():
+def clear_provider_key(path, field):
     """Delete every stored copy: the encrypted file and the legacy field."""
     removed = False
     try:
-        os.unlink(GLM_KEY_FILE)
+        os.unlink(path)
         removed = True
     except OSError:
         pass
-    if CFG.get("glm_api_key"):
-        CFG["glm_api_key"] = ""
+    if CFG.get(field):
+        CFG[field] = ""
         _save_config(CFG)
         removed = True
     return removed
+
+
+def glm_api_key():
+    return provider_key(GLM_KEY_FILE, (GLM_KEY_ENV,), "glm_api_key")
+
+
+def save_glm_key(key):
+    return save_provider_key(GLM_KEY_FILE, "glm_api_key", key)
+
+
+def clear_glm_key():
+    return clear_provider_key(GLM_KEY_FILE, "glm_api_key")
+
+
+def deepseek_api_key():
+    return provider_key(DEEPSEEK_KEY_FILE, (DEEPSEEK_KEY_ENV, DEEPSEEK_ENV),
+                        "deepseek_api_key")
+
+
+def save_deepseek_key(key):
+    return save_provider_key(DEEPSEEK_KEY_FILE, "deepseek_api_key", key)
+
+
+def clear_deepseek_key():
+    return clear_provider_key(DEEPSEEK_KEY_FILE, "deepseek_api_key")
 
 
 def fetch_glm():
@@ -590,6 +650,43 @@ def fetch_glm():
     gw_pct, gw_reset = row(toks[1] if len(toks) > 1 else None)
     return {"g5_pct": g5_pct, "g5_reset": g5_reset,
             "gw_pct": gw_pct, "gw_reset": gw_reset, "g_plan": "GLM"}
+
+
+# ---------------- DeepSeek (pay-as-you-go balance) ----------------
+
+def fetch_deepseek():
+    """DeepSeek API balance. There is no percentage quota and no public usage
+    endpoint; `/user/balance` returns money, so the card shows money."""
+    key = deepseek_api_key()
+    if not key:
+        return {}
+    req = urllib.request.Request(DEEPSEEK_BALANCE_URL, headers={
+        "Authorization": "Bearer " + key,
+        "Accept": "application/json",
+    })
+    with urllib.request.urlopen(req, timeout=15) as response:
+        d = json.load(response)
+    infos = [x for x in (d.get("balance_infos") or []) if isinstance(x, dict)]
+    if not infos:
+        raise ValueError("no balance info")
+    # Prefer CNY when the account reports several currencies.
+    info = next((x for x in infos if str(x.get("currency") or "").upper() == "CNY"),
+                infos[0])
+
+    def amount(field):
+        try:
+            return round(float(info.get(field) or 0), 2)
+        except (TypeError, ValueError):
+            return 0.0
+
+    return {
+        "ds_balance": amount("total_balance"),
+        "ds_granted": amount("granted_balance"),
+        "ds_topped_up": amount("topped_up_balance"),
+        "ds_currency": str(info.get("currency") or "").upper()[:8],
+        "ds_available": bool(d.get("is_available")),
+        "ds_plan": "按量付费",
+    }
 
 
 # ---------------- UI ----------------
@@ -653,9 +750,14 @@ class App:
                       [("c5", "每5小时"), ("cw", "每周"),
                        ("cr_main", "主源"),
                        ("cr_resets", "社区")])
+        self._divider3 = tk.Frame(self.root, bg="#3a3a4e", height=1)
+        self._divider3.grid(row=6, column=0, sticky="ew", padx=10, pady=1)
+        # DeepSeek is pay-as-you-go, so this card shows a money balance.
+        self._section(7, "DeepSeek", DEEPSEEK_BLUE, [("ds", "余额")])
+        self._dividers = [self._divider, self._divider2, self._divider3]
 
         bar = tk.Frame(self.root, bg=BG)
-        bar.grid(row=6, column=0, sticky="ew", padx=(17, 10), pady=(3, 2))
+        bar.grid(row=8, column=0, sticky="ew", padx=(17, 10), pady=(3, 2))
         self._bg_frames.append(bar)
         self.status = tk.Label(bar, text="初始化…", fg=FG_DIM, bg=BG,
                                font=("Microsoft YaHei UI", 9), anchor="w")
@@ -675,7 +777,7 @@ class App:
             b.bind("<Button-1>", lambda e, dd=d: self._alpha_step(dd))
             self._alpha_btns.append(b)
         sp2 = tk.Frame(self.root, bg=BG, height=5)
-        sp2.grid(row=7, column=0)
+        sp2.grid(row=9, column=0)
         self._bg_frames.append(sp2)
         self.root.grid_columnconfigure(0, weight=1)
 
@@ -693,11 +795,14 @@ class App:
         self.show_codex = tk.BooleanVar(value=self._st.get("show_codex", True))
         self.show_codex_5h = tk.BooleanVar(value=self._codex_5h_visible())
         self.show_glm = tk.BooleanVar(value=self._st.get("show_glm", False))
+        self.show_deepseek = tk.BooleanVar(value=self._st.get("show_deepseek", True))
         self.menu.add_checkbutton(label="Kimi Coding Plan", variable=self.show_kimi,
                                 command=self._apply_visibility)
         self.menu.add_checkbutton(label="GLM Coding Plan", variable=self.show_glm,
                                 command=self._apply_visibility)
         self.menu.add_checkbutton(label="Codex", variable=self.show_codex,
+                                command=self._apply_visibility)
+        self.menu.add_checkbutton(label="DeepSeek 余额", variable=self.show_deepseek,
                                 command=self._apply_visibility)
         self.menu.add_checkbutton(label="Codex 每5小时窗口", variable=self.show_codex_5h,
                                 command=self._apply_visibility)
@@ -717,6 +822,8 @@ class App:
                               menu=self._build_provider_menu("glm"))
         self.menu.add_cascade(label="Codex 设置",
                               menu=self._build_provider_menu("codex"))
+        self.menu.add_cascade(label="DeepSeek 设置",
+                              menu=self._build_deepseek_menu())
         self.menu.add_separator()
         self._theme_var = tk.StringVar(value=self.theme)
         tm = tk.Menu(self.menu, tearoff=0)
@@ -901,34 +1008,42 @@ class App:
         if hasattr(self, "show_codex_5h"):
             self.show_codex_5h.set(self._codex_5h_visible())
 
+    # Card order in the window; dividers sit between consecutive cards.
+    CARD_ORDER = ("kimi", "glm", "codex", "deepseek")
+
     def _apply_visibility(self, persist=True):
         CFG["show_kimi"] = self.show_kimi.get()
         CFG["show_codex"] = self.show_codex.get()
         CFG["show_glm"] = self.show_glm.get()
+        CFG["show_deepseek"] = self.show_deepseek.get()
         if persist:
             # A clicked checkbutton is an explicit user override. Leaving this
             # as None is how the plan-based default remains active.
             CFG["show_codex_5h"] = self.show_codex_5h.get()
-        k, c = CFG["show_kimi"], CFG["show_codex"]
-        g = CFG["show_glm"]
-        kimi_card, glm_card, codex_card = self._cards[0], self._cards[1], self._cards[2]
-        (kimi_card.grid if k else kimi_card.grid_remove)()
-        (codex_card.grid if c else codex_card.grid_remove)()
-        (glm_card.grid if g else glm_card.grid_remove)()
-        (self._divider.grid if (k and g) else self._divider.grid_remove)()
-        (self._divider2.grid if (c and (k or g)) else self._divider2.grid_remove)()
+        visible = {name: bool(getattr(self, "show_" + name).get())
+                   for name in self.CARD_ORDER}
+        for card, name in zip(self._cards, self.CARD_ORDER):
+            (card.grid if visible[name] else card.grid_remove)()
+        # Exactly one divider between two neighbouring visible cards (the slot
+        # just above the lower one), so hiding a card in the middle never
+        # leaves two lines stacked together.
+        indexes = [i for i, name in enumerate(self.CARD_ORDER) if visible[name]]
+        wanted = {lower - 1 for _, lower in zip(indexes, indexes[1:])}
+        for index, divider in enumerate(self._dividers):
+            (divider.grid if index in wanted else divider.grid_remove)()
         if persist:
             CFG["show_radar"] = self.show_radar.get()
             _save_config(CFG)
         if hasattr(self, "scheduler"):
             self.scheduler.configure(self._enabled_sources())
-        c5_visible = c and self.show_codex_5h.get()
+        c5_visible = visible["codex"] and self.show_codex_5h.get()
         self._set_row_visible("c5", c5_visible)
         for key in ("cr_main", "cr_resets"):
             if key in self.rows:
                 widgets = [self.row_labels[key][0], *self.rows[key]]
                 for wgt in widgets:
-                    (wgt.grid if (c and CFG["show_radar"]) else wgt.grid_remove)()
+                    (wgt.grid if (visible["codex"] and CFG["show_radar"])
+                     else wgt.grid_remove)()
         self._fit()
 
     def _apply_acrylic(self, on):
@@ -988,8 +1103,8 @@ class App:
         self.root.configure(bg=t["BG"])
         for fr in self._bg_frames:
             fr.configure(bg=t["BG"])
-        self._divider.configure(bg=t["BORDER"])
-        self._divider2.configure(bg=t["BORDER"])
+        for divider in self._dividers:
+            divider.configure(bg=t["BORDER"])
         for card in self._cards:
             card.configure(bg=t["BG_CARD"],
                            highlightbackground=t["BORDER"])
@@ -1105,8 +1220,19 @@ class App:
         if kind == "glm":
             m.add_separator()
             # config.json is plaintext; store new keys encrypted instead.
-            m.add_command(label="安全保存 API Key…", command=self._set_glm_key_secure)
-            m.add_command(label="清除已保存的 Key", command=self._clear_glm_key)
+            m.add_command(label="安全保存 API Key…",
+                          command=lambda: self._save_key_secure("glm"))
+            m.add_command(label="清除已保存的 Key",
+                          command=lambda: self._clear_key("glm"))
+        return m
+
+    def _build_deepseek_menu(self):
+        """DeepSeek has no plans or renewal dates: only the API key."""
+        m = tk.Menu(self.menu, tearoff=0)
+        m.add_command(label="安全保存 API Key…",
+                      command=lambda: self._save_key_secure("deepseek"))
+        m.add_command(label="清除已保存的 Key",
+                      command=lambda: self._clear_key("deepseek"))
         return m
 
     def _set_plan(self, kind, name):
@@ -1221,12 +1347,19 @@ class App:
         finally:
             self.root.attributes("-topmost", top)
 
-    def _set_glm_key_secure(self):
-        """Store a GLM key with DPAPI and remove any plaintext copy."""
-        key = self._ask_secret("GLM API Key", "GLM Coding Plan API Key：")
+    # Provider key handling shared by the GLM and DeepSeek settings menus.
+    KEY_TOOLS = {
+        "glm": ("GLM API Key", save_glm_key, clear_glm_key),
+        "deepseek": ("DeepSeek API Key", save_deepseek_key, clear_deepseek_key),
+    }
+
+    def _save_key_secure(self, kind):
+        """Store a provider key with DPAPI and remove any plaintext copy."""
+        title, save, _ = self.KEY_TOOLS[kind]
+        key = self._ask_secret(title, title + "：")
         if not key:
             return
-        if save_glm_key(key):
+        if save(key):
             self._notice("已保存", "Key 已用当前 Windows 账户加密保存在本机，\n"
                                    "config.json 里的明文已清除。")
         else:
@@ -1234,10 +1367,17 @@ class App:
                                      "（程序不会把 Key 以明文写进文件。）")
         self._apply_visibility()
 
-    def _clear_glm_key(self):
-        if clear_glm_key():
-            self._notice("已清除", "本机保存的 GLM Key 已删除。")
+    def _clear_key(self, kind):
+        _, _, clear = self.KEY_TOOLS[kind]
+        if clear():
+            self._notice("已清除", "本机保存的 Key 已删除。")
         self._apply_visibility()
+
+    def _set_glm_key_secure(self):
+        self._save_key_secure("glm")
+
+    def _clear_glm_key(self):
+        self._clear_key("glm")
 
     def _ask_secret(self, title, prompt):
         """Masked single-line input (tkinter has no masked simpledialog)."""
@@ -1308,6 +1448,8 @@ class App:
             names.extend(("main", "community"))
         if CFG.get("show_glm") and glm_api_key():
             names.append("glm")
+        if CFG.get("show_deepseek", True) and deepseek_api_key():
+            names.append("deepseek")
         return names
 
     # Sources whose payload can admit that the data describes an earlier
@@ -1353,7 +1495,7 @@ class App:
         return {"kimi": ("k5_", "kw_", "k_plan"),
                 "codex": ("c5_", "cw_", "c_plan", "c_window"),
                 "glm": ("g5_", "gw_", "g_plan"), "main": ("cr_main",),
-                "community": ("cr_resets",)}[name]
+                "community": ("cr_resets",), "deepseek": ("ds_",)}[name]
 
     def _save_cache(self):
         sources = {name: {"success_at": stamp,
@@ -1452,6 +1594,28 @@ class App:
         for wgt in widgets:
             (wgt.grid if visible else wgt.grid_remove)()
 
+    def _set_amount(self, key, amount, currency, note=""):
+        """Render money instead of a percentage (pay-as-you-go balances)."""
+        pl, rl = self.rows[key]
+        if amount is None:
+            pl.config(text="--")
+            rl.config(text="")
+            return
+        symbols = {"CNY": "¥", "USD": "$"}
+        text = f"{symbols.get(currency, currency + ' ' if currency else '')}{amount:,.2f}"
+        base = THEMES[getattr(self, "theme", "dark")]["FG_TEXT"]
+        # Money has no natural percentage, so warn on an absolute threshold.
+        limit = CFG.get("deepseek_low_balance") or 0
+        try:
+            limit = float(limit)
+        except (TypeError, ValueError):
+            limit = 0.0
+        color = base
+        if limit > 0 and amount <= limit:
+            color = "#d04040" if amount <= limit / 4 else "#d08020"
+        pl.config(text=text, fg=color)
+        rl.config(text=note)
+
     def _render_radar(self):
         """Show the selected primary source plus the community signal."""
         win = CFG.get("radar_window", 24)
@@ -1507,11 +1671,19 @@ class App:
         self._set_row("g5", d.get("g5_pct"),
                       _countdown(d.get("g5_reset")) if d.get("g5_reset") else "")
         self._set_row("gw", d.get("gw_pct"), _fmt_reset(d.get("gw_reset")))
+        # DeepSeek is pay-as-you-go: the card shows money, not a percentage.
+        if d.get("ds_plan") or d.get("ds_balance") is not None:
+            self.section_titles["DeepSeek"].config(text="DeepSeek")
+            self.section_renews["DeepSeek"].config(text="按量付费", fg=DEEPSEEK_SOFT)
+        if d.get("ds_balance") is not None:
+            self._set_amount("ds", d.get("ds_balance"), d.get("ds_currency") or "",
+                             "可用" if d.get("ds_available", True) else "账号不可用")
         self._render_radar()
         enabled = self._enabled_sources()
         for source, keys in {"kimi": ("k5", "kw"), "codex": ("c5", "cw"),
                              "glm": ("g5", "gw"), "main": ("cr_main",),
-                             "community": ("cr_resets",)}.items():
+                             "community": ("cr_resets",),
+                             "deepseek": ("ds",)}.items():
             if source in enabled and self._is_stale(source):
                 text = self._stale_text(source)
                 for key in keys:
@@ -1519,11 +1691,13 @@ class App:
                     self.rows[key][0].config(fg=THEMES[self.theme]["FG_DIM"])
         stale = [name for name in enabled if self._is_stale(name)]
         parts = []
-        account_times = [self._success_at.get(name) for name in enabled if name in ("kimi", "codex", "glm")]
+        account_times = [self._success_at.get(name) for name in enabled
+                         if name in ("kimi", "codex", "glm", "deepseek")]
         if account_times and all(account_times):
             parts.append("额度更新 " + datetime.fromtimestamp(min(account_times)).strftime("%H:%M"))
         if stale:
-            labels = {"kimi": "Kimi", "codex": "Codex", "glm": "GLM", "main": "主源", "community": "社区"}
+            labels = {"kimi": "Kimi", "codex": "Codex", "glm": "GLM", "main": "主源",
+                      "community": "社区", "deepseek": "DeepSeek"}
             parts.append("待更新:" + "/".join(labels[name] for name in stale))
         if self._tray_failed:
             parts.append("托盘不可用")
@@ -1541,7 +1715,8 @@ def query_worker(name):
         return
     try:
         fn = {"kimi": fetch_kimi, "codex": fetch_codex, "glm": fetch_glm,
-              "main": fetch_main_radar, "community": fetch_community_radar}[name]
+              "deepseek": fetch_deepseek, "main": fetch_main_radar,
+              "community": fetch_community_radar}[name]
         data = validate_result(name, fn())
         payload = {"ok": True, "data": data}
     except Exception as ex:
