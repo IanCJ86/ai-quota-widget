@@ -2,6 +2,8 @@
 
 ## 未发布
 
+- 修复**启动瞬间左上角闪出一个空窗口**：overrideredirect(True) 会顺带按默认位置把窗口映射出来（实测旧顺序：mapped=1、200x200+0+0），之后才被隐藏，所以要靠运气才看得见一闪。现在**先隐藏、并在任何可能映射之前就把尺寸和位置设好**（实测新顺序：mapped=0，位置已是最终值）。
+- 隐藏到托盘期间窗口位置不再"漂移"：_fit() 在窗口不可见时沿用上次记住的位置，而不是窗口管理器给出的占位坐标。
 - Codex 卡片：接口返回的快照若属于**已经重置的窗口**，该来源标灰并显示「窗口已过期」，同时计入底部「待更新」，不再把上一个窗口的数字当成当前值（`codex app-server` 不提供采集时间，窗口内的小幅滞后无法识别，已在 README「支持范围与局限」写明）。
 - GLM Key 不再只能明文存放：新增右键菜单「安全保存 API Key…」（Windows DPAPI 加密写入 `glm-key.dpapi`，并清空 config.json 里的明文）与「清除已保存的 Key」，另支持环境变量 `AI_QUOTA_WIDGET_GLM_API_KEY`；读取顺序为环境变量 → 加密文件 → config.json 旧字段。系统加密不可用时明确报错，**不会退回明文写入**。
 - 新增 **DeepSeek 余额卡片**（`show_deepseek`，默认开）：DeepSeek 是按量付费，官方 `api.deepseek.com/user/balance` 只有余额、没有百分比额度与用量接口，所以卡片显示金额与**今日消耗**；`deepseek_low_balance`（默认 20）以下显示橙色、低于四分之一显示红色，`0` 关闭提醒。今日消耗由本机按余额变化估算（`deepseek-spend.json`：当天首个余额为起点、充值抬高起点、跨天归零）。Key 复用同一套安全存放（`DEEPSEEK_API_KEY` / `AI_QUOTA_WIDGET_DEEPSEEK_API_KEY` → `deepseek-key.dpapi` → `deepseek_api_key`），右键 `DeepSeek 设置` 可安全保存；Windows 上会直接读 `HKCU\Environment`，新设的环境变量无需重启资源管理器。

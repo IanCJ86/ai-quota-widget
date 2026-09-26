@@ -908,17 +908,31 @@ def fetch_deepseek():
 class App:
     def __init__(self, instance=None):
         self.root = tk.Tk()
+        # Hide it before anything else: wm overrideredirect() maps the window as
+        # a side effect, and Windows paints it at its default position first, so
+        # setting it up before withdrawing produced a brief flash in the top-left
+        # corner.  Withdrawn first, nothing is ever painted until deiconify().
+        self.root.withdraw()
         try:
             dpi = ctypes.windll.user32.GetDpiForSystem()
             self.root.tk.call("tk", "scaling", dpi / 72.0)
         except Exception:
             pass
         self.root.title("Quota")
+        # Size and position are set before the window can be shown, so even a
+        # stray map lands where the widget belongs.
+        w, h = 232, 212
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        try:
+            remembered = clamp_position(int(CFG.get("window_x", -1)),
+                                        int(CFG.get("window_y", -1)), w, h, sw, sh)
+        except (TypeError, ValueError):
+            remembered = None
+        self._pos = remembered or (sw - w - 40, sh - h - 90)
+        self.root.geometry("%dx%d+%d+%d" % (w, h, self._pos[0], self._pos[1]))
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
-        # Build the whole window while it is hidden, then show it once at its
-        # fitted size: otherwise the user sees the placeholder box resize.
-        self.root.withdraw()
         # Transparency and position are remembered between runs.
         try:
             self.alpha_val = max(40, min(100, int(CFG.get("window_alpha", 94))))
@@ -950,19 +964,6 @@ class App:
         self._name_labels = []
         self._bg_frames = []
         self._card_frames = []      # headers/spacers inside cards (theme colours)
-
-        w, h = 232, 212
-        sw = self.root.winfo_screenwidth()
-        sh = self.root.winfo_screenheight()
-        # Reuse the remembered spot when it is still usable (a monitor change can
-        # leave it off-screen), otherwise fall back to the bottom-right corner.
-        try:
-            remembered = clamp_position(int(CFG.get("window_x", -1)),
-                                        int(CFG.get("window_y", -1)), w, h, sw, sh)
-        except (TypeError, ValueError):
-            remembered = None
-        x, y = remembered or (sw - w - 40, sh - h - 90)
-        self.root.geometry(f"{w}x{h}+{x}+{y}")
 
         sp1 = tk.Frame(self.root, bg=BG, height=6)
         sp1.grid(row=0, column=0)
@@ -1149,8 +1150,11 @@ class App:
         h = self.root.winfo_reqheight() + 6
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        x = self.root.winfo_x()
-        y = self.root.winfo_y()
+        # While hidden in the tray the window manager reports a placeholder
+        # position, so keep the spot we last knew about instead of moving it.
+        if self.root.winfo_viewable():
+            self._pos = (self.root.winfo_x(), self.root.winfo_y())
+        x, y = self._pos
         # only pull back when genuinely overflowing the screen edges
         if x + w > sw - 8:
             x = sw - w - 8
@@ -1544,6 +1548,7 @@ class App:
             return
         self._drag = None
         x, y = self.root.winfo_x(), self.root.winfo_y()
+        self._pos = (x, y)
         if CFG.get("window_x") != x or CFG.get("window_y") != y:
             CFG["window_x"], CFG["window_y"] = x, y
             _save_config(CFG)
