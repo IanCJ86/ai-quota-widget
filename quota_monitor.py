@@ -170,20 +170,20 @@ GLM_PURPLE = "#b48cff"
 GLM_PURPLE_SOFT = "#c9b3f2"
 DEEPSEEK_BLUE = "#4d6bfe"
 DEEPSEEK_SOFT = "#8fa2ff"
-# One type scale for the whole widget: 9 for a card's title and every body row
-# (labels, values, notes), 8 for the refresh line and dialog hints.  Same-role
-# text uses the same size; the values are bold only (weight, not size).  Money
-# is monospaced because padding with spaces only lines the decimal points up
-# when a space is as wide as a digit - and it is a size up, because monospaced
-# digits of the same nominal size look smaller than the proportional ones.
+# One type scale for the whole widget: card titles 9, every body row (labels,
+# values, notes) and the refresh line 8.  Same-role text uses the same size;
+# values are told apart by weight only.  Money is monospaced because padding
+# with spaces only lines the decimal points up when a space is as wide as a
+# digit - and its nominal size is one up, because monospaced digits look smaller
+# than proportional ones (both measure a 16px line space here).
 FONT_FAMILY = "Microsoft YaHei UI"
 FONT_TITLE = (FONT_FAMILY, 9, "bold")
-FONT_TEXT = (FONT_FAMILY, 9)
-FONT_VALUE = (FONT_FAMILY, 9, "bold")
+FONT_TEXT = (FONT_FAMILY, 8)
+FONT_VALUE = (FONT_FAMILY, 8, "bold")
 FONT_STATUS = (FONT_FAMILY, 8)
 FONT_HINT = (FONT_FAMILY, 8)
-MONEY_FONT = ("Cascadia Mono", 10, "bold")      # falls back to Consolas
-MONEY_FALLBACK = ("Consolas", 11, "bold")
+MONEY_FONT = ("Cascadia Mono", 9, "bold")       # falls back to Consolas
+MONEY_FALLBACK = ("Consolas", 10, "bold")
 # A card title shares its row with the renewal date. They are placed left and
 # right so they can never overlap; this cap only stops an absurd plan name from
 # taking the whole row.
