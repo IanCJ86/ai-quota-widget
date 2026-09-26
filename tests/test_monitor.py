@@ -780,6 +780,34 @@ class UITests(unittest.TestCase):
             # a directory without logs is not an error, just no figure
             self.assertIsNone(monitor.local_harness_tokens(today, directory + "-missing"))
 
+    def test_position_lock_and_drag_alpha(self):
+        """A locked window must not move at all, and a drag makes it opaque so
+        Windows stops tearing the translucent panel while it is moved."""
+        a = self.app
+
+        class Event:
+            def __init__(self, x, y):
+                self.x, self.y = x, y
+
+        a.root.deiconify()
+        a.root.geometry("+300+300")
+        a.root.update()
+        a.lock_position.set(True)
+        a._drag_start(Event(10, 10))
+        self.assertIsNone(a._drag, "a locked widget must not start a drag")
+        a._drag_move(Event(80, 80))
+        a.root.update()
+        self.assertEqual((a.root.winfo_x(), a.root.winfo_y()), (300, 300))
+
+        a.lock_position.set(False)
+        a.alpha_val = 90
+        a.root.attributes("-alpha", 0.9)
+        a._drag_start(Event(10, 10))
+        self.assertIsNotNone(a._drag)
+        self.assertAlmostEqual(float(a.root.attributes("-alpha")), 1.0, places=2)
+        a._drag_end()
+        self.assertAlmostEqual(float(a.root.attributes("-alpha")), 0.9, places=2)
+
     def test_hidden_cards_are_not_queried(self):
         """A card that is switched off must cost nothing: no worker, no API call.
         The tray follows the visible cards so it never points at a stale source."""

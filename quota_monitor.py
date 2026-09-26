@@ -1028,6 +1028,10 @@ class App:
         self._st = CFG
         self.menu.add_checkbutton(label="置顶", variable=self.topmost,
                                 command=self._toggle_top)
+        self.lock_position = tk.BooleanVar(value=CFG.get("lock_position", False))
+        self.menu.add_checkbutton(label="锁定位置（拖动不移动）",
+                                  variable=self.lock_position,
+                                  command=self._toggle_lock_position)
         self.menu.add_command(label="立即刷新", command=self.refresh_async)
         self.menu.add_separator()
         self.show_kimi = tk.BooleanVar(value=self._st.get("show_kimi", True))
@@ -1143,6 +1147,8 @@ class App:
 
     def _fit(self):
         """Resize window to fit content, clamped fully on-screen."""
+        if self._drag:
+            return          # never fight a drag in progress with a resize
         self.root.update_idletasks()
         self._sync_columns()
         self.root.update_idletasks()
@@ -1534,10 +1540,16 @@ class App:
             self._bind(child)
 
     def _drag_start(self, e):
-        self._drag = (e.x, e.y)
+        if not self.lock_position.get():
+            self._drag = (e.x, e.y)
+            # A translucent, borderless, always-on-top window tears while being
+            # dragged (Windows repaints it piecemeal), which reads as the same
+            # panel flickering across the screen.  Go opaque for the drag.
+            if self.alpha_val < 100:
+                self.root.attributes("-alpha", 1.0)
 
     def _drag_move(self, e):
-        if self._drag:
+        if self._drag and not self.lock_position.get():
             x = self.root.winfo_x() + e.x - self._drag[0]
             y = self.root.winfo_y() + e.y - self._drag[1]
             self.root.geometry(f"+{x}+{y}")
@@ -1547,11 +1559,17 @@ class App:
         if not self._drag:
             return
         self._drag = None
+        self.root.attributes("-alpha", self.alpha_val / 100)
         x, y = self.root.winfo_x(), self.root.winfo_y()
         self._pos = (x, y)
         if CFG.get("window_x") != x or CFG.get("window_y") != y:
             CFG["window_x"], CFG["window_y"] = x, y
             _save_config(CFG)
+
+    def _toggle_lock_position(self):
+        CFG["lock_position"] = self.lock_position.get()
+        _save_config(CFG)
+        self._render()
 
     def _menu(self, e):
         self.menu.tk_popup(e.x_root, e.y_root)
