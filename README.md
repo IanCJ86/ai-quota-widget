@@ -2,9 +2,29 @@
 
 一个 Windows 桌面悬浮小工具，定时显示 **Kimi Code**、**Codex**、可选 **GLM** 的用量额度，以及 **DeepSeek** 余额和本机 token 统计：
 
-![screenshot](screenshot.png)
+![AI Quota Widget 界面](docs/images/hero.png)
+
+五套主题，右键即换（黑夜月之暗面 / 白天月之亮面 / 蒸汽算力机 / Token 加油站 / 电子墨水账本）：
+
+![五套主题](docs/images/themes.gif)
+
+
+## 支持矩阵（先看这张表再装）
+
+| 卡片 | 需要什么 | 数据从哪来 |
+| --- | --- | --- |
+| **Kimi** | 本机登录过 Kimi Code CLI | 官方接口，只读本机凭据 |
+| **Codex** | 本机登录过 Codex CLI | 经本机 codex app-server 读取；额度可能是本机保存的快照 |
+| **GLM**（可选） | GLM Key + 有效套餐 | 智谱官方接口 |
+| **DeepSeek**（可选） | DeepSeek Key | 官方余额接口；「今日」是余额差额估算，**不是官方账单** |
+| **重置雷达** | 无需任何凭据 | **第三方社区站点 [codexreset.org](https://codexreset.org)** —— 非 OpenAI 官方、与本项目无关联，可在右键菜单一键关闭 |
+
+> - 一个来源都没登录也能装，只是对应卡片会显示 --（跑 --doctor 会告诉你缺什么）
+> - 程序**只读本机**，不向第三方发送凭据；GLM / DeepSeek 的 Key 用 **Windows DPAPI 加密**存在本机
+> - 想先看效果再决定？python quota_monitor.py --once 可在终端一次性打印当前额度
 
 ## 当前能力
+
 
 - 通知区域显示透明背景的大号额度数字；✕ 隐藏到托盘，点击图标或再次运行启动器可恢复，退出请用右键菜单。
 - 每个来源独立查询，最多两个查询进程同时运行；查询结束即释放。超时自动终止本工具启动的进程树，不影响其他 Codex 任务。
