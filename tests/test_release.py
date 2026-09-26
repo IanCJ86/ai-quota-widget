@@ -186,6 +186,10 @@ class CliTests(unittest.TestCase):
             self.assertEqual(result.returncode,0,result.stderr)
 
 class InstallTests(unittest.TestCase):
+    def test_child_output_supports_chinese_on_english_windows(self):
+        with patch.dict(os.environ,{'PYTHONIOENCODING':'cp1252','PYTHONUTF8':'0'}):
+            result=installer.run([sys.executable,'-c',"print('中文安装目录')"])
+        self.assertEqual(result.stdout.decode('utf-8').strip(),'中文安装目录')
     def test_running_app_not_killed_or_overwritten(self):
         with patch.object(installer,'running',return_value=True),patch.object(installer,'run') as run:
             with self.assertRaisesRegex(RuntimeError,'仍在运行'): installer.install('unused')

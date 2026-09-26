@@ -35,8 +35,11 @@ def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 def run(args, stage='检查'):
+    # Redirected pip output otherwise uses the system ANSI codepage on Windows.
+    # English Windows + a Chinese destination can fail *after* installing deps.
+    env = dict(os.environ, PYTHONIOENCODING='utf-8', PYTHONUTF8='1')
     process = subprocess.run(args, capture_output=True, timeout=240,
-                             creationflags=0x08000000 if os.name == 'nt' else 0)
+                             env=env, creationflags=0x08000000 if os.name == 'nt' else 0)
     if process.returncode:
         # Do not echo pip output, URLs with credentials or arbitrary exception text.
         stderr=process.stderr.decode('utf-8','replace')
