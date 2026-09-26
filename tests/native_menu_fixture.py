@@ -8,6 +8,7 @@ from ctypes import wintypes
 import faulthandler
 import json
 import sys
+import time
 
 from test_monitor import UITests, monitor
 
@@ -23,6 +24,7 @@ def main():
     callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
     user.EnumThreadWindows.argtypes = [wintypes.DWORD, callback_type, wintypes.LPARAM]
     user.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user.IsWindowVisible.argtypes = [wintypes.HWND]
     user.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
     errors, completed = [], []
     app.root.report_callback_exception = lambda kind, value, tb: errors.append(str(value))
@@ -35,19 +37,23 @@ def main():
                   if menu.type(i) != 'separator']
         return [0x28] * (labels.index(label) + 1)  # VK_DOWN, skips separators
 
-    def select(label, submenu=None, item=None):
+    def select(label, submenu=None, item=None, deadline=None):
+        deadline = deadline or time.monotonic() + 1.5
         windows = []
 
         @callback_type
         def visit(hwnd, _):
             name = ctypes.create_unicode_buffer(256)
             user.GetClassNameW(hwnd, name, len(name))
-            if name.value == '#32768':
+            if name.value == '#32768' and user.IsWindowVisible(hwnd):
                 windows.append(hwnd)
             return True
 
         user.EnumThreadWindows(kernel.GetCurrentThreadId(), visit, 0)
         if len(windows) != 1:
+            if time.monotonic() < deadline:
+                app.root.after(10, lambda: select(label, submenu, item, deadline))
+                return
             errors.append('expected one native popup, got ' + str(len(windows)))
             user.EndMenu()
             return
@@ -56,10 +62,16 @@ def main():
             # Windows selects the first enabled submenu item on VK_RIGHT.
             keys += [0x27] + steps(submenu, item)[1:]
         keys += [0x0d]  # VK_RETURN
-        for key in keys:
+        def send(index=0):
+            key = keys[index]
             if not user.PostMessageW(windows[0], 0x100, key, 0):
                 errors.append('PostMessage failed')
             user.PostMessageW(windows[0], 0x101, key, 0)
+            # Let the native menu consume each navigation step before posting
+            # the next (especially VK_RIGHT, which creates a submenu).
+            if index + 1 < len(keys):
+                app.root.after(5, lambda: send(index + 1))
+        send()
 
     def popup(label, submenu=None, item=None):
         app.root.after(50, lambda: select(label, submenu, item))

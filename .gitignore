@@ -4,6 +4,7 @@ last-good.json
 glm-key.dpapi
 deepseek-key.dpapi
 deepseek-spend.json
+deepseek-spend.json.lock
 harness-totals.json
 .review-deps/
 dist/

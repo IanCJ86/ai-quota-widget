@@ -1,6 +1,7 @@
 """Shared, side-effect-free status/config contracts for GUI and headless tools."""
 import math
 import time
+from datetime import datetime
 
 SOURCES = ('kimi', 'codex', 'glm', 'deepseek', 'main', 'tokens')
 ACCOUNT_SOURCES = SOURCES[:4]
@@ -12,6 +13,8 @@ ERROR_LABELS = {
     'StartFailed': '查询进程启动失败', 'WorkerFailed': '查询进程异常',
     'no_key': '未配置Key', 'no_credentials': '未登录', 'no_runtime': '未安装运行时',
     'no_cache': '暂无数据', 'PermissionError': '本机权限不足',
+    'UsageSchemaError': '日志格式不兼容', 'UsageReadError': '日志损坏或无法读取',
+    'UsageBudgetError': '日志扫描超出限额', 'SpendWriteFailed': '估算记录保存失败',
 }
 
 def error_label(error):
@@ -28,8 +31,17 @@ def finite(value):
         return False
 
 def window_expired(data, prefix, now=None):
-    value = data.get(prefix + '_reset')
+    value = timestamp(data.get(prefix + '_reset'))
     return finite(value) and value <= (time.time() if now is None else now)
+
+
+def timestamp(value):
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace('Z', '+00:00')).timestamp()
+        except (ValueError, OverflowError, OSError):
+            return None
+    return value if finite(value) and 0 < value < 253402300800 else None
 
 def source_status(data, stamp=0, verified=False, error=None, now=None, interval=900):
     now = time.time() if now is None else now

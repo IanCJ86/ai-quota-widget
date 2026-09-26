@@ -21,9 +21,11 @@
 | **DeepSeek**（可选） | DeepSeek Key | 官方余额接口；「今日」是余额差额估算，**不是官方账单** |
 | **重置雷达** | 无需任何凭据 | **第三方社区站点 [codexreset.org](https://codexreset.org)** —— 非 OpenAI 官方、与本项目无关联，可在右键菜单一键关闭 |
 
+**监控的是账户，而不只是客户端。** 例如在 OpenCode / Claude Code 中使用同一个 GLM Coding Plan 或 DeepSeek 官方 API 账户，套餐额度/余额依然有参考价值；不表示本工具统计了这些客户端各自的 token。DeepSeek 余额与「今日估算」覆盖账户余额变化，`tok` 仅来自本机 Harness 日志。当前没有 Claude 原生订阅、第三方中转余额或 Kimi Work 积分的专用适配；Kimi 查询仍需本机可识别的 Kimi Code 登录，Codex 查询需本机可用的登录与 app-server，不是 OpenAI API 余额查询。
+
 > - 一个来源都没登录也能装，只是对应卡片会显示 --（跑 --doctor 会告诉你缺什么）
 > - 程序在本机运行，查询需访问对应服务；认证凭据只用于对应官方服务，不发给第三方雷达。菜单保存的GLM / DeepSeek Key由Windows DPAPI加密；环境变量和旧版明文配置不等同加密存储。
-> - `python quota_monitor.py --once` 只读已有缓存，首次可能没有数据；加 `--fresh` 才联网查询。诊断已安装版本时请使用start.bat绑定的Python和 `--data-dir "实际安装目录"`。
+> - 成品包内 `quota-cli.exe --once` 只读已有缓存，首次可能没有数据；加 `--fresh` 才联网查询。`quota-cli.exe --doctor` 为离线诊断：0=正常，1=待配置或告警，2=必要运行环境损坏。
 
 ## 当前能力
 
@@ -36,25 +38,38 @@
 - 单实例、休眠返回补查、配置/缓存原子写入；托盘不可用时保留主窗口。
 - 数字/新旧状态不变时不重绘图标，空闲不常驻查询子进程。
 
-升级前先从右键菜单退出旧版，再运行 `install.ps1`，已有 `config.json` 会保留。请使用完整源码/安装包，不要只替换 quota_monitor.py：安装器按 `runtime-files.txt` 复制所有运行模块，依赖由安装器安装。
+升级前先从右键菜单退出旧版，再运行新成品包的 `install.cmd`。账户配置保留，不需要安装 Python 或依赖，不要单独替换源码文件。
 
-右键菜单可查看内建版本，也可运行 `python quota_monitor.py --version`。`debug.txt` 中的 `app_version` / `user_agent` 表示实际运行代码版本；文件里的其他 `version: 1` 是数据格式版本，不是程序版本。DeepSeek 的 `439M tok` 表示本机Harness当日约4.39亿 token，不是内存大小。
+右键菜单可查看内建版本，也可运行 `quota-cli.exe --version`。`debug.txt` 中的 `app_version` / `user_agent` 表示实际运行代码版本；文件里的其他 `version: 1` 是数据格式版本，不是程序版本。DeepSeek 的 `439M tok` 表示本机Harness当日约4.39亿 token，不是内存大小。
 
 开发模块边界见 [结构说明](docs/architecture.md)。待发布分支不等于已经发布的 Release。
 
-v1.3的安装、wheel/uvx入口、离线诊断、CLI查询和异常显示语义见 [技术使用说明](docs/cli-and-install.md)。日常使用双击安装目录的 `start.bat`；诊断可用右键“复制脱敏诊断”。
+源码开发入口、离线诊断、CLI查询和异常显示语义见 [技术使用说明](docs/cli-and-install.md)。成品版日常双击桌面快捷方式或 `quota-widget.exe`；诊断可用右键“复制脱敏诊断”。
 
-## 五套主题（1.3.0）
+## 六套主题与截图
 
 右键面板 → **主题** 即时切换，选择自动保存。新安装默认毛玻璃；升级保留已有主题选择。旧配置的 `dark` / `light` 对应月之暗面 / 月之亮面。
 
 | 主题 | 风格 | 实际界面（测试数据） |
 | --- | --- | --- |
+| 毛玻璃 `glass`（默认） | 简洁面板，系统支持时启用 Acrylic | [预览](docs/images/hero.png) |
 | 月之暗面 `dark` | 石墨黑、月牙、柔和品牌色 | [预览](docs/images/dark.png) |
 | 月之亮面 `light` | 白色卡片、浅蓝灰背景、满月 | [预览](docs/images/light.png) |
 | 蒸汽算力机 `steam` | 黄铜仪表、铆钉、棕黑面板 | [预览](docs/images/steam.png) |
 | Token 加油站 `fuel` | 油枪图标、荧光油量条、深蓝面板 | [预览](docs/images/fuel.png) |
 | 电子墨水账本 `ink` | 暖纸白、墨黑数字、细线账本 | [预览](docs/images/ink.png) |
+
+每套主题一张独立 PNG，可点击查看、保存原图。以下为真实程序以同一组演示数据渲染的界面，并非个人账单；只展示三张账户卡，不表示必须同时使用这些服务。毛玻璃图为窗口内容截图，不包含桌面合成的透色、模糊和阴影效果。
+
+| 毛玻璃 | 月之暗面 |
+| --- | --- |
+| [<img src="docs/images/hero.png" width="300" alt="毛玻璃主题，合成演示数据">](docs/images/hero.png) | [<img src="docs/images/dark.png" width="300" alt="月之暗面主题，合成演示数据">](docs/images/dark.png) |
+| **月之亮面** | **蒸汽算力机** |
+| [<img src="docs/images/light.png" width="300" alt="月之亮面主题，合成演示数据">](docs/images/light.png) | [<img src="docs/images/steam.png" width="300" alt="蒸汽算力机主题，合成演示数据">](docs/images/steam.png) |
+| **Token 加油站** | **电子墨水账本** |
+| [<img src="docs/images/fuel.png" width="300" alt="Token 加油站主题，合成演示数据">](docs/images/fuel.png) | [<img src="docs/images/ink.png" width="300" alt="电子墨水账本主题，合成演示数据">](docs/images/ink.png) |
+
+开发者可用 `python tests/render_readme.py` 重生成仓库配图；增加 `--dpi-percent 400 --output "输出目录"` 可导出用于新媒体排版的高分辨率原生截图，不拉伸已有图片。脚本在隔离测试桌面运行，不读取个人额度、不启动真实查询或托盘。
 
 所有皮肤仍显示相同额度、金额、token、重置券和雷达；上方仪表依次选取已显示的 Codex / Kimi / GLM 周余量，并标明来源。不把 DeepSeek 金额当作百分比。过期或查询失败显示待更新，不画有效指针/油量。静态矢量绘制，没有常驻动画、额外查询或新依赖；透明度越低，可读性越容易受桌面背景影响。
 
@@ -163,13 +178,15 @@ python quota_monitor.py
 
 **API Key 的存放顺序**（先命中者生效）：
 
-1. 环境变量：GLM 用 `AI_QUOTA_WIDGET_GLM_API_KEY`；DeepSeek 用 `AI_QUOTA_WIDGET_DEEPSEEK_API_KEY` 或官方的 `DEEPSEEK_API_KEY`（程序不另存副本；Windows 持久环境变量本身存于注册表，并非加密保险箱）
-2. 本机加密文件 `glm-key.dpapi` / `deepseek-key.dpapi`（Windows DPAPI 加密，只有当前 Windows 账户能解密）
+1. 本机加密文件 `glm-key.dpapi` / `deepseek-key.dpapi`（Windows DPAPI 加密，只有当前 Windows 账户能解密；界面保存的新 Key 优先，切换后清除旧账户显示并重新查询）
+2. 环境变量：GLM 用 `AI_QUOTA_WIDGET_GLM_API_KEY`；DeepSeek 用 `AI_QUOTA_WIDGET_DEEPSEEK_API_KEY` 或官方的 `DEEPSEEK_API_KEY`（清除本机 Key 后可回退到环境变量；本工具不修改系统变量）
 3. `config.json` 的 `glm_api_key` / `deepseek_api_key`（旧版明文，仅兼容）
 
 Windows 上程序还会直接读 `HKCU\Environment`，所以新设的环境变量不需要重启资源管理器或电脑。右键菜单 `GLM Coding Plan 设置` / `DeepSeek 设置` → 「安全保存 API Key…」加密保存后清理 config.json / 旧 settings.json 的对应明文字段；任何一步失败都会提示未完成，不把“已生成加密副本”误报为“明文清理完成”。「清除已保存的 Key」清理本程序的文件副本，不删除用户环境变量。系统加密不可用时不会退回明文写入。
 
 ### 关于 GLM 卡片
+
+本机 Harness token 统计不要求 DeepSeek API Key；没有 Key 时余额显示未配置，token 仍可独立统计。右键 DeepSeek 设置可选择自定义 sessions 日志目录，或恢复默认 `~/.dsh/sessions`；配置项为 `harness_sessions_dir`，空字符串表示默认路径。日志损坏、未知格式或扫描超限不会显示假零。
 
 GLM 额度接口（`monitor/usage/quota/limit`）是智谱官方 Claude Code 插件使用的内部接口，需要**有效的 GLM Coding Plan Key** 才能调通；套餐过期或 Key 无效时该卡片刷新失败（状态行会提示 `glm`）。接口返回每 5 小时与每周两条 `TOKENS_LIMIT` 记录，widget 按 `reset_time` 升序取前两条展示，另有一条每月 MCP `TIME_LIMIT` 目前不显示。
 

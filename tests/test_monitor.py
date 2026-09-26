@@ -319,7 +319,7 @@ class SecretTests(unittest.TestCase):
         if os.name != "nt" or not self.dpapi:
             self.skipTest("Windows DPAPI unavailable in this session")
 
-    def test_resolution_order_env_then_encrypted_then_legacy(self):
+    def test_resolution_order_explicit_local_then_env_then_legacy(self):
         self.require_dpapi()
         monitor.CFG["glm_api_key"] = "sk-legacy"
         self.assertEqual(monitor.glm_api_key(), "sk-legacy")
@@ -327,6 +327,8 @@ class SecretTests(unittest.TestCase):
         self.assertEqual(monitor.CFG["glm_api_key"], "")   # plaintext copy dropped
         self.assertEqual(monitor.glm_api_key(), "sk-encrypted")
         with patch.dict(os.environ, {monitor.GLM_KEY_ENV: "sk-env"}):
+            self.assertEqual(monitor.glm_api_key(), "sk-encrypted")
+            self.assertTrue(monitor.clear_glm_key())
             self.assertEqual(monitor.glm_api_key(), "sk-env")
 
     def test_stored_key_is_encrypted_on_disk(self):
@@ -494,12 +496,13 @@ class DeepSeekTests(unittest.TestCase):
         # A new day starts a fresh baseline.
         self.assertEqual(monitor.deepseek_spend(168.0, today="2026-09-27"), 0.0)
 
-    def test_spend_state_is_written_and_recovers_from_garbage(self):
+    def test_spend_state_is_written_and_garbage_is_not_silent_zero(self):
         monitor.deepseek_spend(50.0, today="2026-09-26")
         self.assertEqual(json.loads(self.spend_file.read_text(encoding="utf-8"))["day"],
                          "2026-09-26")
         self.spend_file.write_text("not json", encoding="utf-8")
-        self.assertEqual(monitor.deepseek_spend(49.0, today="2026-09-26"), 0.0)
+        with self.assertRaises(ValueError):
+            monitor.deepseek_spend(49.0, today="2026-09-26")
 
     def test_fetch_deepseek_reports_today_spend(self):
         class Response(io.StringIO):
@@ -606,7 +609,11 @@ class WindowsTests(unittest.TestCase):
 class UITests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        (Path(self.tmp.name) / 'auth.json').write_text('{}', encoding='utf-8')
         self.patches = [patch.object(monitor, "CACHE_FILE", str(Path(self.tmp.name) / "cache.json")),
+                        patch.object(monitor, 'KIMI_CRED', str(Path(self.tmp.name)/'auth.json')),
+                        patch.object(monitor, 'CODEX_HOME', self.tmp.name),
+                        patch.object(monitor, 'DSH_SESSIONS', str(Path(self.tmp.name)/'sessions')),
                         patch.object(monitor, "CFG", dict(monitor.DEFAULT_CONFIG)),
                         patch.object(monitor, "deepseek_api_key", return_value="test-only"),
                         patch.object(monitor, "glm_api_key", return_value=""),

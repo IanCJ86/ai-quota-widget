@@ -8,6 +8,15 @@ import time
 
 from monitor_runtime import atomic_json
 
+class UsageSchemaError(ValueError):
+    pass
+
+class UsageReadError(ValueError):
+    pass
+
+class UsageBudgetError(ValueError):
+    pass
+
 
 @contextmanager
 def open_log(path):
@@ -22,7 +31,7 @@ def open_log(path):
         yield stream
 
 
-def totals(root, day=None, cache_path=None, budget=12):
+def totals(root, day=None, cache_path=None, budget=12, strict=False):
     """Cache complete per-file/day totals; reread only changed files.
 
     An incomplete scan returns None, never a plausible but partial total. Limits
@@ -31,6 +40,8 @@ def totals(root, day=None, cache_path=None, budget=12):
     """
     day = day or date.today()
     if not os.path.isdir(root):
+        if strict:
+            raise FileNotFoundError('usage directory missing')
         return None
     start = datetime.combine(day, datetime.min.time()).timestamp() * 1000
     end = datetime.combine(day + timedelta(days=1), datetime.min.time()).timestamp() * 1000
@@ -40,7 +51,7 @@ def totals(root, day=None, cache_path=None, budget=12):
         if cache_path:
             with open(cache_path, encoding="utf-8") as stream:
                 cache = json.load(stream)
-            if cache.get("version") == 1 and cache.get("day") == day.isoformat():
+            if cache.get("version") == 2 and cache.get("day") == day.isoformat():
                 cached = cache.get("files", {})
                 if not isinstance(cached, dict):
                     cached = {}
@@ -56,12 +67,12 @@ def totals(root, day=None, cache_path=None, budget=12):
             dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(base, d))]
             for name in files:
                 if time.monotonic() >= deadline:
-                    raise TimeoutError()
+                    raise UsageBudgetError()
                 if not name.endswith(".jsonl.zstd"):
                     continue
                 files_seen += 1
                 if files_seen > 10000:
-                    raise ValueError("too many logs")
+                    raise UsageBudgetError()
                 path = os.path.join(base, name)
                 if os.path.islink(path):
                     continue
@@ -79,13 +90,13 @@ def totals(root, day=None, cache_path=None, budget=12):
                     with open_log(path) as stream:
                         while True:
                             if time.monotonic() >= deadline:
-                                raise TimeoutError()
+                                raise UsageBudgetError()
                             line = stream.readline((16 << 20) + 1)
                             if not line:
                                 break
                             decoded += len(line)
                             if len(line) > 16 << 20 or decoded > 256 << 20:
-                                raise ValueError("log scan limit")
+                                raise UsageBudgetError()
                             if b'"usage"' not in line:
                                 continue
                             item = json.loads(line)
@@ -96,10 +107,10 @@ def totals(root, day=None, cache_path=None, budget=12):
                             if (not isinstance(stamp, (int, float)) or isinstance(stamp, bool)
                                     or not start <= stamp < end or not isinstance(usage, dict)):
                                 continue
-                            values = [usage.get(k, 0) for k in
+                            values = [usage.get(k) for k in
                                       ("totalTokens", "inputTokens", "outputTokens")]
                             if any(type(v) is not int or v < 0 for v in values):
-                                raise ValueError("invalid usage")
+                                raise UsageSchemaError('unrecognized usage fields')
                             count += values[0]
                             new += values[1] + values[2]
                     after = os.stat(path)
@@ -110,15 +121,17 @@ def totals(root, day=None, cache_path=None, budget=12):
                 total += record["total"]
                 fresh += record["fresh"]
         return {"total": total, "fresh": fresh}
-    except (OSError, ValueError, ImportError, EOFError, TypeError):
-        return None
-    except Exception:
+    except Exception as exc:
         # Codec-specific truncation/errors must not turn into partial totals.
+        if strict:
+            if isinstance(exc, (UsageSchemaError, UsageBudgetError, PermissionError, ImportError)):
+                raise
+            raise UsageReadError('incomplete usage scan') from None
         return None
     finally:
         if cache_path:
             try:
-                atomic_json(cache_path, {"version": 1, "day": day.isoformat(),
+                atomic_json(cache_path, {"version": 2, "day": day.isoformat(),
                                          "files": completed})
             except OSError:
                 pass

@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from quota_state import finite, timestamp
 
 
 def atomic_json(path, value):
@@ -169,8 +170,52 @@ REQUIRED_KEYS = {"deepseek": ("ds_balance",), "tokens": ("ds_tokens_total", "ds_
 
 
 def validate_result(name, data):
-    if not isinstance(data, dict):
+    if name not in PERCENT_KEYS or not isinstance(data, dict):
         raise ValueError("invalid response")
+    fields = {
+        'kimi': ('k5_pct','kw_pct','k5_reset','kw_reset','k_plan'),
+        'codex': ('c5_pct','cw_pct','c5_reset','cw_reset','c_plan','c_window_expired',
+                  'cr_credit_count','cr_credit_expiry','cr_credit_expiries'),
+        'glm': ('g5_pct','gw_pct','g5_reset','gw_reset','g_plan'),
+        'deepseek': ('ds_balance','ds_spend','ds_spend_day','ds_granted','ds_topped_up',
+                     'ds_currency','ds_available','ds_plan','ds_spend_error'),
+        'main': ('cr_main24','cr_main48'),
+        'tokens': ('ds_tokens_total','ds_tokens_fresh','ds_tokens_day'),
+    }[name]
+    data = {k: v for k, v in data.items() if k in fields}
+    from datetime import date
+    for key, value in list(data.items()):
+        if value is None:
+            continue
+        if key.endswith('_reset') or key == 'cr_credit_expiry':
+            parsed = timestamp(value)
+            if parsed is None:
+                raise ValueError('invalid timestamp')
+            data[key] = parsed
+        elif key == 'cr_credit_expiries':
+            if not isinstance(value, list) or len(value) > 10000 or any(timestamp(v) is None for v in value):
+                raise ValueError('invalid expiries')
+            data[key] = [timestamp(v) for v in value]
+        elif key.endswith('_day'):
+            if not isinstance(value, str) or date.fromisoformat(value).isoformat() != value:
+                raise ValueError('invalid date')
+        elif key in ('c_window_expired','ds_available'):
+            if not isinstance(value, bool):
+                raise ValueError('invalid flag')
+        elif key.endswith('_plan'):
+            if not isinstance(value, str) or len(value) > 100:
+                raise ValueError('invalid plan')
+        elif key == 'ds_currency':
+            if value not in ('CNY','USD'):
+                raise ValueError('invalid currency')
+        elif key == 'ds_spend_error':
+            if value not in ('SpendWriteFailed',):
+                raise ValueError('invalid status')
+        elif not finite(value) or not 0 <= value <= 1e18:
+            raise ValueError('invalid number')
+        elif key.startswith('ds_tokens_') or key == 'cr_credit_count':
+            if type(value) is not int:
+                raise ValueError('invalid count')
     values = [data.get(key) for key in PERCENT_KEYS[name]]
     for value in values:
         if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))
@@ -178,7 +223,7 @@ def validate_result(name, data):
             raise ValueError("invalid percentage")
     for key in REQUIRED_KEYS.get(name, ()):
         value = data.get(key)
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+        if not finite(value) or value < 0:
             raise ValueError("invalid amount")
     if name == "tokens":
         from datetime import date
@@ -272,15 +317,16 @@ class Scheduler:
             worker.close()
         if payload.get("ok"):
             try:
-                validate_result(name, payload.get("data"))
+                payload = dict(payload, data=validate_result(name, payload.get("data")))
             except (ValueError, TypeError):
                 payload = dict(ok=False, error="InvalidResponse", retryable=True)
         success = bool(payload.get("ok"))
         if success:
             state.update(attempt=0, due=now + self.interval)
-            if name == "codex":
+            if name in ('codex','kimi','glm'):
                 wall = self.wall()
-                resets = [payload["data"].get(k) for k in ("c5_reset", "cw_reset")]
+                prefix = {'codex':'c','kimi':'k','glm':'g'}[name]
+                resets = [payload["data"].get(prefix+k) for k in ('5_reset', 'w_reset')]
                 future = [v - wall + 1 for v in resets
                           if isinstance(v, (int, float)) and math.isfinite(v) and v > wall]
                 if future:

@@ -11,7 +11,59 @@ $ErrorActionPreference = 'Stop'
 $watch = [Diagnostics.Stopwatch]::StartNew()
 $source = $PSScriptRoot
 $stage = $null
+$migrationStage = $null
 $installLock = $null
+
+function Invoke-DataMigration([string]$OldDirectory, [string]$DataDirectory) {
+    if (-not (Test-Path -LiteralPath $OldDirectory -PathType Container)) { throw '旧数据目录不存在或不是文件夹，未迁移。' }
+    $old = (Resolve-Path -LiteralPath $OldDirectory).Path
+    $cursor = $old
+    while ($cursor) {
+        if ((Get-Item -LiteralPath $cursor -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw '旧数据路径不能包含重解析链接。' }
+        $cursor = [IO.Path]::GetDirectoryName($cursor)
+    }
+    $names = @('config.json','settings.json','glm-key.dpapi','deepseek-key.dpapi','last-good.json','deepseek-spend.json','harness-totals.json')
+    $toCopy = @($names | Where-Object { Test-Path -LiteralPath (Join-Path $old $_) -PathType Leaf })
+    if (-not $toCopy.Count) { throw '旧目录没有可识别的数据文件，未迁移。请核对来源。' }
+    $data = [IO.Path]::GetFullPath($DataDirectory)
+    $parent = [IO.Path]::GetDirectoryName($data)
+    $cursor = $data
+    while ($cursor) {
+        if ((Test-Path -LiteralPath $cursor) -and ((Get-Item -LiteralPath $cursor -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw '数据路径不能包含重解析链接。' }
+        $cursor = [IO.Path]::GetDirectoryName($cursor)
+    }
+    foreach ($name in $toCopy) {
+        if ((Get-Item -LiteralPath (Join-Path $old $name) -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw '旧数据文件不能是链接。' }
+    }
+    if (Test-Path -LiteralPath $data) {
+        if (-not (Test-Path -LiteralPath $data -PathType Container)) { throw '目标数据路径不是文件夹。' }
+        $existing = @(Get-ChildItem -LiteralPath $data -Force)
+        if ($existing.Count) {
+            $same = $existing.Count -eq $toCopy.Count
+            foreach ($name in $toCopy) {
+                $dest = Join-Path $data $name
+                if (-not (Test-Path -LiteralPath $dest -PathType Leaf)) { $same = $false; break }
+                if ((Get-FileHash -LiteralPath $dest).Hash -ne (Get-FileHash -LiteralPath (Join-Path $old $name)).Hash) { $same = $false; break }
+            }
+            if ($same) { Write-Host '相同旧数据已完整迁移，继续安装。'; return }
+            throw '新数据目录已有个人数据，未覆盖。请核对迁移来源。'
+        }
+    }
+    New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    $script:migrationStage = Join-Path $parent ('.aiquota-migrate-'+[Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $script:migrationStage | Out-Null
+    foreach ($name in $toCopy) {
+        $from = Join-Path $old $name
+        $to = Join-Path $script:migrationStage $name
+        Copy-Item -LiteralPath $from -Destination $to
+        if ((Get-FileHash -LiteralPath $from).Hash -ne (Get-FileHash -LiteralPath $to).Hash) { throw '迁移校验失败，原数据保留。' }
+    }
+    # All bytes are verified before the only commit point (same-volume rename).
+    if (Test-Path -LiteralPath $data) { [IO.Directory]::Delete($data, $false) }
+    Move-Item -LiteralPath $script:migrationStage -Destination $data
+    $script:migrationStage = $null
+    Write-Host ('旧数据迁移完成：{0} 个文件。' -f $toCopy.Count)
+}
 try {
     $created = $false
     $installLock = [Threading.Mutex]::new($false, 'Local\AIQuotaWidget-Installer', [ref]$created)
@@ -22,7 +74,7 @@ try {
     if ($running) { $running.Dispose(); throw '额度监控正在运行。请在右键菜单选择“退出”，再安装；个人配置不会丢失。' }
     Write-Host '[1/4] 校验成品包（不需要安装 Python）'
     $manifest = Get-Content -LiteralPath (Join-Path $source 'bundle-manifest.json') -Encoding UTF8 -Raw | ConvertFrom-Json
-    if ($manifest.version -notmatch '^\d+\.\d+\.\d+$') { throw '安装包版本无效。' }
+    if ($manifest.version -notmatch '^\d+\.\d+\.\d+(?:rc\d+)?$') { throw '安装包版本无效。' }
     $root = [IO.Path]::GetFullPath($Destination).TrimEnd('\')
     if ($root -eq [IO.Path]::GetPathRoot($root).TrimEnd('\') -or $root -eq $env:USERPROFILE -or $root -eq $source) { throw '请选择独立安装目录。' }
     $cursor = $root
@@ -59,23 +111,40 @@ try {
     # Migration only when explicitly given a known old install by the user/agent.
     if ($ExistingDataDir) {
         $data = Join-Path $env:LOCALAPPDATA 'AIQuotaWidget'
-        $names = @('config.json','settings.json','glm-key.dpapi','deepseek-key.dpapi','last-good.json','deepseek-spend.json','harness-totals.json')
-        $toCopy = @($names | Where-Object { Test-Path -LiteralPath (Join-Path $ExistingDataDir $_) -PathType Leaf })
-        foreach ($name in $toCopy) {
-            if (Test-Path -LiteralPath (Join-Path $data $name)) { throw '新数据目录已有个人数据，未覆盖。请先核对迁移来源。' }
-        }
-        New-Item -ItemType Directory -Path $data -Force | Out-Null
-        foreach ($name in $toCopy) { Copy-Item -LiteralPath (Join-Path $ExistingDataDir $name) -Destination (Join-Path $data $name) }
+        Invoke-DataMigration $ExistingDataDir $data
     }
     Write-Host '[3/4] 创建快捷方式'
     $exe = Join-Path $target 'quota-widget.exe'
     if (-not $NoShortcut) {
         $shellObject = New-Object -ComObject WScript.Shell
-        foreach ($folder in @([Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('Programs'))) {
-            $shortcut = $shellObject.CreateShortcut((Join-Path $folder 'AI 额度监控.lnk'))
-            $shortcut.TargetPath = $exe
-            $shortcut.WorkingDirectory = $target
-            $shortcut.Save()
+        $links = @()
+        try {
+            foreach ($folder in @([Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('Programs'))) {
+                $final = Join-Path $folder 'AI 额度监控.lnk'
+                $tempLink = Join-Path $folder ('.aiquota-'+[Guid]::NewGuid().ToString('N')+'.lnk')
+                $original = if (Test-Path -LiteralPath $final) { [IO.File]::ReadAllBytes($final) } else { $null }
+                $links += [pscustomobject]@{ Path=$final; Temp=$tempLink; Original=$original; Changed=$false }
+                $shortcut = $shellObject.CreateShortcut($tempLink)
+                $shortcut.TargetPath = $exe
+                $shortcut.WorkingDirectory = $target
+                $shortcut.Save()
+            }
+            foreach ($link in $links) {
+                Move-Item -LiteralPath $link.Temp -Destination $link.Path -Force
+                $link.Changed = $true
+            }
+        } catch {
+            foreach ($link in $links) {
+                if ($link.Changed) {
+                    if ($null -ne $link.Original) { [IO.File]::WriteAllBytes($link.Path, $link.Original) }
+                    else { Remove-Item -LiteralPath $link.Path -Force }
+                }
+            }
+            throw
+        } finally {
+            foreach ($link in $links) {
+                if (Test-Path -LiteralPath $link.Temp) { Remove-Item -LiteralPath $link.Temp -Force }
+            }
         }
     }
     Write-Host ('[4/4] 安装完成，用时 {0:N1} 秒。无需等待未配置账户的查询。' -f $watch.Elapsed.TotalSeconds)
@@ -84,6 +153,16 @@ try {
     Write-Host ('安装未完成：'+$_.Exception.Message) -ForegroundColor Red
     exit 1
 } finally {
+    if ($migrationStage -and (Test-Path -LiteralPath $migrationStage)) {
+        $expectedParent = [IO.Path]::GetFullPath($env:LOCALAPPDATA).TrimEnd('\')+'\'
+        $resolvedMigration = [IO.Path]::GetFullPath($migrationStage)
+        if ($resolvedMigration.StartsWith($expectedParent+'.aiquota-migrate-',[StringComparison]::OrdinalIgnoreCase)) {
+            $entries = @((Get-Item -LiteralPath $migrationStage -Force)) + @(Get-ChildItem -LiteralPath $migrationStage -Recurse -Force)
+            if (-not @($entries | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }).Count) {
+                Remove-Item -LiteralPath $migrationStage -Recurse -Force
+            }
+        }
+    }
     if ($stage -and (Test-Path -LiteralPath $stage)) {
         $resolved = [IO.Path]::GetFullPath($stage)
         if ($resolved.StartsWith($root+'\.install-',[StringComparison]::OrdinalIgnoreCase) -and -not ((Get-Item -LiteralPath $stage -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) {

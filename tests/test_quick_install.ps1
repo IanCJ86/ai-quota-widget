@@ -2,7 +2,7 @@ param([Parameter(Mandatory=$true)][string]$ZipPath)
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $global:QuotaFixtureZip = (Resolve-Path -LiteralPath $ZipPath).Path
-if ([IO.Path]::GetFileName($global:QuotaFixtureZip) -notmatch '^ai-quota-widget-v(\d+\.\d+\.\d+)-windows-x64\.zip$') { throw 'Unexpected fixture filename' }
+if ([IO.Path]::GetFileName($global:QuotaFixtureZip) -notmatch '^ai-quota-widget-v(\d+\.\d+\.\d+(?:rc\d+)?)-windows-x64\.zip$') { throw 'Unexpected fixture filename' }
 $global:QuotaFixtureVersion = $Matches[1]
 $global:QuotaFixtureName = [IO.Path]::GetFileName($global:QuotaFixtureZip)
 $global:QuotaFixtureHash = (Get-FileHash -LiteralPath $global:QuotaFixtureZip -Algorithm SHA256).Hash

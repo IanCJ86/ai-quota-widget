@@ -1,11 +1,13 @@
 """Render public README assets from synthetic data, never personal accounts.
 
 Run: python tests/render_readme.py
-Uses the real GUI on a private desktop; screenshots are native 200% DPI,
-not enlarged 100% images. No desktop switching or real tray/network queries.
+Uses the real GUI on a private desktop; default screenshots are native 200%
+DPI (configurable), not enlarged bitmaps. No desktop switching or real
+tray/network queries.
 """
 from render_themes import capture, UITests, monitor, patch
 from pathlib import Path
+import argparse
 import time
 from PIL import Image
 
@@ -28,14 +30,21 @@ def save_theme_gif(frames, path):
 
 
 def main():
-    output = Path(__file__).resolve().parents[1] / 'docs' / 'images'
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output', type=Path,
+                        default=Path(__file__).resolve().parents[1] / 'docs' / 'images')
+    parser.add_argument('--dpi-percent', type=int, choices=(100, 150, 200, 300, 400),
+                        default=200, help='Native UI rendering scale; no bitmap enlargement')
+    args = parser.parse_args()
+    output = args.output
+    dpi = 96 * args.dpi_percent // 100
     output.mkdir(parents=True, exist_ok=True)
     fixture = UITests()
-    with patch.object(monitor.ctypes.windll.user32, 'GetDpiForSystem', return_value=192):
+    with patch.object(monitor.ctypes.windll.user32, 'GetDpiForSystem', return_value=dpi):
         fixture.setUp()
     frames = []
     try:
-        with patch.object(monitor.ctypes.windll.user32, 'GetDpiForWindow', return_value=192):
+        with patch.object(monitor.ctypes.windll.user32, 'GetDpiForWindow', return_value=dpi):
             app = fixture.app
             monitor.CFG.update(kimi_plan_name='Andante', codex_plan_name='Pro 20x',
                                renew_kimi='10-15', renew_codex='10-20')
