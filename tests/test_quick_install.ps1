@@ -7,12 +7,13 @@ $global:QuotaFixtureVersion = $Matches[1]
 $global:QuotaFixtureName = [IO.Path]::GetFileName($global:QuotaFixtureZip)
 $global:QuotaFixtureHash = (Get-FileHash -LiteralPath $global:QuotaFixtureZip -Algorithm SHA256).Hash
 $global:QuotaFixtureBadHash = $false
+$global:QuotaFixturePrerelease = $false
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('quota-quick-test-'+[Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $testRoot | Out-Null
 function Invoke-RestMethod {
     param($Uri,$Headers,$TimeoutSec)
     $url = 'https://github.com/IanCJ86/ai-quota-widget/releases/download/v'+$global:QuotaFixtureVersion+'/'
-    return [pscustomobject]@{tag_name=('v'+$global:QuotaFixtureVersion);draft=$false;prerelease=$false;assets=@(
+    return [pscustomobject]@{tag_name=('v'+$global:QuotaFixtureVersion);draft=$false;prerelease=$global:QuotaFixturePrerelease;assets=@(
         [pscustomobject]@{name=$global:QuotaFixtureName;size=(Get-Item -LiteralPath $global:QuotaFixtureZip).Length;browser_download_url=($url+'app.zip')},
         [pscustomobject]@{name='SHA256SUMS.txt';browser_download_url=($url+'SHA256SUMS.txt')})}
 }
@@ -33,6 +34,14 @@ try {
     try { & (Join-Path $repo 'quick-install.ps1') -NoLaunch -NoShortcut -Destination (Join-Path $testRoot 'bad') }
     catch { $rejected=$true }
     if (-not $rejected -or (Test-Path -LiteralPath (Join-Path $testRoot 'bad'))) { throw 'Bad checksum was not rejected before install' }
+    $global:QuotaFixtureBadHash=$false
+    $global:QuotaFixturePrerelease=$true
+    $rejected=$false
+    try { & (Join-Path $repo 'quick-install.ps1') -Version $global:QuotaFixtureVersion -NoLaunch -NoShortcut -Destination (Join-Path $testRoot 'pre-denied') }
+    catch { $rejected=$true }
+    if (-not $rejected -or (Test-Path -LiteralPath (Join-Path $testRoot 'pre-denied'))) { throw 'Prerelease installed without opt-in' }
+    & (Join-Path $repo 'quick-install.ps1') -Version $global:QuotaFixtureVersion -AllowPrerelease -NoLaunch -NoShortcut -Destination (Join-Path $testRoot 'pre-allowed')
+    if (-not (Test-Path -LiteralPath (Join-Path $testRoot ('pre-allowed/v'+$global:QuotaFixtureVersion+'/quota-widget.exe')))) { throw 'Pinned prerelease opt-in failed' }
     'PASS: quick entry, byte-array checksum response, offline package handoff, bad hash rejected'
 } finally {
     $resolved=[IO.Path]::GetFullPath($testRoot)
