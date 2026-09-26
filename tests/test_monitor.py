@@ -47,14 +47,14 @@ class SchedulerTests(unittest.TestCase):
                                            wall=lambda: self.clock.wall)
     def test_independent_results_and_bounded_concurrency(self):
         s = self.scheduler
-        s.configure(["codex", "kimi", "main", "community"])
+        s.configure(["codex", "kimi", "main", "glm"])
         s.tick()
         self.assertEqual(sum(x["worker"] is not None for x in s.states.values()), 2)
         s.states["kimi"]["worker"].done = True
         s.tick()
         self.assertEqual(self.results[0][0], "kimi")
         self.assertIsNotNone(s.states["main"]["worker"])
-        self.assertIsNone(s.states["community"]["worker"])
+        self.assertIsNone(s.states["glm"]["worker"])
     def test_three_attempts_then_backoff_and_recovery(self):
         s = self.scheduler
         s.configure(["codex"])
@@ -153,23 +153,17 @@ class SchedulerTests(unittest.TestCase):
 
 
 class DataTests(unittest.TestCase):
-    def test_percentage_validation_and_explicit_no_watch(self):
+    def test_percentage_validation(self):
         for value in (0, 1, 75, 100):
             runtime.validate_result("codex", {"cw_pct": value})
         for value in (-1, 101, float("nan"), True, "75"):
             with self.assertRaises(ValueError):
                 runtime.validate_result("codex", {"cw_pct": value})
-        runtime.validate_result("community", {"cr_resets_pct": None, "cr_resets_mode": "no_watch"})
+        # A source must report something: an empty payload is a failure.
         with self.assertRaises(ValueError):
-            runtime.validate_result("community", {"cr_resets_pct": None})
-    def test_community_one_percent_is_not_one_hundred(self):
-        with patch.object(monitor, "_fetch_public_text", side_effect=[b"no headline", json.dumps(
-                {"data": {"active_watch": {"reset_chance_percent": 1}}}).encode()]):
-            self.assertEqual(monitor.fetch_community_radar()["cr_resets_pct"], 1)
-    def test_community_schema_error_is_not_empty_watch(self):
-        with patch.object(monitor, "_fetch_public_text", side_effect=[b"no headline", b'{"data":{}}']):
-            with self.assertRaises(ValueError):
-                monitor.fetch_community_radar()
+            runtime.validate_result("codex", {"cw_pct": None})
+        with self.assertRaises(ValueError):
+            runtime.validate_result("main", {})
     def test_atomic_write_failure_keeps_previous_data(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "cache.json"
@@ -193,17 +187,15 @@ class DataTests(unittest.TestCase):
         self.assertIsNone(data["cw_pct"])
         p.kill.assert_called_once()
 
-    def _codex_proc(self, result, usage=None):
-        messages = [{"id": 0, "result": {}}, {"id": 1, "result": result},
-                    {"id": 2, "error": {"message": "unavailable"}}]
-        if usage is not None:
-            messages.append({"id": 3, "result": usage})
+    def _codex_proc(self, result):
         p = Mock()
         p.stdin = io.StringIO()
-        p.stdout = io.StringIO("\n".join(json.dumps(x) for x in messages))
+        p.stdout = io.StringIO("\n".join(json.dumps(x) for x in [
+            {"id": 0, "result": {}}, {"id": 1, "result": result},
+            {"id": 2, "error": {"message": "unavailable"}}]))
         return p
 
-    def test_codex_reset_credits_and_daily_tokens(self):
+    def test_codex_reset_credits(self):
         result = {
             "rateLimitsByLimitId": {"codex": {"primary": {
                 "usedPercent": 14, "windowDurationMins": 10080,
@@ -213,36 +205,18 @@ class DataTests(unittest.TestCase):
                 {"status": "available", "expiresAt": 1790000000},
                 {"status": "used", "expiresAt": 1780000000}]},
         }
-        usage = {"summary": {"peakDailyTokens": 1181266882},
-                 "dailyUsageBuckets": [{"startDate": "2026-09-23", "tokens": 254250474},
-                                       {"startDate": "2026-09-24", "tokens": 347035191}]}
         with patch.object(monitor.subprocess, "Popen",
-                          return_value=self._codex_proc(result, usage)):
+                          return_value=self._codex_proc(result)):
             data = monitor.fetch_codex()
         self.assertEqual(data["cr_credit_count"], 2)
         self.assertEqual(data["cr_credit_expiry"], 1790000000)   # soonest first
-        self.assertEqual(data["c_tokens_latest"], 347035191)     # newest bucket
-        self.assertEqual(data["c_tokens_date"], "2026-09-24")
         runtime.validate_result("codex", data)
-
-    def test_codex_usage_failure_keeps_quota_data(self):
-        """account/usage/read is optional: its failure must not lose the quota."""
-        result = {"rateLimitsByLimitId": {"codex": {"primary": {
-            "usedPercent": 12, "windowDurationMins": 10080,
-            "resetsAt": int(time.time()) + 3600}}}}
-        with patch.object(monitor.subprocess, "Popen",
-                          return_value=self._codex_proc(result)):   # no id 3 reply
-            data = monitor.fetch_codex()
-        self.assertEqual(data["cw_pct"], 88)
-        self.assertIsNone(data["c_tokens_latest"])
-        self.assertIsNone(data["cr_credit_count"])
 
     def test_codex_runtime_prefers_newest_versioned_binary(self):
         """An outdated bin\\codex.exe must not shadow the runtime in use.
 
-        The old CLI (found on this machine: 0.130 vs 0.158) has no
-        account/usage/read and no reset credits, which silently blanked both
-        new rows."""
+        The old CLI (found on this machine: 0.130 vs 0.158) has no reset
+        credits either, so the row stayed empty."""
         with tempfile.TemporaryDirectory() as directory:
             bin_dir = Path(directory)
             legacy = bin_dir / "codex.exe"
@@ -265,14 +239,7 @@ class DataTests(unittest.TestCase):
                 legacy.unlink()
                 self.assertEqual(monitor._find_codex_exe(), "codex")     # PATH
 
-    def test_token_and_day_formatting(self):
-        self.assertEqual(monitor._fmt_tokens(0), "0")
-        self.assertEqual(monitor._fmt_tokens(999), "999")
-        self.assertEqual(monitor._fmt_tokens(75682437), "75.7M")
-        self.assertEqual(monitor._fmt_tokens(347035191), "347M")
-        self.assertEqual(monitor._fmt_tokens(1181266882), "1.2B")
-        self.assertIsNone(monitor._fmt_tokens(None))
-        self.assertIsNone(monitor._fmt_tokens("x"))
+    def test_day_formatting(self):
         self.assertEqual(monitor._fmt_day("2026-09-24"), "09-24")
         self.assertEqual(monitor._fmt_day(1792700757),
                          time.strftime("%m-%d", time.localtime(1792700757)))
@@ -676,17 +643,6 @@ class UITests(unittest.TestCase):
         self.assertEqual(a.data["cw_pct"], 75)
         self.assertTrue(a._is_stale("codex"))
 
-    def test_no_watch_clears_previous_probability_but_failure_does_not(self):
-        a = self.app
-        a._on_result("community", {"ok": True, "data": {"cr_resets_pct": 89}}, {})
-        a._on_result("community", {"ok": False, "error": "Timeout"}, {})
-        self.assertEqual(a.data["cr_resets_pct"], 89)
-        a._on_result("community", {"ok": True, "data": {
-            "cr_resets_pct": None, "cr_resets_mode": "no_watch"}}, {})
-        self.assertIsNone(a.data["cr_resets_pct"])
-        self.assertEqual(a.rows["cr_resets"][1].cget("text"), "暂无投票")
-
-
     def test_codex_expired_snapshot_is_greyed_with_reason(self):
         """An ended window must not be presented as the current value."""
         a = self.app
@@ -768,18 +724,6 @@ class UITests(unittest.TestCase):
             a._on_result("codex", {"ok": True, "data": {
                 "cw_pct": 86, "cr_credit_count": 2}}, {})
             self.assertFalse(shown(a.rows["cr_credit"][0]))
-
-    def test_codex_token_row_reports_latest_bucket_with_its_date(self):
-        a = self.app
-        a._on_result("codex", {"ok": True, "data": {
-            "cw_pct": 86, "c_tokens_latest": 347035191,
-            "c_tokens_date": "2026-09-24"}}, {})
-        self.assertEqual(a.rows["c_tokens"][0].cget("text"), "347M")
-        self.assertEqual(a.rows["c_tokens"][1].cget("text"), "09-24")
-        # Like every other value, the last known number is kept (and greyed by
-        # the staleness pass) when a later payload does not carry a new one.
-        a._on_result("codex", {"ok": True, "data": {"cw_pct": 86}}, {})
-        self.assertEqual(a.rows["c_tokens"][0].cget("text"), "347M")
 
     def test_deepseek_spend_row_is_never_colour_warned(self):
         a = self.app

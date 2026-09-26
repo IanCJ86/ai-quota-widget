@@ -158,7 +158,6 @@ class SingleInstance:
 PERCENT_KEYS = {
     "kimi": ("k5_pct", "kw_pct"), "codex": ("c5_pct", "cw_pct"),
     "glm": ("g5_pct", "gw_pct"), "main": ("cr_main24", "cr_main48"),
-    "community": ("cr_resets_pct",),
     # Pay-as-you-go accounts have no percentage quota; they report money.
     "deepseek": (),
 }
@@ -179,9 +178,7 @@ def validate_result(name, data):
         value = data.get(key)
         if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
             raise ValueError("invalid amount")
-    # Explicitly no active community watch is valid data, not a network error.
-    if all(value is None for value in values) and not REQUIRED_KEYS.get(name) and not (
-            name == "community" and data.get("cr_resets_mode") == "no_watch"):
+    if all(value is None for value in values) and not REQUIRED_KEYS.get(name):
         raise ValueError("missing quota/probability")
     return data
 

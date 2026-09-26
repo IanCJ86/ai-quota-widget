@@ -7,11 +7,11 @@
 - 新增 **DeepSeek 余额卡片**（`show_deepseek`，默认开）：DeepSeek 是按量付费，官方 `api.deepseek.com/user/balance` 只有余额、没有百分比额度与用量接口，所以卡片显示金额与**今日消耗**；`deepseek_low_balance`（默认 20）以下显示橙色、低于四分之一显示红色，`0` 关闭提醒。今日消耗由本机按余额变化估算（`deepseek-spend.json`：当天首个余额为起点、充值抬高起点、跨天归零）。Key 复用同一套安全存放（`DEEPSEEK_API_KEY` / `AI_QUOTA_WIDGET_DEEPSEEK_API_KEY` → `deepseek-key.dpapi` → `deepseek_api_key`），右键 `DeepSeek 设置` 可安全保存；Windows 上会直接读 `HKCU\Environment`，新设的环境变量无需重启资源管理器。
 - 卡片可见性与分隔线改为通用实现：隐藏中间卡片时不再出现两条叠在一起的分隔线（新增 4 张卡片布局）。
 - 新增 **Codex 重置券**行（`show_codex_credits`，默认开）：显示可用「全额重置」券张数与到期日（7 天内到期变橙色），0 张时整行隐藏。数据来自 `account/rateLimits/read` 的 `rateLimitResetCredits`，不额外请求，也**不会**去消费你的券。
-- 新增 **Codex token 用量**行：显示 `account/usage/read` 里最新一天（按天桶实测滞后 1–2 天，所以同时标出该桶日期，不假装是今天）。
-- 修复 **codex CLI 选择**：优先使用 `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe` 中最新的运行时，旧 `bin\codex.exe` 只作兜底。旧版 app-server（实测 0.130 vs 0.158）没有 `account/usage/read` 与重置券字段，此前会静默拿不到这两项数据。
-- 修复 **DeepSeek 金额被截断**：金额行的列宽从 4 个平均字符放宽到 8（可容纳到 `¥99,999.99`）并改为右对齐；`¥118.73` 这类长金额不再被裁掉。
+- 按需求**移除两项**：Codex 的「token 用量」行（连带不再调用 `account/usage/read`）与「社区」投票行（连带不再访问 `codex-resets.com`，雷达只保留 `codexreset.org` 主源）。少一个第三方依赖，Codex 每次查询也快约 2 秒。
+- 修复 **codex CLI 选择**：优先使用 `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe` 中最新的运行时，旧 `bin\codex.exe` 只作兜底。旧版 app-server（实测 0.130 vs 0.158）没有重置券字段，此前会静默拿不到数据。
+- 修复 **数值列对齐**：所有卡片共用一个数字列（8 个平均字符宽、右对齐，可容纳到 `¥99,999.99`）。此前 DeepSeek 的金额列单独加宽并右对齐，整列比其它卡片凸出约 40px，看起来“没对齐”；现在百分比、张数与金额的右边缘都在同一列。
 - 退出时清理未执行的 Tk 定时器，关闭窗口不再出现 `invalid command name "..._poll"` 报错。
-- 测试由 25 项增加到 52 项：DPAPI 加解密与读取顺序、明文不回退、Codex 窗口过期/重置券/token 用量/codex 运行时选择、DeepSeek 余额/今日消耗与 Key 来源、金额列宽回归、卡片可见性/分隔线、右键菜单与口令输入框。
+- 测试由 25 项增加到 47 项：DPAPI 加解密与读取顺序、明文不回退、Codex 窗口过期/重置券/codex 运行时选择、DeepSeek 余额与今日消耗/Key 来源、数值列宽回归、卡片可见性/分隔线、右键菜单与口令输入框。
 
 ## v1.1.0 — 2026-09-23
 

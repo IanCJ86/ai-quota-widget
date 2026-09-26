@@ -5,7 +5,7 @@
 ## 前提
 
 - 用户系统是 Windows，且已登录过 Kimi Code CLI 和/或 Codex CLI。
-- **不需要向用户索要 CLI token 或密码**：读取本机已登录 CLI 的凭证，只用于对应官方服务认证。雷达访问两个第三方公开网站，不带任何凭据。
+- **不需要向用户索要 CLI token 或密码**：读取本机已登录 CLI 的凭证，只用于对应官方服务认证。雷达访问 `codexreset.org` 这个第三方公开网站，不带任何凭据。
 
 ## 步骤
 
@@ -64,7 +64,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 | `show_deepseek` | 是否显示 DeepSeek 卡片。DeepSeek 是按量付费，卡片显示**余额金额**而不是百分比 |
 | `deepseek_api_key` | 可选。DeepSeek API Key，**明文仅兼容**。优先用环境变量 `DEEPSEEK_API_KEY`（用户机器上通常已有）或 `AI_QUOTA_WIDGET_DEEPSEEK_API_KEY`，或让用户点右键菜单「DeepSeek 设置 → 安全保存 API Key…」 |
 | `deepseek_low_balance` | 余额低于此金额显示橙色、低于四分之一显示红色；`0` = 关闭变色提醒 |
-| `show_codex_credits` | 是否显示 Codex「重置券」行（可用券为 0 时该行本就不显示）。重置券与 token 用量要求较新的 codex 运行时：程序优先用 `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe` 里最新的那个 |
+| `show_codex_credits` | 是否显示 Codex「重置券」行（可用券为 0 时该行本就不显示）。重置券需要较新的 codex 运行时：程序优先用 `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe` 里最新的那个 |
 
 注意：GLM 卡片只有在**能取到 Key**（环境变量 / `glm-key.dpapi` / `glm_api_key` 任一来源）且 `show_glm` 为 true 时才出现；DeepSeek 卡片同理（`DEEPSEEK_API_KEY`、`deepseek-key.dpapi`、`deepseek_api_key` 任一 + `show_deepseek`）。需要**有效的 GLM Coding Plan** 才能取到 GLM 数据。不要主动把用户的 Key 明文写进 config.json——让用户自己在右键菜单里保存。
 
@@ -81,7 +81,7 @@ cd "%USERPROFILE%\Desktop\quota-widget" && start.bat
 - `errors` 里出现 `kimi` → 用户没登录 Kimi Code CLI，让其先运行一次 Kimi Code 登录。
 - `errors` 里出现 `codex` → 检查 CLI 安装与登录。默认托盘也查询 Codex；仅隐藏卡片不会关闭托盘需要的查询。
 - `errors` 里出现 `deepseek` → 用户机器上没有可用的 DeepSeek Key（环境变量 `DEEPSEEK_API_KEY`、`deepseek-key.dpapi`、`deepseek_api_key` 都没有）；`HTTP401` 表示 Key 无效。`ds_spend` 是本地估算的今日消耗（`deepseek-spend.json`），官方没有用量接口，不要拿它当账单。
-- 社区显示“暂无投票”表示接口明确无活跃投票；“待更新”或“旧 HH:MM”表示尚未取得新数据。查看对应来源的错误，不把所有 `--` 当成同一种故障。
+- “待更新”或“旧 HH:MM”表示尚未取得新数据。查看对应来源的错误，不把所有 `--` 当成同一种故障。
 
 ### 5. 完成
 

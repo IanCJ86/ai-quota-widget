@@ -176,10 +176,8 @@ PLAN_PRESETS = {
 }
 PLAN_CFG_KEY = {"kimi": "kimi_plan_name", "codex": "codex_plan_name",
                 "glm": "glm_plan_name"}
-# Global reset sources are public, third-party signals. They do not expose or
-# replace the account-specific Codex quota below.
-CODEX_RESETS_PAGE_URL = "https://codex-resets.com/"
-CODEX_RESETS_API_URL = "https://codex-resets.com/api/v1/status"
+# The public reset radar is a third-party signal. It does not expose or replace
+# the account-specific Codex quota below.
 CODEX_RADAR_URL = "https://codexreset.org/"
 GLM_QUOTA_URLS = {
     "cn": "https://open.bigmodel.cn/api/monitor/usage/quota/limit",
@@ -209,21 +207,6 @@ def _fmt_day(iso_or_ts):
         return dt.strftime("%m-%d")
     except Exception:
         return ""
-
-
-def _fmt_tokens(value):
-    """Compact token counts: 75682437 -> '75.7M', 1181266882 -> '1.2B'."""
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    if number != number or number < 0:      # NaN or nonsense
-        return None
-    for limit, suffix in ((1e9, "B"), (1e6, "M"), (1e3, "K")):
-        if number >= limit:
-            scaled = number / limit
-            return ("%d%s" if scaled >= 100 else "%.1f%s") % (scaled, suffix)
-    return "%d" % number
 
 
 def _countdown(iso_or_ts):
@@ -416,14 +399,6 @@ def fetch_codex():
             account = (read(2, timeout=3) or {}).get("account") or {}
         except Exception:
             pass  # Optional plan name must not discard valid quota data.
-        usage = {}
-        try:
-            # Daily buckets lag by a day or more, and a failure here must not
-            # discard the quota numbers we already have.
-            send(3, "account/usage/read", {})
-            usage = read(3, timeout=8) or {}
-        except Exception:
-            pass
     finally:
         try:
             p.kill()
@@ -484,11 +459,6 @@ def fetch_codex():
         if isinstance(item, dict) and item.get("status", "available") == "available":
             expiries.append(item.get("expiresAt"))
 
-    # Daily usage buckets from the Codex client. They lag by a day or more, so
-    # the newest bucket is reported together with its own date.
-    buckets = [b for b in (usage.get("dailyUsageBuckets") or []) if isinstance(b, dict)]
-    newest = buckets[-1] if buckets else {}
-
     return {
         "c5_pct": five_h["pct"] if five_h else None,
         "c5_reset": five_h["reset"] if five_h else None,
@@ -501,8 +471,6 @@ def fetch_codex():
         "cr_credit_count": credit_count,
         "cr_credit_expiry": min([e for e in expiries if isinstance(e, (int, float))],
                                 default=None),
-        "c_tokens_latest": newest.get("tokens"),
-        "c_tokens_date": newest.get("startDate"),
     }
 
 
@@ -518,12 +486,6 @@ def _fetch_public_text(url, accept):
         if len(raw) > 2 * 1024 * 1024:
             raise ValueError("response too large")
         return raw
-
-
-def _visible_html_text(raw):
-    text = raw.decode("utf-8", errors="replace")
-    text = re.sub(r"<[^>]+>", " ", text)
-    return " ".join(unescape(text).split())
 
 
 def _int_match(pattern, text):
@@ -546,30 +508,6 @@ def fetch_main_radar():
         "cr_main_updated": datetime.now(timezone.utc).isoformat(),
         "cr_main_mode": "model",
     }
-
-
-def fetch_community_radar():
-    try:
-        page = _visible_html_text(_fetch_public_text(
-            CODEX_RESETS_PAGE_URL, "text/html,application/xhtml+xml"))
-        pct = _int_match(
-            r"Possible reset\s+(\d+)\s*%\s+chance of reset", page)
-        if pct is not None:
-            return {"cr_resets_pct": pct, "cr_resets_mode": "community_vote",
-                    "cr_resets_updated": datetime.now(timezone.utc).isoformat()}
-    except Exception:
-        pass  # Independent, bounded API fallback.
-    d = json.loads(_fetch_public_text(CODEX_RESETS_API_URL, "application/json").decode("utf-8"))
-    body = d.get("data")
-    if not isinstance(body, dict) or "active_watch" not in body:
-        raise ValueError("community schema changed")
-    watch = body["active_watch"]
-    if watch is None:
-        return {"cr_resets_pct": None, "cr_resets_mode": "no_watch"}
-    # The percent field is already 0..100; 1 means 1%, not 100%.
-    pct = float(watch["reset_chance_percent"])
-    return {"cr_resets_pct": round(pct), "cr_resets_mode": "api_watch",
-            "cr_resets_updated": (d.get("meta") or {}).get("generated_at")}
 
 
 # ---------------- provider API keys (GLM / DeepSeek) ----------------
@@ -856,14 +794,12 @@ class App:
         self._divider2.grid(row=4, column=0, sticky="ew", padx=10, pady=1)
         self._section(5, "Codex", CODEX_GREEN,
                       [("c5", "每5小时"), ("cw", "每周"),
-                       ("c_tokens", "token 用量"), ("cr_credit", "重置券"),
-                       ("cr_main", "主源"),
-                       ("cr_resets", "社区")])
+                       ("cr_credit", "重置券"), ("cr_main", "主源")])
         self._divider3 = tk.Frame(self.root, bg="#3a3a4e", height=1)
         self._divider3.grid(row=6, column=0, sticky="ew", padx=10, pady=1)
         # DeepSeek is pay-as-you-go, so this card shows a money balance.
         self._section(7, "DeepSeek", DEEPSEEK_BLUE,
-                      [("ds", "余额", 8), ("ds_spend", "今日消耗", 8)])
+                      [("ds", "余额"), ("ds_spend", "今日消耗")])
         self._dividers = [self._divider, self._divider2, self._divider3]
 
         bar = tk.Frame(self.root, bg=BG)
@@ -1148,7 +1084,7 @@ class App:
             self.scheduler.configure(self._enabled_sources())
         c5_visible = visible["codex"] and self.show_codex_5h.get()
         self._set_row_visible("c5", c5_visible)
-        for key in ("cr_main", "cr_resets"):
+        for key in ("cr_main",):
             if key in self.rows:
                 widgets = [self.row_labels[key][0], *self.rows[key]]
                 for wgt in widgets:
@@ -1253,21 +1189,19 @@ class App:
                        padx=(12, 7), pady=(3, 0))
         self.section_titles[title] = title_lbl
         self.section_renews[title] = renew_lbl
-        for i, line in enumerate(lines, start=1):
-            key, name = line[0], line[1]
-            # Money is wider than a percentage: those rows ask for more room
-            # (Tk's width unit is an average character, so "¥118.73" does not
-            # fit in the 4 used by "100%") and right-align for a tidy column.
-            width = line[2] if len(line) > 2 else 4
+        for i, (key, name) in enumerate(lines, start=1):
             nl = tk.Label(f, text=name, fg=FG_DIM, bg=BG_CARD,
                           font=("Microsoft YaHei UI", 9), anchor="w", width=9)
             nl.grid(row=i, column=0, sticky="w", padx=(7, 0))
             self._name_labels.append(nl)
             self.row_labels[key] = (nl,)
+            # One shared numeric column for every card: wide enough for money
+            # ("¥118.73" needs ~45px, four average characters only give 38) and
+            # right-aligned, so percentages, counts and amounts line up.
             pct = tk.Label(f, text="…", fg=FG_TEXT, bg=BG_CARD,
                            font=("Microsoft YaHei UI", 9, "bold"),
-                           anchor="e" if width > 4 else "w", width=width)
-            pct.grid(row=i, column=1, sticky="w" if width <= 4 else "e", padx=(6, 0))
+                           anchor="e", width=8)
+            pct.grid(row=i, column=1, sticky="e", padx=(6, 0))
             rst = tk.Label(f, text="", fg=FG_DIM, bg=BG_CARD,
                            font=("Microsoft YaHei UI", 9), anchor="w", width=11)
             rst.grid(row=i, column=2, sticky="w", padx=(12, 7),
@@ -1572,7 +1506,7 @@ class App:
         if CFG.get("show_kimi", True) or CFG.get("tray_metric", "cw_pct").startswith("k"):
             names.append("kimi")
         if CFG.get("show_codex", True) and CFG.get("show_radar", True):
-            names.extend(("main", "community"))
+            names.append("main")
         if CFG.get("show_glm") and glm_api_key():
             names.append("glm")
         if CFG.get("show_deepseek", True) and deepseek_api_key():
@@ -1620,9 +1554,9 @@ class App:
     @staticmethod
     def _source_keys(name):
         return {"kimi": ("k5_", "kw_", "k_plan"),
-                "codex": ("c5_", "cw_", "c_plan", "c_window", "c_tokens", "cr_credit"),
+                "codex": ("c5_", "cw_", "c_plan", "c_window", "cr_credit"),
                 "glm": ("g5_", "gw_", "g_plan"), "main": ("cr_main",),
-                "community": ("cr_resets",), "deepseek": ("ds_",)}[name]
+                "deepseek": ("ds_",)}[name]
 
     def _save_cache(self):
         sources = {name: {"success_at": stamp,
@@ -1751,7 +1685,7 @@ class App:
         rl.config(text=note or "")
 
     def _render_radar(self):
-        """Show the selected primary source plus the community signal."""
+        """Show the selected public reset-radar window."""
         win = CFG.get("radar_window", 24)
 
         main_pct = self.data.get("cr_main48" if win == 48 else "cr_main24")
@@ -1759,14 +1693,6 @@ class App:
         if main_pct is not None:
             color = "#d08020" if main_pct >= 80 else THEMES[self.theme]["FG_DIM"]
             self.rows["cr_main"][0].config(fg=color)
-
-        resets_pct = self.data.get("cr_resets_pct")
-        self._set_row("cr_resets", resets_pct, "社区投票")
-        if resets_pct is None and self.data.get("cr_resets_mode") == "no_watch":
-            self.rows["cr_resets"][1].config(text="暂无投票")
-        if resets_pct is not None:
-            color = "#d08020" if resets_pct >= 80 else THEMES[self.theme]["FG_DIM"]
-            self.rows["cr_resets"][0].config(fg=color)
 
     def _render(self):
         d = self.data
@@ -1802,10 +1728,6 @@ class App:
         self._set_row("c5", d.get("c5_pct"),
                       _countdown(d.get("c5_reset")) if d.get("c5_reset") else "")
         self._set_row("cw", d.get("cw_pct"), _fmt_reset(d.get("cw_reset")))
-        # Codex-side daily tokens. The buckets lag by a day or more, so the row
-        # shows the newest bucket next to its own date.
-        self._set_custom("c_tokens", _fmt_tokens(d.get("c_tokens_latest")),
-                         _fmt_day(d.get("c_tokens_date")))
         # Reset vouchers: hide the row when there are none (or when disabled).
         count = d.get("cr_credit_count")
         show_credits = bool(CFG.get("show_codex_credits", True)) and bool(count)
@@ -1834,9 +1756,8 @@ class App:
         self._render_radar()
         enabled = self._enabled_sources()
         for source, keys in {"kimi": ("k5", "kw"),
-                             "codex": ("c5", "cw", "c_tokens", "cr_credit"),
+                             "codex": ("c5", "cw", "cr_credit"),
                              "glm": ("g5", "gw"), "main": ("cr_main",),
-                             "community": ("cr_resets",),
                              "deepseek": ("ds", "ds_spend")}.items():
             if source in enabled and self._is_stale(source):
                 text = self._stale_text(source)
@@ -1851,7 +1772,7 @@ class App:
             parts.append("额度更新 " + datetime.fromtimestamp(min(account_times)).strftime("%H:%M"))
         if stale:
             labels = {"kimi": "Kimi", "codex": "Codex", "glm": "GLM", "main": "主源",
-                      "community": "社区", "deepseek": "DeepSeek"}
+                      "deepseek": "DeepSeek"}
             parts.append("待更新:" + "/".join(labels[name] for name in stale))
         if self._tray_failed:
             parts.append("托盘不可用")
@@ -1869,8 +1790,7 @@ def query_worker(name):
         return
     try:
         fn = {"kimi": fetch_kimi, "codex": fetch_codex, "glm": fetch_glm,
-              "deepseek": fetch_deepseek, "main": fetch_main_radar,
-              "community": fetch_community_radar}[name]
+              "deepseek": fetch_deepseek, "main": fetch_main_radar}[name]
         data = validate_result(name, fn())
         payload = {"ok": True, "data": data}
     except Exception as ex:

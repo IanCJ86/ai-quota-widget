@@ -35,8 +35,8 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 ## 功能
 
 - 显示 Kimi Code / Codex 的 **每 5 小时** 与 **每周** 额度剩余百分比
-- **Codex 用量与重置券**：显示 Codex 自己统计的最近一天 token 用量（按天数据有 1–2 天延迟，所以同时标出日期）以及账户里可用的「全额重置」券张数与到期日；0 张时该行自动隐藏，可在 `Codex 设置` 里关掉
-- **Codex 全球重置雷达**：显示 [codexreset.org](https://codexreset.org) 的 24/48 小时主源预测，以及 [codex-resets.com](https://codex-resets.com) 的社区投票辅助信号。原 [codex-reset.com](https://codex-reset.com) 已移除。两者都是第三方公共信号，不统计个人赠送/补偿重置卡，也不代表个人账户真值
+- **Codex 重置券**：显示账户里可用的「全额重置」券张数与到期日；0 张时该行自动隐藏，可在 `Codex 设置` 里关掉
+- **Codex 全球重置雷达**：显示 [codexreset.org](https://codexreset.org) 的 24/48 小时预测。这是第三方公共信号，不统计个人赠送/补偿重置卡，也不代表个人账户真值
 - **可选 DeepSeek 余额卡片**：填入 API Key（见「配置项」）后显示账户余额与**今日消耗**；DeepSeek 是按量付费，官方只有余额、没有百分比额度与用量接口，所以这张卡片显示金额，余额偏低时自动变色提醒
 - **可选 GLM Coding Plan 卡片**：在 config.json 填入 `glm_api_key` 并启用 `show_glm`，显示 5 小时 / 每周额度与重置时间（需有效的 GLM Coding Plan Key，见「配置项」）
 - 显示额度重置时间（5 小时窗显示倒计时，每周窗显示具体时间）
@@ -70,8 +70,8 @@ python quota_monitor.py
 - 双击窗口任意位置立即刷新
 - Kimi 数据来自官方接口 `api.kimi.com/coding/v1/usages`；access_token 过期时会用本地 refresh_token 自动续期（client_id 为 CLI 公开值）
 - Codex 数据通过本机 `codex app-server`（stdio JSON-RPC）读取 `account/rateLimits/read`。该接口返回的是本机 Codex 保存的**快照**，不带采集时间：某个窗口的重置时间若已经过去，说明这份数字属于上一个窗口，界面会把该卡片标灰并显示「窗口已过期」，同时计入底部「待更新」，不把历史额度当成实时值（窗口尚未结束的滞后无法被识别，见「支持范围与局限」）
-- Codex 的 token 用量与重置券来自同一次 app-server 会话的 `account/usage/read` 与 `account/rateLimits/read`。按天用量桶实测**滞后 1–2 天**（例如今天 09-26 时最新一桶是 09-24），所以界面显示"最新一天 + 该桶日期"，不假装是今天。程序优先使用 `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe` 中最新的运行时；桌面应用升级后遗留的旧 `bin\codex.exe` 没有这两个接口，只会作为兜底
-- 雷达数据来自 `codexreset.org` 和 `codex-resets.com` 的第三方公开页面/API，不含任何个人凭证；主源使用 24/48 小时预测，复数域名使用社区投票信号
+- Codex 的重置券来自同一次 app-server 会话的 `account/rateLimits/read`（`rateLimitResetCredits`）。程序优先使用 `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe` 中最新的运行时；桌面应用升级后遗留的旧 `bin\codex.exe` 没有这个字段，只会作为兜底
+- 雷达数据来自 `codexreset.org` 的第三方公开页面，不含任何个人凭证
 - GLM 数据来自 `open.bigmodel.cn/api/monitor/usage/quota/limit`（国际版 `api.z.ai` 同路径），用配置的 apiKey 鉴权
 - DeepSeek 数据来自官方 `api.deepseek.com/user/balance`（Bearer Key）；官方没有用量/额度接口（实测 `/user/usage`、`/dashboard/billing/usage` 均为 404），所以只能显示余额。「今日消耗」是本机估算：以当天第一次读到的余额为起点，按之后每次余额的减少量累加，充值会自动抬高起点（不会出现负数），跨天归零；起点之前（当天 Widget 没运行时）的消耗统计不到
 - CLI 凭证只从本机读取，仅用于对应官方服务的认证，不发送给雷达网站，不打印或写入诊断文件
@@ -97,7 +97,7 @@ python quota_monitor.py
 | `show_kimi` / `show_codex` / `show_glm` | 各卡片是否显示 | `true` / `false` |
 | `show_codex_5h` | Codex 每 5 小时行；`null` 按套餐自动（Pro 隐藏，其余显示） | `null` / `true` / `false` |
 | `show_codex_credits` | 是否显示「重置券」行（0 张时无论如何都不显示） | `true` / `false` |
-| `show_radar` / `radar_window` | 显示雷达 / 主源预测窗口 | `true` / `24` 或 `48` |
+| `show_radar` / `radar_window` | 显示雷达 / 预测窗口 | `true` / `24` 或 `48` |
 | `tray_metric` | 托盘显示的额度字段，默认 Codex 每周 | `"cw_pct"` |
 | `glm_api_key` | 可选，GLM Coding Plan API Key。**明文存储，仅为兼容旧配置保留**；推荐用右键菜单「安全保存 API Key…」或环境变量 `AI_QUOTA_WIDGET_GLM_API_KEY` | `"sk-..."` |
 | `glm_region` | `"cn"` → open.bigmodel.cn，`"intl"` → api.z.ai | `"cn"` |
@@ -135,7 +135,7 @@ GLM 额度接口（`monitor/usage/quota/limit`）是智谱官方 Claude Code 插
 - 支持 Kimi Code、Codex、DeepSeek 余额，可选 GLM Coding Plan；暂无 Claude 等方案
 - 仅支持 Windows（依赖本机 CLI 凭证与 tkinter）
 - Codex 额度是本机 Codex 保存的快照，不含采集时间，可能滞后于真实值；只有「窗口已重置」这种情况能被自动识别并标灰
-- Codex 的 token 用量是 Codex 客户端自己的按天统计（不含 DeepSeek / Kimi），实测滞后 1–2 天；重置券与用量两项都需要较新的 codex 运行时
+- Codex 的重置券需要较新的 codex 运行时（旧版 `bin\codex.exe` 没有该字段）
 - DeepSeek 的「今日消耗」是本地估算，起点是当天第一次读到余额的时刻；官方没有用量接口，所以它不能替代官网账单
 - 套餐名与续订日期无法从接口自动读取，需要手动配置（见上文「配置项」）
 
