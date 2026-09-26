@@ -124,6 +124,12 @@ class GuiReleaseTests(unittest.TestCase):
         self.assertEqual(a._ui_error,'CacheWriteFailed')
         a._on_result('codex',{'ok':True,'data':{'cw_pct':20}},{})
         self.assertIsNone(a._ui_error)
+    def test_scrollbars_and_close_button_do_not_start_window_drag(self):
+        from types import SimpleNamespace
+        a=self.app
+        for widget in (a.viewport.vertical,a.viewport.horizontal,a.close_btn):
+            a._drag_start(SimpleNamespace(widget=widget,x=2,y=2))
+            self.assertIsNone(a._drag)
 
 class CliTests(unittest.TestCase):
     def setUp(self):

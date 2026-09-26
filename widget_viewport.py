@@ -39,6 +39,7 @@ class Viewport:
         self.canvas.create_window(0,0,window=self.body,anchor='nw')
         self.vertical = tk.Scrollbar(root,orient='vertical',command=self.canvas.yview)
         self.horizontal = tk.Scrollbar(root,orient='horizontal',command=self.canvas.xview)
+        self.vertical._no_drag = self.horizontal._no_drag = True
         self.canvas.configure(yscrollcommand=self.vertical.set,xscrollcommand=self.horizontal.set)
         root.grid_rowconfigure(0,weight=1)
         self.body.grid_columnconfigure(0,weight=1)

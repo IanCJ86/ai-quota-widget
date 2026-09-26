@@ -1439,6 +1439,10 @@ class App:
             self._bind(child)
 
     def _drag_start(self, e):
+        # Toplevel bindtags also receive child events, even when _bind skipped
+        # that child. Scrollbars and action buttons must never start a drag.
+        if getattr(getattr(e,'widget',None),'_no_drag',False):
+            return
         if not self.lock_position.get():
             self._drag = (e.x, e.y)
             # A translucent, borderless, always-on-top window tears while being
