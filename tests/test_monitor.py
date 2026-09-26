@@ -780,6 +780,53 @@ class UITests(unittest.TestCase):
             # a directory without logs is not an error, just no figure
             self.assertIsNone(monitor.local_harness_tokens(today, directory + "-missing"))
 
+    def test_fit_does_not_touch_a_layered_window_needlessly(self):
+        """Re-applying the geometry/region of an alpha window makes Windows
+        rebuild its surface, which is how a stale, partial copy of the panel
+        ended up on screen. Unchanged content must not touch it at all."""
+        a = self.app
+        a.root.deiconify()
+        a.root.update()
+        calls = {"geometry": 0}
+
+        def count_geometry(*args, **kwargs):
+            if args:                      # the getter is called with no arguments
+                calls["geometry"] += 1
+            return geometry(*args, **kwargs)
+
+        geometry = a.root.geometry
+        a.root.geometry = count_geometry
+        redraws = []
+        a._redraw = lambda: redraws.append(1)
+
+        a._fit()
+        first = calls["geometry"], len(redraws)
+        for _ in range(4):
+            a._fit()
+        self.assertEqual((calls["geometry"], len(redraws)), first,
+                         "an unchanged layout must not re-apply the geometry or "
+                         "force another repaint")
+        self.assertEqual(first[0], 1)
+        self.assertEqual(first[1], 1, "a real geometry change must force a repaint")
+
+        a.status.config(text="刷新时间 12:34 变更")
+        a.root.update_idletasks()
+        a._fit()
+        self.assertGreaterEqual(calls["geometry"], 1)
+
+        # a real layout change (a card goes away) must be applied again
+        try:
+            before = calls["geometry"]
+            a.show_kimi.set(False)
+            a._apply_visibility(persist=False)
+            a.root.update_idletasks()
+            a._fit()
+            self.assertGreater(calls["geometry"], before,
+                               "a real layout change must resize the window")
+        finally:
+            a.show_kimi.set(True)
+            a._apply_visibility(persist=False)
+
     def test_position_lock_and_drag_alpha(self):
         """A locked window must not move at all, and a drag makes it opaque so
         Windows stops tearing the translucent panel while it is moved."""

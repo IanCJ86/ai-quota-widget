@@ -930,6 +930,7 @@ class App:
         except (TypeError, ValueError):
             remembered = None
         self._pos = remembered or (sw - w - 40, sh - h - 90)
+        self._geom = None       # last geometry applied by _fit(), to avoid churn
         self.root.geometry("%dx%d+%d+%d" % (w, h, self._pos[0], self._pos[1]))
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
@@ -1087,6 +1088,7 @@ class App:
         self.root.protocol("WM_DELETE_WINDOW", self._minimize_to_tray)
         self._fit()                      # size it up before it becomes visible
         self.root.deiconify()
+        self._redraw()                   # fresh surface, never a stale one
         if self.theme == "glass":        # acrylic needs the window mapped
             self._acrylic_on = self._apply_acrylic(True)
         self.refresh_async()
@@ -1170,8 +1172,25 @@ class App:
             x = 8
         if y < -h // 2:
             y = 8
-        self.root.geometry(f"{w}x{h}+{x}+{y}")
-        self._round_corners()
+        # Touching the geometry (or the region) of a layered window makes Windows
+        # re-create its surface; if that happens needlessly the panel can keep a
+        # stale, partial copy of itself on screen for seconds.  Only act on a real
+        # change, and then force a repaint so no old surface survives.
+        target = (w, h, x, y)
+        if target != self._geom:
+            self._geom = target
+            self.root.geometry("%dx%d+%d+%d" % target)
+            self._round_corners()
+            self._redraw()
+
+    def _redraw(self):
+        """Invalidate the whole window (RDW_INVALIDATE|UPDATENOW|ALLCHILDREN)."""
+        try:
+            hwnd = int(self.root.wm_frame(), 16)
+            ctypes.windll.user32.RedrawWindow(
+                hwnd, None, None, 0x0001 | 0x0100 | 0x0080)
+        except Exception:
+            pass
 
     def _round_corners(self, radius=8):
         """Rounded corners: prefer Win11 DWM native rounding (antialiased)."""
@@ -1973,6 +1992,7 @@ class App:
                 if command == "show":
                     self.root.deiconify()
                     self.root.lift()
+                    self._redraw()
                 elif command == "refresh":
                     self.refresh_async()
                 elif command == "tray_failed":
@@ -1981,6 +2001,7 @@ class App:
             if self.instance and self.instance.requested():
                 self.root.deiconify()
                 self.root.lift()
+                self._redraw()
             if self._tray_thread and not self._tray_thread.is_alive() and not self._tray_failed:
                 self._tray_failed = True
                 self.root.deiconify()
