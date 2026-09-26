@@ -20,6 +20,16 @@ import widget_windows
 
 
 class IdentityTests(unittest.TestCase):
+    def test_new_install_defaults_to_glass_and_keeps_existing_choice(self):
+        from quota_state import validate_config
+        self.assertEqual(monitor.DEFAULT_CONFIG['theme'], 'glass')
+        template = json.loads((ROOT / 'config.json').read_text(encoding='utf-8'))
+        self.assertEqual(template['theme'], 'glass')
+        for theme in monitor.THEMES:
+            config, errors = validate_config({'theme': theme}, monitor.DEFAULT_CONFIG)
+            self.assertEqual(config['theme'], theme)
+            self.assertFalse(errors)
+
     def test_theme_contract_and_opaque_text_contrast(self):
         self.assertEqual([p['LABEL'] for k, p in monitor.THEMES.items() if k != 'glass'],
                          ['月之暗面', '月之亮面', '蒸汽算力机', 'Token 加油站', '电子墨水账本'])

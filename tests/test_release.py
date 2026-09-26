@@ -24,7 +24,7 @@ ROOT = Path(monitor.__file__).parent
 class StateTests(unittest.TestCase):
     def test_config_bad_types_are_reported_and_defaulted(self):
         cfg, errors=state.validate_config({'theme':[],'show_codex':'false','window_alpha':float('nan')},monitor.DEFAULT_CONFIG)
-        self.assertEqual(cfg['theme'],'dark')
+        self.assertEqual(cfg['theme'],'glass')
         self.assertIs(cfg['show_codex'],True)
         self.assertEqual(len(errors),3)
     def test_bad_config_top_level(self):

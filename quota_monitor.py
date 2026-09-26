@@ -112,7 +112,7 @@ DEFAULT_CONFIG = {
     "custom_plan_kimi": "",       # user-defined plan names (kept as menu entries)
     "custom_plan_codex": "",
     "custom_plan_glm": "",
-    "theme": "dark",              # dark / light / steam / fuel / ink / glass
+    "theme": "glass",             # glass / dark / light / steam / fuel / ink
     # ---- visibility toggles (also in the right-click menu) ----
     "show_kimi": True,
     "show_codex": True,
@@ -1070,7 +1070,7 @@ class App:
         self.menu.add_command(label="退出", command=self._quit)
 
         self._apply_visibility(persist=False)
-        self._set_theme(CFG.get("theme", "dark"))
+        self._set_theme(CFG.get("theme", DEFAULT_CONFIG["theme"]))
         self._init_tray()
         self._fix_tray_metric(persist=False)
         self.root.protocol("WM_DELETE_WINDOW", self._minimize_to_tray)
@@ -1336,7 +1336,7 @@ class App:
 
     def _set_theme(self, name):
         if name not in THEMES:
-            name = "dark"
+            name = DEFAULT_CONFIG["theme"]
         leaving_glass = getattr(self, "theme", "dark") == "glass" and name != "glass"
         if name == "glass":
             # Acrylic is best-effort: if SetWindowCompositionAttribute or the

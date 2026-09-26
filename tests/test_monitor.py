@@ -640,7 +640,7 @@ class UITests(unittest.TestCase):
                 self.assertEqual(a.settings.dialogs.palette, monitor.THEMES[theme])
                 after.assert_not_called()
         a._set_theme('unsupported')
-        self.assertEqual(a.theme, 'dark')
+        self.assertEqual(a.theme, 'glass')
 
     def test_skin_redraw_is_bounded_and_unchanged_values_are_cached(self):
         a = self.app
