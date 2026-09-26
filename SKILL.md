@@ -21,6 +21,7 @@ Windows 桌面小挂件：一屏显示 **Codex / Kimi / GLM / DeepSeek** 的剩�
    - Kimi Code CLI（`kimi`），或
    - Codex CLI（`codex`）
 3. **绝对不要向用户索取 API Key、token 或密码**。GLM / DeepSeek 的 Key 由用户自己在右键菜单里填；程序把 Key 用 Windows DPAPI 加密存在本机，不上传任何数据。
+4. **重置雷达**这一行的数据来自**第三方社区站点 codexreset.org**（非 OpenAI 官方、与本项目无关联），只是"重置概率"预测；用户若介意，可在右键菜单关掉「Codex 重置雷达」。**装好后要主动说明这一点**，不要让用户以为那是官方数据。
 
 ## 安装步骤
 
