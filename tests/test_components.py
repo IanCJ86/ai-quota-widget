@@ -20,6 +20,35 @@ import widget_windows
 
 
 class IdentityTests(unittest.TestCase):
+    def test_public_gif_keeps_tall_theme_footer(self):
+        import tempfile
+        from PIL import Image
+        from render_readme import save_theme_gif
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'themes.gif'
+            small = Image.new('RGB', (10, 10), 'black')
+            tall = Image.new('RGB', (10, 16), 'white')
+            try:
+                save_theme_gif([small, tall], path)
+                with Image.open(path) as result:
+                    self.assertEqual(result.size, (10, 16))
+                    self.assertEqual(result.n_frames, 2)
+                    result.seek(1)
+                    self.assertEqual(result.convert('RGB').getpixel((0, 15)), (255, 255, 255))
+            finally:
+                small.close()
+                tall.close()
+
+    def test_new_install_defaults_to_glass_and_keeps_existing_choice(self):
+        from quota_state import validate_config
+        self.assertEqual(monitor.DEFAULT_CONFIG['theme'], 'glass')
+        template = json.loads((ROOT / 'config.json').read_text(encoding='utf-8'))
+        self.assertEqual(template['theme'], 'glass')
+        for theme in monitor.THEMES:
+            config, errors = validate_config({'theme': theme}, monitor.DEFAULT_CONFIG)
+            self.assertEqual(config['theme'], theme)
+            self.assertFalse(errors)
+
     def test_theme_contract_and_opaque_text_contrast(self):
         self.assertEqual([p['LABEL'] for k, p in monitor.THEMES.items() if k != 'glass'],
                          ['月之暗面', '月之亮面', '蒸汽算力机', 'Token 加油站', '电子墨水账本'])

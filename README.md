@@ -46,7 +46,7 @@ v1.3的安装、wheel/uvx入口、离线诊断、CLI查询和异常显示语义�
 
 ## 五套主题（1.3.0）
 
-右键面板 → **主题** 即时切换，选择自动保存；旧配置的 `dark` / `light` 对应月之暗面 / 月之亮面，毛玻璃保留为兼容项。
+右键面板 → **主题** 即时切换，选择自动保存。新安装默认毛玻璃；升级保留已有主题选择。旧配置的 `dark` / `light` 对应月之暗面 / 月之亮面。
 
 | 主题 | 风格 | 实际界面（测试数据） |
 | --- | --- | --- |
@@ -139,7 +139,7 @@ python quota_monitor.py
 | `renew_kimi` / `renew_codex` / `renew_glm` | 各续订日期，仅用于显示（右键菜单可改） | `"09-01"` |
 | `kimi_plan_name` / `codex_plan_name` / `glm_plan_name` | 套餐显示名（右键菜单可改）；codex 留空 = 接口值 + 后缀 | `"Allegro"` |
 | `codex_plan_suffix` | Codex 套餐名后缀，追加在接口返回值后 | `" 20x"` |
-| `theme` | 主题：`dark` / `light` / `steam` / `fuel` / `ink`；`glass` 为毛玻璃兼容项 | `"dark"` |
+| `theme` | 主题：`glass`（毛玻璃）/ `dark` / `light` / `steam` / `fuel` / `ink`；升级保留已有选择 | `"glass"` |
 | `show_kimi` / `show_codex` / `show_glm` | 各卡片是否显示 | `true` / `false` |
 | `show_codex_5h` | Codex 每 5 小时行；`null` 按套餐自动（Pro 隐藏，其余显示） | `null` / `true` / `false` |
 | `show_codex_credits` | 是否显示「重置券」行（0 张时无论如何都不显示） | `true` / `false` |

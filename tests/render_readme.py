@@ -10,6 +10,23 @@ import time
 from PIL import Image
 
 
+def save_theme_gif(frames, path):
+    # GIF logical canvas must fit the largest theme; otherwise taller skins
+    # lose their bottom controls when the first frame happens to be shorter.
+    size = (max(f.width for f in frames), max(f.height for f in frames))
+    padded = []
+    try:
+        for frame in frames:
+            canvas = Image.new('RGB', size, frame.getpixel((0, 0)))
+            canvas.paste(frame, (0, 0))
+            padded.append(canvas)
+        padded[0].save(path, save_all=True, append_images=padded[1:],
+                       duration=1400, loop=0, disposal=2)
+    finally:
+        for canvas in padded:
+            canvas.close()
+
+
 def main():
     output = Path(__file__).resolve().parents[1] / 'docs' / 'images'
     output.mkdir(parents=True, exist_ok=True)
@@ -48,8 +65,7 @@ def main():
                 if theme != 'glass':
                     with Image.open(path) as image:
                         frames.append(image.convert('RGB'))
-            frames[0].save(output/'themes.gif', save_all=True,
-                           append_images=frames[1:], duration=1400, loop=0, disposal=2)
+            save_theme_gif(frames, output/'themes.gif')
             print('Rendered glass hero + five-theme GIF with synthetic data')
     finally:
         fixture.tearDown()
