@@ -1351,6 +1351,8 @@ class EventLoopTests(unittest.TestCase):
                    show_deepseek=False, show_radar=False)
         with tempfile.TemporaryDirectory() as directory, \
                 patch.object(monitor, "CFG", cfg), \
+                patch('quota_cli.configured', return_value={'kimi':False,'codex':True,'glm':False,'deepseek':False}), \
+                patch.object(monitor, 'source_identity', return_value=None), \
                 patch.object(monitor, "CACHE_FILE", str(Path(directory) / "cache.json")), \
                 patch.object(monitor, "DEBUG_FILE", str(Path(directory) / "debug.json")), \
                 patch.object(monitor, "_save_config"), \
