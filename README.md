@@ -4,24 +4,26 @@
 
 ![AI Quota Widget 界面](docs/images/hero.png)
 
-五套主题，右键即换（黑夜月之暗面 / 白天月之亮面 / 蒸汽算力机 / Token 加油站 / 电子墨水账本）：
+上图为毛玻璃主题。以下五套其他主题可右键切换（月之暗面 / 月之亮面 / 蒸汽算力机 / Token 加油站 / 电子墨水账本）：
 
 ![五套主题](docs/images/themes.gif)
+
+图片由真实界面在隔离测试桌面渲染，使用合成演示数据，不是个人账户或实时读数。毛玻璃透色/模糊效果随桌面与系统支持情况变化；不支持时保留可读背景。
 
 
 ## 支持矩阵（先看这张表再装）
 
 | 卡片 | 需要什么 | 数据从哪来 |
 | --- | --- | --- |
-| **Kimi** | 本机登录过 Kimi Code CLI | 官方接口，只读本机凭据 |
+| **Kimi** | 本机登录过 Kimi Code CLI | 使用本机凭据访问官方接口，过期时可续期并更新凭据 |
 | **Codex** | 本机登录过 Codex CLI | 经本机 codex app-server 读取；额度可能是本机保存的快照 |
 | **GLM**（可选） | GLM Key + 有效套餐 | 智谱官方接口 |
 | **DeepSeek**（可选） | DeepSeek Key | 官方余额接口；「今日」是余额差额估算，**不是官方账单** |
 | **重置雷达** | 无需任何凭据 | **第三方社区站点 [codexreset.org](https://codexreset.org)** —— 非 OpenAI 官方、与本项目无关联，可在右键菜单一键关闭 |
 
 > - 一个来源都没登录也能装，只是对应卡片会显示 --（跑 --doctor 会告诉你缺什么）
-> - 程序**只读本机**，不向第三方发送凭据；GLM / DeepSeek 的 Key 用 **Windows DPAPI 加密**存在本机
-> - 想先看效果再决定？python quota_monitor.py --once 可在终端一次性打印当前额度
+> - 程序在本机运行，查询需访问对应服务；认证凭据只用于对应官方服务，不发给第三方雷达。菜单保存的GLM / DeepSeek Key由Windows DPAPI加密；环境变量和旧版明文配置不等同加密存储。
+> - `python quota_monitor.py --once` 只读已有缓存，首次可能没有数据；加 `--fresh` 才联网查询。诊断已安装版本时请使用start.bat绑定的Python和 `--data-dir "实际安装目录"`。
 
 ## 当前能力
 
@@ -48,11 +50,11 @@ v1.3的安装、wheel/uvx入口、离线诊断、CLI查询和异常显示语义�
 
 | 主题 | 风格 | 实际界面（测试数据） |
 | --- | --- | --- |
-| 月之暗面 `dark` | 石墨黑、月牙、柔和品牌色 | [预览](docs/themes/dark-100.png) |
-| 月之亮面 `light` | 白色卡片、浅蓝灰背景、满月 | [预览](docs/themes/light-100.png) |
-| 蒸汽算力机 `steam` | 黄铜仪表、铆钉、棕黑面板 | [预览](docs/themes/steam-100.png) |
-| Token 加油站 `fuel` | 油枪图标、荧光油量条、深蓝面板 | [预览](docs/themes/fuel-100.png) |
-| 电子墨水账本 `ink` | 暖纸白、墨黑数字、细线账本 | [预览](docs/themes/ink-100.png) |
+| 月之暗面 `dark` | 石墨黑、月牙、柔和品牌色 | [预览](docs/images/dark.png) |
+| 月之亮面 `light` | 白色卡片、浅蓝灰背景、满月 | [预览](docs/images/light.png) |
+| 蒸汽算力机 `steam` | 黄铜仪表、铆钉、棕黑面板 | [预览](docs/images/steam.png) |
+| Token 加油站 `fuel` | 油枪图标、荧光油量条、深蓝面板 | [预览](docs/images/fuel.png) |
+| 电子墨水账本 `ink` | 暖纸白、墨黑数字、细线账本 | [预览](docs/images/ink.png) |
 
 所有皮肤仍显示相同额度、金额、token、重置券和雷达；上方仪表依次选取已显示的 Codex / Kimi / GLM 周余量，并标明来源。不把 DeepSeek 金额当作百分比。过期或查询失败显示待更新，不画有效指针/油量。静态矢量绘制，没有常驻动画、额外查询或新依赖；透明度越低，可读性越容易受桌面背景影响。
 
@@ -60,17 +62,15 @@ v1.3的安装、wheel/uvx入口、离线诊断、CLI查询和异常显示语义�
 
 不想自己动手？把这句话发给你的 AI agent（Kimi Code / Codex / Claude Code 等均可）：
 
-> 帮我安装 ai-quota-widget：https://github.com/IanCJ86/ai-quota-widget ，读仓库里的 AGENTS.md 按步骤执行。
+> 帮我安装 https://github.com/IanCJ86/ai-quota-widget 的最新正式Release。阅读对应版本的AGENTS.md和SKILL.md，使用完整安装器，保留已有配置，最后核对版本、可用来源和托盘恢复。
 
-agent 会完成全部工作，你只需要口述续订日期和套餐名。它实际执行的命令是：
+让agent检查环境并操作安装器；登录或Key由你在本机完成，不必贴进聊天。推荐从[最新正式Release](https://github.com/IanCJ86/ai-quota-widget/releases/latest)下载 `windows-source.zip`，完整解压后运行：
 
-```bash
-git clone https://github.com/IanCJ86/ai-quota-widget.git
-cd ai-quota-widget
-powershell -ExecutionPolicy Bypass -File install.ps1
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-也可以完全手动：下载仓库 → 跑 `install.ps1` → 编辑桌面 `quota-widget\config.json` → 双击 `start.bat`。
+也可以手动安装：安装带Tk的Python 3.10+ → 下载正式ZIP → 完整解压 → 运行install.ps1 → 双击桌面quota-widget里的start.bat → 右键配置。Git用户请检出正式tag，不把main当已发布版本。升级先正常退出程序，再用原安装目录安装。
 
 ## 功能
 
@@ -78,7 +78,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 - **Codex 重置券**：显示账户里可用的「全额重置」券张数与到期日；0 张时该行自动隐藏，可在 `Codex 设置` 里关掉
 - **Codex 全球重置雷达**：显示 [codexreset.org](https://codexreset.org) 的 24/48 小时预测。这是第三方公共信号，不统计个人赠送/补偿重置卡，也不代表个人账户真值
 - **可选 DeepSeek 余额卡片**：填入 API Key（见「配置项」）后显示账户余额与**今日消耗**；DeepSeek 是按量付费，官方只有余额、没有百分比额度与用量接口，所以这张卡片显示金额，余额偏低时自动变色提醒。余额行右侧显示当前计费时段：**梁文峰 时段**（北京时间周一至周五 9:00–12:00、14:00–18:00，单价翻倍）或**梁文谷 时段**（其余时段、含周末，半价）；「今日」行右侧可选显示**本机 DeepSeek Harness 当天用掉的 token 数**（`deepseek_token_metric`）
-- **可选 GLM Coding Plan 卡片**：在 config.json 填入 `glm_api_key` 并启用 `show_glm`，显示 5 小时 / 每周额度与重置时间（需有效的 GLM Coding Plan Key，见「配置项」）
+- **可选 GLM Coding Plan 卡片**：右键安全保存GLM Key并启用卡片，显示 5 小时 / 每周额度与重置时间（需有效的 GLM Coding Plan Key，见「配置项」）
 - 显示额度重置时间（5 小时窗显示倒计时，每周窗显示具体时间）
 - 显示套餐名与续订日期（接口不返回；**右键 → Kimi / Codex / GLM 设置 里直接选**，也可在 `config.json` 里改）
 - 套餐预设：Kimi（Andante / Moderato / Allegretto / Allegro）、Codex（Go / Plus / Pro 5x / Pro 20x）、GLM（Lite / Pro / Max）；自定义名会保存为显示名，不额外积累菜单项
@@ -99,7 +99,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 ## 使用方法
 
 1. 安装 Python 3.10+（含 tkinter）；`install.ps1` 会通过 pip 安装 `requirements.txt` 中的托盘依赖
-2. 本机需已登录 Kimi Code CLI（凭证位于 `~/.kimi-code`）和 Codex CLI（`~/.codex`，需可调用 `codex app-server`）
+2. 配置你使用的来源即可：Kimi Code登录、Codex登录（需可调用codex app-server）、GLM Coding Plan Key或DeepSeek Key。不要求四家都配置，也不要求仅用API Key的用户安装CLI
 3. 下载本仓库，运行 `install.ps1`，再双击桌面 `quota-widget` 中的 `start.bat`。手动在仓库运行时，先执行 `python -m pip install -r requirements.txt`
 
 也可以直接运行：
@@ -204,7 +204,7 @@ Kimi / Codex 凭证来自本机已登录的 CLI；可选 GLM / DeepSeek 需要�
 - Kimi 侧仅访问官方域名 `api.kimi.com` 与 `auth.kimi.com`
 - Codex 侧通过本机 `codex app-server` 获取额度，由该客户端与官方服务通信
 - 雷达请求发往 **codexreset.org**（社区维护的第三方公开站点，**非 OpenAI 官方、与本项目无关联**）；GLM / DeepSeek 请求发往智谱 / DeepSeek 官方域名；GLM / DeepSeek 的 Key 保存在本机，只用于对应官方认证
-- GLM / DeepSeek 的 Key 可用右键菜单「安全保存 API Key…」以 Windows DPAPI 加密写入本机 `glm-key.dpapi` / `deepseek-key.dpapi`（仅当前账户可解密）并清空 config.json 中的明文，也可用环境变量完全不落盘；明文 `glm_api_key` / `deepseek_api_key` 字段仅为兼容旧配置保留
+- GLM / DeepSeek 的 Key 可用右键菜单「安全保存 API Key…」以 Windows DPAPI 加密写入本机 `glm-key.dpapi` / `deepseek-key.dpapi`（仅当前账户可解密）并清空 config.json 中的明文；环境变量由调用环境管理，Windows持久变量存于注册表，不能称为完全不落盘。明文字段仅为旧配置兼容保留
 - Kimi 凭证过期时，程序可能用 refresh_token 自动续期并**更新本地凭证文件**
 - 这是个人自用工具：不建议直接运行未经检查的第三方修改版，改完自己看一遍代码再用
 
