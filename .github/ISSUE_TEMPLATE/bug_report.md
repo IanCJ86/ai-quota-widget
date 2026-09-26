@@ -6,7 +6,7 @@ labels: bug
 ---
 
 <!--
-请先做两件事，它们能让问题基本自证：
+请提供以下信息，便于复现：
 
 1. 提供右键“复制脱敏诊断”的输出；不要公开原始debug.txt、config.json、凭据或含余额JSON
 2. 说明你用的是哪个版本（右键菜单里可查看版本）
@@ -32,19 +32,19 @@ labels: bug
 
 - 程序版本（右键菜单可查看）：
 - Windows 版本：
-- 安装环境的Python版本（脱敏诊断会显示，不以其他全局Python代替）：
+- 安装方式：Windows成品包 / 源码 / 其他：
 - 显示器缩放（100% / 125% / 150%）与屏幕数量：
-- 已配置来源：Kimi Code登录 ☐　Codex登录 ☐　GLM Coding Plan Key ☐　DeepSeek Key ☐
+- 出问题的账户/套餐与使用的客户端（不填写Key或账号身份）：
 
 ## 5. 脱敏诊断输出（推荐用这个）
 
-优先使用右键“复制脱敏诊断”（不含密钥/路径/账号/余额）。窗口打不开时，让协助安装的AI读取安装目录start.bat绑定的Python，并执行下列命令（替换占位路径）：
+优先使用右键“复制脱敏诊断”。成品版窗口打不开时，在程序目录运行：
 
 ```powershell
-& "<start.bat绑定的python.exe>" "<安装目录>\quota_monitor.py" --doctor --data-dir "<安装目录>"
+.\quota-cli.exe --doctor
 ```
 
-doctor离线，不代表联网查询成功；不要换用其他全局Python诊断而误报依赖缺失。
+源码版诊断方式见 [技术说明](https://github.com/IanCJ86/ai-quota-widget/blob/main/docs/cli-and-install.md)。doctor离线，不代表联网查询成功。
 
 > ⚠️ **请不要贴原始 `debug.txt` 或含余额的 JSON** —— 按仓库隐私指引，公开渠道只放脱敏信息。
 
