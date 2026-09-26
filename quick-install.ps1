@@ -26,7 +26,8 @@ try {
     }
     Write-Host ('[2/3] 下载成品包 {0}（约 {1:N1} MB），无需安装开发环境…' -f $release.tag_name,($asset[0].size/1MB))
     $zip = Join-Path $temporary 'app.zip'
-    Invoke-WebRequest -UseBasicParsing -Uri $asset[0].browser_download_url -OutFile $zip -TimeoutSec 180
+    Write-Host '下载时间取决于 GitHub 网络速度；慢网最多等待 15 分钟。下载完成后才开始安装。'
+    Invoke-WebRequest -UseBasicParsing -Uri $asset[0].browser_download_url -OutFile $zip -TimeoutSec 900
     $sums = (Invoke-WebRequest -UseBasicParsing -Uri $sum[0].browser_download_url -TimeoutSec 30).Content
     if ($sums -is [byte[]]) { $sums = [Text.Encoding]::UTF8.GetString($sums) }
     $pattern = '(?m)^([a-fA-F0-9]{64})\s+'+[regex]::Escape($asset[0].name)+'\s*$'
