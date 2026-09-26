@@ -15,7 +15,7 @@ import time
 import urllib.request
 import urllib.parse
 import urllib.error
-from datetime import datetime, date, timezone
+from datetime import datetime, date, timezone, timedelta
 from html import unescape
 from monitor_runtime import (Scheduler, SingleInstance, atomic_json, dpapi_protect,
                              dpapi_unprotect, validate_result)
@@ -23,6 +23,7 @@ from monitor_runtime import (Scheduler, SingleInstance, atomic_json, dpapi_prote
 QUERY_MODE = len(sys.argv) == 3 and sys.argv[1] == "--query"
 if not QUERY_MODE:
     import tkinter as tk
+    from tkinter import font as tkfont
     from tkinter import messagebox, simpledialog, ttk
     try:
         import pystray
@@ -46,8 +47,12 @@ KIMI_USAGE_URL = "https://api.kimi.com/coding/v1/usages"
 KIMI_OAUTH_HOST = "https://auth.kimi.com"
 KIMI_CLIENT_ID = "17e5f671-d194-4dfb-9706-5516cb48c098"  # public OAuth client id of the CLI
 CODEX_HOME = os.path.expanduser(r"~\.codex")
+CODEX_BIN_DIR = os.path.expandvars(r"%LOCALAPPDATA%\OpenAI\Codex\bin")
+# Legacy location: the desktop app now keeps versioned runtimes in
+# bin\<hash>\codex.exe and can leave an outdated codex.exe here, so this is only
+# a fallback (see _find_codex_exe).
 CODEX_EXE_CANDIDATES = [
-    os.path.expandvars(r"%LOCALAPPDATA%\OpenAI\Codex\bin\codex.exe"),
+    os.path.join(CODEX_BIN_DIR, "codex.exe"),
 ]
 DEBUG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug.txt")
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
@@ -57,6 +62,14 @@ CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "last-good
 # key with Windows DPAPI instead (user-scoped, decryptable only on this account).
 GLM_KEY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "glm-key.dpapi")
 GLM_KEY_ENV = "AI_QUOTA_WIDGET_GLM_API_KEY"   # preferred: no secret on disk at all
+# DeepSeek is pay-as-you-go: its API reports a money balance, not a percentage.
+DEEPSEEK_KEY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "deepseek-key.dpapi")
+DEEPSEEK_KEY_ENV = "AI_QUOTA_WIDGET_DEEPSEEK_API_KEY"
+DEEPSEEK_ENV = "DEEPSEEK_API_KEY"             # name used by the official CLI/SDK
+DEEPSEEK_BALANCE_URL = "https://api.deepseek.com/user/balance"
+# Local balance history, because the API has no usage endpoint (see deepseek_spend).
+DEEPSEEK_SPEND_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   "deepseek-spend.json")
 
 DEFAULT_CONFIG = {
     # ---- personal display options (edit config.json, not this file) ----
@@ -77,15 +90,24 @@ DEFAULT_CONFIG = {
     # None = follow the selected plan: Pro hidden, other plans shown.
     # A boolean is a user's explicit menu override.
     "show_codex_5h": None,
+    # Reset vouchers ("full reset" credits) and the daily token row.
+    "show_codex_credits": True,
     "show_radar": True,
     "radar_window": 24,   # 24 or 48 hours
     "tray_metric": "cw_pct",  # Codex weekly percentage in the Windows tray
     "show_glm": False,            # GLM card visibility; rows show "--" until a key works
+    # DeepSeek has no percentage quota, so the card shows money instead.
+    "show_deepseek": True,
     # ---- GLM Coding Plan (optional) ----
     # Legacy plaintext field: still honoured, but the settings menu stores new
     # keys encrypted (GLM_KEY_FILE) and clears this one on save.
     "glm_api_key": "",
     "glm_region": "cn",           # "cn" -> open.bigmodel.cn, "intl" -> api.z.ai
+    # ---- DeepSeek (pay-as-you-go balance) ----
+    "deepseek_api_key": "",       # legacy plaintext field, same rules as glm_api_key
+    # Money cannot be a percentage: warn below this amount and alarm below a
+    # quarter of it. Set to 0 to switch the colour warning off.
+    "deepseek_low_balance": 20.0,
 }
 
 
@@ -146,6 +168,39 @@ KIMI_BLUE_SOFT = "#8db4e8"
 CODEX_GREEN_SOFT = "#83d4ab"
 GLM_PURPLE = "#b48cff"
 GLM_PURPLE_SOFT = "#c9b3f2"
+DEEPSEEK_BLUE = "#4d6bfe"
+DEEPSEEK_SOFT = "#8fa2ff"
+# DeepSeek doubles its prices during weekday peak windows (Beijing time); the
+# balance row says which regime the last refresh fell in.
+DEEPSEEK_PEAK = "梁文峰 时段"
+DEEPSEEK_OFFPEAK = "梁文谷 时段"
+BEIJING = timezone(timedelta(hours=8))
+# Local DeepSeek Harness transcripts, used for an optional "tokens today" figure.
+DSH_SESSIONS = os.path.expanduser(r"~\.dsh\sessions")
+_ZSTD = None
+# One type scale for the whole widget: card titles 9, every body row (labels,
+# values, notes) and the refresh line 8.  Same-role text uses the same size;
+# values are told apart by weight only.
+FONT_FAMILY = "Microsoft YaHei UI"
+FONT_TITLE = (FONT_FAMILY, 9, "bold")
+FONT_TEXT = (FONT_FAMILY, 8)
+FONT_VALUE = (FONT_FAMILY, 8, "bold")
+FONT_STATUS = (FONT_FAMILY, 8)
+FONT_HINT = (FONT_FAMILY, 8)
+# Money is padded to a shared integer width so its currency symbol and decimal
+# point line up.  An ordinary space cannot do that (it is 3px where a digit is
+# 7px) and a monospaced font makes the amounts look spaced out next to the
+# percentages; U+2002 happens to be exactly one digit wide in this font.
+MONEY_PAD = "\u2002"
+# A card title shares its row with the renewal date. They are placed left and
+# right so they can never overlap; this cap only stops an absurd plan name from
+# taking the whole row.
+TITLE_MAX_PX = 220
+# How much width the widest title may add to the value column so that it can sit
+# left of the renewal date, and the breathing room kept between the two.
+TITLE_RESERVE_MAX = 40
+TITLE_GAP = 8        # minimum space between a title and the renewal date
+TITLE_SLACK = 6      # font metrics can differ a little between processes
 PLAN_PRESETS = {
     "kimi": ["Andante", "Moderato", "Allegretto", "Allegro"],
     "codex": ["Go", "Plus", "Pro 5x", "Pro 20x"],
@@ -153,10 +208,8 @@ PLAN_PRESETS = {
 }
 PLAN_CFG_KEY = {"kimi": "kimi_plan_name", "codex": "codex_plan_name",
                 "glm": "glm_plan_name"}
-# Global reset sources are public, third-party signals. They do not expose or
-# replace the account-specific Codex quota below.
-CODEX_RESETS_PAGE_URL = "https://codex-resets.com/"
-CODEX_RESETS_API_URL = "https://codex-resets.com/api/v1/status"
+# The public reset radar is a third-party signal. It does not expose or replace
+# the account-specific Codex quota below.
 CODEX_RADAR_URL = "https://codexreset.org/"
 GLM_QUOTA_URLS = {
     "cn": "https://open.bigmodel.cn/api/monitor/usage/quota/limit",
@@ -174,6 +227,18 @@ def _fmt_reset(iso_or_ts):
         return dt.strftime("%m-%d %H:%M")
     except Exception:
         return "?"
+
+
+def _fmt_day(iso_or_ts):
+    """Format a date, or unix seconds, as MM-DD local."""
+    try:
+        if isinstance(iso_or_ts, (int, float)):
+            dt = datetime.fromtimestamp(iso_or_ts, tz=timezone.utc).astimezone()
+        else:
+            dt = datetime.fromisoformat(str(iso_or_ts).replace("Z", "+00:00")).astimezone()
+        return dt.strftime("%m-%d")
+    except Exception:
+        return ""
 
 
 def _countdown(iso_or_ts):
@@ -280,15 +345,24 @@ def fetch_kimi():
 # ---------------- Codex ----------------
 
 def _find_codex_exe():
-    for c in CODEX_EXE_CANDIDATES:
-        if os.path.exists(c):
-            return c
-    root = os.path.expandvars(r"%LOCALAPPDATA%\OpenAI\Codex\bin")
-    if os.path.isdir(root):
-        cands = [os.path.join(root, e, "codex.exe") for e in os.listdir(root)]
-        cands = [c for c in cands if os.path.exists(c)]
-        if cands:
-            return max(cands, key=os.path.getmtime)
+    """Locate the codex CLI the account actually uses.
+
+    Versioned runtimes live in bin\\<hash>\\codex.exe and the newest one is what
+    the desktop app and the CLI itself run; an outdated bin\\codex.exe can be
+    left behind for months and its app-server lacks newer methods such as
+    account/usage/read or reset credits, so the legacy path is a fallback only.
+    """
+    try:
+        names = os.listdir(CODEX_BIN_DIR) if os.path.isdir(CODEX_BIN_DIR) else []
+    except OSError:
+        names = []
+    runtimes = [os.path.join(CODEX_BIN_DIR, name, "codex.exe") for name in names]
+    runtimes = [path for path in runtimes if os.path.exists(path)]
+    if runtimes:
+        return max(runtimes, key=os.path.getmtime)
+    for candidate in CODEX_EXE_CANDIDATES:
+        if os.path.exists(candidate):
+            return candidate
     return "codex"
 
 
@@ -405,6 +479,18 @@ def fetch_codex():
             return False
 
     shown = [w for w in (five_h, weekly) if w]
+
+    # Reset credits: granted "full reset" vouchers with an expiry.
+    credit = (result or {}).get("rateLimitResetCredits") or {}
+    try:
+        credit_count = int(credit.get("availableCount"))
+    except (TypeError, ValueError):
+        credit_count = None
+    expiries = []
+    for item in credit.get("credits") or []:
+        if isinstance(item, dict) and item.get("status", "available") == "available":
+            expiries.append(item.get("expiresAt"))
+
     return {
         "c5_pct": five_h["pct"] if five_h else None,
         "c5_reset": five_h["reset"] if five_h else None,
@@ -414,6 +500,9 @@ def fetch_codex():
         # Any displayed window that already reset makes the snapshot stale; the
         # UI greys it instead of passing it off as the current value.
         "c_window_expired": bool(shown) and any(expired(w) for w in shown),
+        "cr_credit_count": credit_count,
+        "cr_credit_expiry": min([e for e in expiries if isinstance(e, (int, float))],
+                                default=None),
     }
 
 
@@ -429,12 +518,6 @@ def _fetch_public_text(url, accept):
         if len(raw) > 2 * 1024 * 1024:
             raise ValueError("response too large")
         return raw
-
-
-def _visible_html_text(raw):
-    text = raw.decode("utf-8", errors="replace")
-    text = re.sub(r"<[^>]+>", " ", text)
-    return " ".join(unescape(text).split())
 
 
 def _int_match(pattern, text):
@@ -459,36 +542,30 @@ def fetch_main_radar():
     }
 
 
-def fetch_community_radar():
+# ---------------- provider API keys (GLM / DeepSeek) ----------------
+
+def _windows_env(name):
+    """Read a user environment variable straight from the registry.
+
+    A widget started before the variable was added keeps its old environment,
+    and Explorer only picks up HKCU\\Environment changes after a settings
+    broadcast, so read the value directly instead of trusting os.environ.
+    """
+    if os.name != "nt":
+        return ""
     try:
-        page = _visible_html_text(_fetch_public_text(
-            CODEX_RESETS_PAGE_URL, "text/html,application/xhtml+xml"))
-        pct = _int_match(
-            r"Possible reset\s+(\d+)\s*%\s+chance of reset", page)
-        if pct is not None:
-            return {"cr_resets_pct": pct, "cr_resets_mode": "community_vote",
-                    "cr_resets_updated": datetime.now(timezone.utc).isoformat()}
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
+            value, _ = winreg.QueryValueEx(key, name)
+        return str(value or "").strip()
     except Exception:
-        pass  # Independent, bounded API fallback.
-    d = json.loads(_fetch_public_text(CODEX_RESETS_API_URL, "application/json").decode("utf-8"))
-    body = d.get("data")
-    if not isinstance(body, dict) or "active_watch" not in body:
-        raise ValueError("community schema changed")
-    watch = body["active_watch"]
-    if watch is None:
-        return {"cr_resets_pct": None, "cr_resets_mode": "no_watch"}
-    # The percent field is already 0..100; 1 means 1%, not 100%.
-    pct = float(watch["reset_chance_percent"])
-    return {"cr_resets_pct": round(pct), "cr_resets_mode": "api_watch",
-            "cr_resets_updated": (d.get("meta") or {}).get("generated_at")}
+        return ""
 
 
-# ---------------- GLM Coding Plan (optional) ----------------
-
-def _read_protected_key():
-    """Read the DPAPI-protected GLM key written by the settings menu."""
+def _read_protected_key(path):
+    """Read a DPAPI-protected key written by the settings menu."""
     try:
-        with open(GLM_KEY_FILE, encoding="utf-8") as stream:
+        with open(path, encoding="utf-8") as stream:
             record = json.load(stream)
         if record.get("scheme") != "dpapi":
             return ""
@@ -498,21 +575,24 @@ def _read_protected_key():
         return ""
 
 
-def glm_api_key():
-    """Resolve the GLM key: environment, then encrypted file, then legacy config.
+def provider_key(path, env_names, field):
+    """Resolve an API key: environment, then encrypted file, then legacy config.
 
     config.json is plaintext on disk, so the settings menu writes keys through
     Windows DPAPI and drops the plaintext copy; the legacy field keeps working
     for existing installs.
     """
-    for candidate in (os.environ.get(GLM_KEY_ENV, ""), _read_protected_key(),
-                      CFG.get("glm_api_key") or ""):
-        if candidate and candidate.strip():
-            return candidate.strip()
-    return ""
+    for name in env_names:
+        value = (os.environ.get(name) or _windows_env(name) or "").strip()
+        if value:
+            return value
+    stored = _read_protected_key(path)
+    if stored:
+        return stored
+    return (CFG.get(field) or "").strip()
 
 
-def save_glm_key(key):
+def save_provider_key(path, field, key):
     """Encrypt the key for the current user. Never falls back to plaintext."""
     key = (key or "").strip()
     if not key:
@@ -521,29 +601,54 @@ def save_glm_key(key):
     if not blob:
         return False
     try:
-        atomic_json(GLM_KEY_FILE, {"version": 1, "scheme": "dpapi",
-                                   "data": base64.b64encode(blob).decode("ascii")})
+        atomic_json(path, {"version": 1, "scheme": "dpapi",
+                           "data": base64.b64encode(blob).decode("ascii")})
     except OSError:
         return False
-    if CFG.get("glm_api_key"):
-        CFG["glm_api_key"] = ""   # the encrypted copy replaces the plaintext one
+    if CFG.get(field):
+        CFG[field] = ""   # the encrypted copy replaces the plaintext one
         _save_config(CFG)
     return True
 
 
-def clear_glm_key():
+def clear_provider_key(path, field):
     """Delete every stored copy: the encrypted file and the legacy field."""
     removed = False
     try:
-        os.unlink(GLM_KEY_FILE)
+        os.unlink(path)
         removed = True
     except OSError:
         pass
-    if CFG.get("glm_api_key"):
-        CFG["glm_api_key"] = ""
+    if CFG.get(field):
+        CFG[field] = ""
         _save_config(CFG)
         removed = True
     return removed
+
+
+def glm_api_key():
+    return provider_key(GLM_KEY_FILE, (GLM_KEY_ENV,), "glm_api_key")
+
+
+def save_glm_key(key):
+    return save_provider_key(GLM_KEY_FILE, "glm_api_key", key)
+
+
+def clear_glm_key():
+    return clear_provider_key(GLM_KEY_FILE, "glm_api_key")
+
+
+def deepseek_api_key():
+    return provider_key(DEEPSEEK_KEY_FILE, (DEEPSEEK_KEY_ENV, DEEPSEEK_ENV),
+                        "deepseek_api_key")
+
+
+def save_deepseek_key(key):
+    return save_provider_key(DEEPSEEK_KEY_FILE, "deepseek_api_key", key)
+
+
+def clear_deepseek_key():
+    return clear_provider_key(DEEPSEEK_KEY_FILE, "deepseek_api_key")
 
 
 def fetch_glm():
@@ -592,6 +697,212 @@ def fetch_glm():
             "gw_pct": gw_pct, "gw_reset": gw_reset, "g_plan": "GLM"}
 
 
+# ---------------- DeepSeek (pay-as-you-go balance) ----------------
+
+def deepseek_spend(balance, today=None):
+    """Estimate today's spend from balance changes, since the API has no usage
+    endpoint. The first reading of a day becomes the baseline; a top-up raises
+    the baseline instead of producing negative spend. Returns the amount spent
+    so far today (0.0 when nothing has been observed yet)."""
+    today = today or date.today().isoformat()
+    state = {}
+    try:
+        with open(DEEPSEEK_SPEND_FILE, encoding="utf-8") as stream:
+            state = json.load(stream)
+    except Exception:
+        state = {}
+    opened = state.get("open")
+    if (state.get("day") != today or isinstance(opened, bool)
+            or not isinstance(opened, (int, float))):
+        state = {"version": 1, "day": today, "open": balance, "last": balance}
+    else:
+        previous = state.get("last")
+        if isinstance(previous, (int, float)) and not isinstance(previous, bool):
+            delta = previous - balance
+            if delta < 0:
+                state["open"] = round(state["open"] - delta, 2)  # top-up
+            state["last"] = balance
+    state["updated"] = datetime.now().isoformat(timespec="seconds")
+    try:
+        atomic_json(DEEPSEEK_SPEND_FILE, state)
+    except OSError:
+        pass
+    return round(max(0.0, state["open"] - balance), 2)
+
+
+def local_harness_tokens(day=None, root=None):
+    """Tokens this machine's DeepSeek Harness used on `day`, or None.
+
+    The Harness writes one JSON line per request under ~/.dsh/sessions, usage
+    included, so the widget can show a real number instead of guessing one from
+    the balance.  Needs zstd (Python 3.14+ or the `zstandard` package); when the
+    codec or the logs are missing this simply returns None.
+    """
+    root = root or DSH_SESSIONS
+    if not os.path.isdir(root):
+        return None
+    day = day or date.today()
+    start = int(datetime.combine(day, datetime.min.time()).timestamp() * 1000)
+    end = start + 24 * 60 * 60 * 1000
+    total = fresh = 0
+    for base, _dirs, files in os.walk(root):
+        for name in files:
+            if not name.endswith(".jsonl.zstd"):
+                continue
+            path = os.path.join(base, name)
+            try:
+                if os.path.getmtime(path) * 1000 < start:
+                    continue          # untouched today, so nothing of today in it
+                raw = _zstd_decompress(path)
+            except Exception:
+                continue
+            if raw is None:
+                return None
+            for line in raw.splitlines():
+                if '"usage"' not in line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                stamp = record.get("time")
+                usage = (record.get("data") or {}).get("usage")
+                if not isinstance(stamp, (int, float)) or not isinstance(usage, dict):
+                    continue
+                if not start <= stamp < end:
+                    continue
+                total += int(usage.get("totalTokens") or 0)
+                fresh += (int(usage.get("inputTokens") or 0)
+                          + int(usage.get("outputTokens") or 0))
+    if not total and not fresh:
+        return None
+    return {"total": total, "fresh": fresh}
+
+
+def _zstd_decompress(path):
+    """Decompress one Harness transcript, or None if no codec is available."""
+    global _ZSTD
+    if _ZSTD is False:
+        return None
+    if _ZSTD is None:
+        try:
+            from compression import zstd
+            _ZSTD = lambda data: zstd.decompress(data)
+        except Exception:
+            try:
+                import zstandard
+                _ZSTD = lambda data: zstandard.ZstdDecompressor().decompress(
+                    data, max_output_size=256 << 20)
+            except Exception:
+                _ZSTD = False
+                return None
+    with open(path, "rb") as handle:
+        return _ZSTD(handle.read()).decode("utf-8", "replace")
+
+
+def deepseek_peak_label(when=None):
+    """梁文峰 during DeepSeek's double-price windows, 梁文谷 otherwise.
+
+    Peak is Beijing time Monday-Friday 09:00-12:00 and 14:00-18:00; weekends and
+    every other hour are billed at half price.  Chinese public holidays are not
+    special-cased (no holiday calendar ships with the widget), so a holiday
+    weekday still reports 梁文峰 even though it is billed off-peak.
+    """
+    if when is None:
+        when = datetime.now(timezone.utc)
+    elif when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    local = when.astimezone(BEIJING)
+    minutes = local.hour * 60 + local.minute
+    peak = local.weekday() < 5 and (9 * 60 <= minutes < 12 * 60
+                                    or 14 * 60 <= minutes < 18 * 60)
+    return DEEPSEEK_PEAK if peak else DEEPSEEK_OFFPEAK
+
+
+TRAY_CHOICES = {
+    "kimi": [("k5_pct", "Kimi 每5小时"), ("kw_pct", "Kimi 每周")],
+    "codex": [("c5_pct", "Codex 每5小时"), ("cw_pct", "Codex 每周")],
+    "glm": [("g5_pct", "GLM 每5小时"), ("gw_pct", "GLM 每周")],
+}
+TRAY_DEFAULT = {"kimi": "kw_pct", "codex": "cw_pct", "glm": "gw_pct"}
+
+def clamp_position(x, y, w, h, screen_w, screen_h):
+    """Where to put the window given a remembered position, or None.
+
+    A remembered spot can end up off-screen after a monitor change, so it is only
+    reused when a useful part of the window would still be visible; the result is
+    then pulled inside the working area the way _fit does."""
+    if x is None or y is None:
+        return None
+    if min(x + w, screen_w) - max(x, 0) < 40:
+        return None
+    if min(y + h, screen_h) - max(y, 0) < 40:
+        return None
+    return (min(max(x, 0), max(screen_w - w - 8, 0)),
+            min(max(y, 0), max(screen_h - h - 48, 0)))
+
+
+def _fmt_tokens(value):
+    """Compact token counts: 75682437 -> "75.7M", 1181266882 -> "1.2B"."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number or number < 0:          # NaN or nonsense
+        return None
+    for limit, suffix in ((1e9, "B"), (1e6, "M"), (1e3, "K")):
+        if number >= limit:
+            scaled = number / limit
+            if scaled >= 100:
+                return "%d%s" % (round(scaled), suffix)
+            return "%.1f%s" % (scaled, suffix)
+    return "%d" % round(number)
+
+
+def fetch_deepseek():
+    """DeepSeek API balance. There is no percentage quota and no public usage
+    endpoint; `/user/balance` returns money, so the card shows money."""
+    key = deepseek_api_key()
+    if not key:
+        return {}
+    req = urllib.request.Request(DEEPSEEK_BALANCE_URL, headers={
+        "Authorization": "Bearer " + key,
+        "Accept": "application/json",
+    })
+    with urllib.request.urlopen(req, timeout=15) as response:
+        d = json.load(response)
+    infos = [x for x in (d.get("balance_infos") or []) if isinstance(x, dict)]
+    if not infos:
+        raise ValueError("no balance info")
+    # Prefer CNY when the account reports several currencies.
+    info = next((x for x in infos if str(x.get("currency") or "").upper() == "CNY"),
+                infos[0])
+
+    def amount(field):
+        try:
+            return round(float(info.get(field) or 0), 2)
+        except (TypeError, ValueError):
+            return 0.0
+
+    balance = amount("total_balance")
+    result = {
+        "ds_balance": balance,
+        "ds_spend": deepseek_spend(balance),
+        "ds_granted": amount("granted_balance"),
+        "ds_topped_up": amount("topped_up_balance"),
+        "ds_currency": str(info.get("currency") or "").upper()[:8],
+        "ds_available": bool(d.get("is_available")),
+        "ds_plan": "按量付费",
+    }
+    # Optional local figure: what this machine's Harness spent today, in tokens.
+    if CFG.get("deepseek_token_metric", "total") != "off":
+        tokens = local_harness_tokens()
+        if tokens:
+            result["ds_tokens_total"] = tokens["total"]
+            result["ds_tokens_fresh"] = tokens["fresh"]
+    return result
+
+
 # ---------------- UI ----------------
 
 class App:
@@ -605,7 +916,15 @@ class App:
         self.root.title("Quota")
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
-        self.root.attributes("-alpha", 0.94)
+        # Build the whole window while it is hidden, then show it once at its
+        # fitted size: otherwise the user sees the placeholder box resize.
+        self.root.withdraw()
+        # Transparency and position are remembered between runs.
+        try:
+            self.alpha_val = max(40, min(100, int(CFG.get("window_alpha", 94))))
+        except (TypeError, ValueError):
+            self.alpha_val = 94
+        self.root.attributes("-alpha", self.alpha_val / 100)
         self.root.configure(bg=BG)
         self.topmost = tk.BooleanVar(value=True)
         self.data = {}
@@ -630,11 +949,20 @@ class App:
         self._cards = []
         self._name_labels = []
         self._bg_frames = []
+        self._card_frames = []      # headers/spacers inside cards (theme colours)
 
         w, h = 232, 212
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        self.root.geometry(f"{w}x{h}+{sw - w - 40}+{sh - h - 90}")
+        # Reuse the remembered spot when it is still usable (a monitor change can
+        # leave it off-screen), otherwise fall back to the bottom-right corner.
+        try:
+            remembered = clamp_position(int(CFG.get("window_x", -1)),
+                                        int(CFG.get("window_y", -1)), w, h, sw, sh)
+        except (TypeError, ValueError):
+            remembered = None
+        x, y = remembered or (sw - w - 40, sh - h - 90)
+        self.root.geometry(f"{w}x{h}+{x}+{y}")
 
         sp1 = tk.Frame(self.root, bg=BG, height=6)
         sp1.grid(row=0, column=0)
@@ -643,6 +971,11 @@ class App:
         self.row_labels = {}
         self.section_titles = {}
         self.section_renews = {}
+        self._title_text = {}       # full title text, before any ellipsis
+        # Height of a card's header row, measured from the title font. The row
+        # is given this height explicitly (see _section) so the header labels
+        # cannot influence the card's column widths.
+        self._head_height = tkfont.Font(font=FONT_TITLE).metrics("linespace") + 4
         self._section(1, "Kimi", KIMI_BLUE, [("k5", "每5小时"), ("kw", "每周")])
         self._divider = tk.Frame(self.root, bg="#3a3a4e", height=1)
         self._divider.grid(row=2, column=0, sticky="ew", padx=10, pady=1)
@@ -651,31 +984,38 @@ class App:
         self._divider2.grid(row=4, column=0, sticky="ew", padx=10, pady=1)
         self._section(5, "Codex", CODEX_GREEN,
                       [("c5", "每5小时"), ("cw", "每周"),
-                       ("cr_main", "主源"),
-                       ("cr_resets", "社区")])
+                       ("cr_credit", "重置券"), ("cr_main", "雷达")])
+        self._divider3 = tk.Frame(self.root, bg="#3a3a4e", height=1)
+        self._divider3.grid(row=6, column=0, sticky="ew", padx=10, pady=1)
+        # DeepSeek is pay-as-you-go, so this card shows a money balance.
+        self._section(7, "DeepSeek", DEEPSEEK_BLUE,
+                      [("ds", "余额"), ("ds_spend", "今日")])
+        self._dividers = [self._divider, self._divider2, self._divider3]
 
         bar = tk.Frame(self.root, bg=BG)
-        bar.grid(row=6, column=0, sticky="ew", padx=(17, 10), pady=(3, 2))
+        bar.grid(row=8, column=0, sticky="ew", padx=(19, 12), pady=(3, 2))
         self._bg_frames.append(bar)
         self.status = tk.Label(bar, text="初始化…", fg=FG_DIM, bg=BG,
-                               font=("Microsoft YaHei UI", 9), anchor="w")
+                               font=FONT_STATUS, anchor="w")
         self.status.pack(side="left")
         self.close_btn = tk.Label(bar, text="✕", fg=FG_DIM, bg=BG, cursor="hand2",
-                                  font=("Microsoft YaHei UI", 9))
+                                  font=FONT_STATUS)
         self.close_btn.pack(side="right")
         self.close_btn._no_drag = True
         self.close_btn.bind("<Button-1>", lambda e: self._minimize_to_tray())
-        self.alpha_val = 94
         self._alpha_btns = []
         for sym, d in (("－", -3), ("＋", 3)):
             b = tk.Label(bar, text=sym, fg=FG_DIM, bg=BG, cursor="hand2",
-                         font=("Microsoft YaHei UI", 9))
+                         font=FONT_STATUS)
             b.pack(side="right", padx=1)
             b._no_drag = True
             b.bind("<Button-1>", lambda e, dd=d: self._alpha_step(dd))
             self._alpha_btns.append(b)
-        sp2 = tk.Frame(self.root, bg=BG, height=5)
-        sp2.grid(row=7, column=0)
+        # A little breathing room under the refresh line; the bar's own pady
+        # plus this should end up close to the top margin so the frame looks
+        # evenly padded.
+        sp2 = tk.Frame(self.root, bg=BG, height=3)
+        sp2.grid(row=9, column=0)
         self._bg_frames.append(sp2)
         self.root.grid_columnconfigure(0, weight=1)
 
@@ -693,11 +1033,14 @@ class App:
         self.show_codex = tk.BooleanVar(value=self._st.get("show_codex", True))
         self.show_codex_5h = tk.BooleanVar(value=self._codex_5h_visible())
         self.show_glm = tk.BooleanVar(value=self._st.get("show_glm", False))
+        self.show_deepseek = tk.BooleanVar(value=self._st.get("show_deepseek", True))
         self.menu.add_checkbutton(label="Kimi Coding Plan", variable=self.show_kimi,
                                 command=self._apply_visibility)
         self.menu.add_checkbutton(label="GLM Coding Plan", variable=self.show_glm,
                                 command=self._apply_visibility)
         self.menu.add_checkbutton(label="Codex", variable=self.show_codex,
+                                command=self._apply_visibility)
+        self.menu.add_checkbutton(label="DeepSeek 余额", variable=self.show_deepseek,
                                 command=self._apply_visibility)
         self.menu.add_checkbutton(label="Codex 每5小时窗口", variable=self.show_codex_5h,
                                 command=self._apply_visibility)
@@ -710,6 +1053,9 @@ class App:
             rw.add_radiobutton(label=label, variable=self._radar_var, value=val,
                                command=lambda v=val: self._set_radar_window(int(v)))
         self.menu.add_cascade(label="雷达窗口", menu=rw)
+        self._tray_var = tk.StringVar(value=CFG.get("tray_metric", "cw_pct"))
+        self.tray_menu = tk.Menu(self.menu, tearoff=0)
+        self.menu.add_cascade(label="托盘显示", menu=self.tray_menu)
         self.menu.add_separator()
         self.menu.add_cascade(label="Kimi Coding Plan 设置",
                               menu=self._build_provider_menu("kimi"))
@@ -717,6 +1063,8 @@ class App:
                               menu=self._build_provider_menu("glm"))
         self.menu.add_cascade(label="Codex 设置",
                               menu=self._build_provider_menu("codex"))
+        self.menu.add_cascade(label="DeepSeek 设置",
+                              menu=self._build_deepseek_menu())
         self.menu.add_separator()
         self._theme_var = tk.StringVar(value=self.theme)
         tm = tk.Menu(self.menu, tearoff=0)
@@ -730,12 +1078,72 @@ class App:
         self._apply_visibility(persist=False)
         self._set_theme(CFG.get("theme", "dark"))
         self._init_tray()
+        self._fix_tray_metric()
         self.root.protocol("WM_DELETE_WINDOW", self._minimize_to_tray)
+        self._fit()                      # size it up before it becomes visible
+        self.root.deiconify()
+        if self.theme == "glass":        # acrylic needs the window mapped
+            self._acrylic_on = self._apply_acrylic(True)
         self.refresh_async()
         self.root.after(100, self._poll)
 
+    def _sync_columns(self):
+        """Give every card the same three columns, each only as wide as needed.
+
+        Labels and values are laid out at their natural width and the column
+        widths are the largest of those plus the cell padding, so the cards line
+        up with each other without the slack the old fixed widths used to
+        leave."""
+        # Padding must be part of the minimum, or a card whose content is wider
+        # than the minimum grows a few pixels and stops matching its neighbours.
+        label_w = max([lbl.winfo_reqwidth() for lbl in self._name_labels] or [0]) + 7
+        value_w = max([pl.winfo_reqwidth() for pl, _ in self.rows.values()] or [0]) + 4
+        # A title shares its row with the renewal date, which has to sit exactly
+        # at the notes column's x so it lines up with the notes underneath. A
+        # title may use everything left of it, i.e. label_w + value_w + 1 pixels
+        # (the card border and cell paddings account for the rest), so reserve
+        # whatever the widest title is missing - capped, so an absurd plan name
+        # is shortened instead of widening every card.
+        title_font = tkfont.Font(font=FONT_TITLE)
+        widest = max([title_font.measure(self._title_text.get(name, lbl.cget("text")))
+                      for name, lbl in self.section_titles.items()] or [0])
+        room = label_w + value_w + 1
+        value_w += min(max(widest + TITLE_GAP + TITLE_SLACK - room, 0),
+                       TITLE_RESERVE_MAX)
+        room = label_w + value_w + 1
+        notes_x = room + 8                           # notes label's own x
+        for card in self._cards:
+            card.grid_columnconfigure(0, minsize=label_w)
+            card.grid_columnconfigure(1, minsize=value_w)
+        for name, lbl in self.section_titles.items():
+            renew = self.section_renews.get(name)
+            if renew is None:
+                continue
+            head_x = renew.master.winfo_x() or 7     # header's own x inside card
+            renew.place_configure(x=max(notes_x - head_x, 0), y=1)
+            full = self._title_text.get(name, lbl.cget("text"))
+            lbl.configure(text=self._ellipsize(title_font, full,
+                                               max(room - TITLE_GAP, 60)))
+
+    @staticmethod
+    def _ellipsize(font, text, limit):
+        """Shorten text with an ellipsis so it draws within limit pixels."""
+        if font.measure(text) <= limit:
+            return text
+        trimmed = text
+        while trimmed and font.measure(trimmed + "…") > limit:
+            trimmed = trimmed[:-1]
+        return (trimmed + "…") if trimmed else "…"
+
+    def _set_title(self, name, text):
+        """Card titles remember their full text so _sync_columns can trim them."""
+        self._title_text[name] = text
+        self.section_titles[name].configure(text=text)
+
     def _fit(self):
         """Resize window to fit content, clamped fully on-screen."""
+        self.root.update_idletasks()
+        self._sync_columns()
         self.root.update_idletasks()
         w = self.root.winfo_reqwidth() + 6
         h = self.root.winfo_reqheight() + 6
@@ -861,8 +1269,50 @@ class App:
     def _tray_quit(self, icon, item):
         self._commands.put("quit")
 
+    def _visible_tray_choices(self):
+        """Tray metrics offered for the cards that are currently switched on."""
+        choices = []
+        for card in self.CARD_ORDER:
+            shown = getattr(self, "show_" + card, None)
+            if card in TRAY_CHOICES and shown is not None and shown.get():
+                choices.extend(TRAY_CHOICES[card])
+        return choices
+
+    def _rebuild_tray_menu(self):
+        self.tray_menu.delete(0, "end")
+        choices = self._visible_tray_choices()
+        if not choices:
+            self.tray_menu.add_command(label="（没有显示的卡片）", state="disabled")
+            return
+        for metric, label in choices:
+            self.tray_menu.add_radiobutton(label=label, value=metric,
+                                           variable=self._tray_var,
+                                           command=self._set_tray_metric)
+
+    def _set_tray_metric(self):
+        CFG["tray_metric"] = self._tray_var.get()
+        _save_config(CFG)
+        self._update_tray()
+
+    def _fix_tray_metric(self):
+        """Keep the tray pointing at a card that is actually being queried."""
+        choices = dict(self._visible_tray_choices())
+        current = CFG.get("tray_metric", "cw_pct")
+        if choices and current not in choices:
+            first = next(iter(choices))
+            for card in self.CARD_ORDER:
+                shown = getattr(self, "show_" + card, None)
+                if card in TRAY_DEFAULT and shown is not None and shown.get():
+                    first = TRAY_DEFAULT[card]
+                    break
+            CFG["tray_metric"] = first
+            self._tray_var.set(first)
+            _save_config(CFG)
+        self._rebuild_tray_menu()
+        self._update_tray()
+
     def _update_tray(self):
-        if self.tray is None:
+        if self.tray is None or self._closed:
             return
         metric = CFG.get("tray_metric", "cw_pct")
         value = self.data.get(metric)
@@ -882,6 +1332,9 @@ class App:
     def _alpha_step(self, delta):
         self.alpha_val = max(40, min(100, self.alpha_val + delta))
         self.root.attributes("-alpha", self.alpha_val / 100)
+        if CFG.get("window_alpha") != self.alpha_val:
+            CFG["window_alpha"] = self.alpha_val
+            _save_config(CFG)
 
     def _set_radar_window(self, hours):
         CFG["radar_window"] = hours
@@ -901,34 +1354,44 @@ class App:
         if hasattr(self, "show_codex_5h"):
             self.show_codex_5h.set(self._codex_5h_visible())
 
+    # Card order in the window; dividers sit between consecutive cards.
+    CARD_ORDER = ("kimi", "glm", "codex", "deepseek")
+
     def _apply_visibility(self, persist=True):
         CFG["show_kimi"] = self.show_kimi.get()
         CFG["show_codex"] = self.show_codex.get()
         CFG["show_glm"] = self.show_glm.get()
+        CFG["show_deepseek"] = self.show_deepseek.get()
         if persist:
             # A clicked checkbutton is an explicit user override. Leaving this
             # as None is how the plan-based default remains active.
             CFG["show_codex_5h"] = self.show_codex_5h.get()
-        k, c = CFG["show_kimi"], CFG["show_codex"]
-        g = CFG["show_glm"]
-        kimi_card, glm_card, codex_card = self._cards[0], self._cards[1], self._cards[2]
-        (kimi_card.grid if k else kimi_card.grid_remove)()
-        (codex_card.grid if c else codex_card.grid_remove)()
-        (glm_card.grid if g else glm_card.grid_remove)()
-        (self._divider.grid if (k and g) else self._divider.grid_remove)()
-        (self._divider2.grid if (c and (k or g)) else self._divider2.grid_remove)()
+        visible = {name: bool(getattr(self, "show_" + name).get())
+                   for name in self.CARD_ORDER}
+        for card, name in zip(self._cards, self.CARD_ORDER):
+            (card.grid if visible[name] else card.grid_remove)()
+        # Exactly one divider between two neighbouring visible cards (the slot
+        # just above the lower one), so hiding a card in the middle never
+        # leaves two lines stacked together.
+        indexes = [i for i, name in enumerate(self.CARD_ORDER) if visible[name]]
+        wanted = {lower - 1 for _, lower in zip(indexes, indexes[1:])}
+        for index, divider in enumerate(self._dividers):
+            (divider.grid if index in wanted else divider.grid_remove)()
         if persist:
             CFG["show_radar"] = self.show_radar.get()
             _save_config(CFG)
         if hasattr(self, "scheduler"):
             self.scheduler.configure(self._enabled_sources())
-        c5_visible = c and self.show_codex_5h.get()
+        if hasattr(self, "tray_menu"):
+            self._fix_tray_metric()      # hidden cards must not feed the tray
+        c5_visible = visible["codex"] and self.show_codex_5h.get()
         self._set_row_visible("c5", c5_visible)
-        for key in ("cr_main", "cr_resets"):
+        for key in ("cr_main",):
             if key in self.rows:
                 widgets = [self.row_labels[key][0], *self.rows[key]]
                 for wgt in widgets:
-                    (wgt.grid if (c and CFG["show_radar"]) else wgt.grid_remove)()
+                    (wgt.grid if (visible["codex"] and CFG["show_radar"])
+                     else wgt.grid_remove)()
         self._fit()
 
     def _apply_acrylic(self, on):
@@ -988,11 +1451,13 @@ class App:
         self.root.configure(bg=t["BG"])
         for fr in self._bg_frames:
             fr.configure(bg=t["BG"])
-        self._divider.configure(bg=t["BORDER"])
-        self._divider2.configure(bg=t["BORDER"])
+        for divider in self._dividers:
+            divider.configure(bg=t["BORDER"])
         for card in self._cards:
             card.configure(bg=t["BG_CARD"],
                            highlightbackground=t["BORDER"])
+        for fr in self._card_frames:
+            fr.configure(bg=t["BG_CARD"])
         for lbl in self._name_labels:
             lbl.configure(fg=t["FG_DIM"], bg=t["BG_CARD"])
         for pl, rl in self.rows.values():
@@ -1012,35 +1477,44 @@ class App:
     def _section(self, row, title, color, lines):
         f = tk.Frame(self.root, bg=BG_CARD,
                      highlightbackground="#33334a", highlightthickness=1)
-        f.grid(row=row, column=0, sticky="ew", padx=10, pady=(4, 0))
+        f.grid(row=row, column=0, sticky="ew", padx=12,
+               pady=(8, 0) if row == 1 else (4, 0))
         self._cards.append(f)
-        # fixed pixel column widths so titles never distort alignment across cards
-        f.grid_columnconfigure(0, minsize=64)
-        f.grid_columnconfigure(1, minsize=34)
-        f.grid_columnconfigure(2, minsize=100)
-        title_lbl = tk.Label(f, text=title, fg=color, bg=BG_CARD,
-                             font=("Microsoft YaHei UI", 9, "bold"), anchor="w")
-        title_lbl.grid(row=0, column=0, columnspan=3, sticky="w",
-                       padx=(7, 0), pady=(3, 0))
-        renew_lbl = tk.Label(f, text="", bg=BG_CARD, anchor="w",
-                             font=("Microsoft YaHei UI", 9))
-        renew_lbl.grid(row=0, column=2, sticky="w",
-                       padx=(12, 7), pady=(3, 0))
+        # Column widths are equalised across cards in _sync_columns(); nothing is
+        # fixed here, so each column is only as wide as its content needs.
+        # Title and renewal share their own full-width row. The title is packed
+        # left and the renewal is placed at the third column's x (set in
+        # _sync_columns), so the renewal lines up with the notes below it and
+        # the two can never overlap. The row is placed, with a spacer keeping
+        # its height in the grid, so the header cannot influence the columns.
+        spacer = tk.Frame(f, bg=BG_CARD, height=self._head_height)
+        spacer.grid(row=0, column=0, columnspan=3, pady=(3, 0))
+        self._card_frames.append(spacer)
+        head = tk.Frame(f, bg=BG_CARD)
+        head.place(x=7, y=3, relwidth=1, width=-10, height=self._head_height)
+        self._card_frames.append(head)
+        title_lbl = tk.Label(head, text=title, fg=color, bg=BG_CARD,
+                             font=FONT_TITLE, anchor="w")
+        title_lbl.pack(side="left")
+        renew_lbl = tk.Label(head, text="", bg=BG_CARD, anchor="w",
+                             font=FONT_TEXT)
+        renew_lbl.place(x=0, y=1)
         self.section_titles[title] = title_lbl
         self.section_renews[title] = renew_lbl
-        for i, (key, name) in enumerate(lines, start=1):
+        for i, line in enumerate(lines, start=1):
+            key, name = line[0], line[1]
             nl = tk.Label(f, text=name, fg=FG_DIM, bg=BG_CARD,
-                          font=("Microsoft YaHei UI", 9), anchor="w", width=9)
+                          font=FONT_TEXT, anchor="w")
             nl.grid(row=i, column=0, sticky="w", padx=(7, 0))
             self._name_labels.append(nl)
             self.row_labels[key] = (nl,)
+            # One shared, left-aligned numeric column for every card.
             pct = tk.Label(f, text="…", fg=FG_TEXT, bg=BG_CARD,
-                           font=("Microsoft YaHei UI", 9, "bold"),
-                           anchor="w", width=4)
-            pct.grid(row=i, column=1, sticky="w", padx=(6, 0))
+                           font=FONT_VALUE, anchor="w")
+            pct.grid(row=i, column=1, sticky="w", padx=(4, 0))
             rst = tk.Label(f, text="", fg=FG_DIM, bg=BG_CARD,
-                           font=("Microsoft YaHei UI", 9), anchor="w", width=11)
-            rst.grid(row=i, column=2, sticky="w", padx=(12, 7),
+                           font=FONT_TEXT, anchor="w")
+            rst.grid(row=i, column=2, sticky="w", padx=(8, 3),
                      pady=(0, 3 if i == len(lines) else 0))
             self.rows[key] = (pct, rst)
 
@@ -1049,6 +1523,7 @@ class App:
             return
         wgt.bind("<ButtonPress-1>", self._drag_start)
         wgt.bind("<B1-Motion>", self._drag_move)
+        wgt.bind("<ButtonRelease-1>", self._drag_end)
         wgt.bind("<Double-Button-1>", lambda e: self.refresh_async())
         wgt.bind("<Button-3>", self._menu)
         for child in wgt.winfo_children():
@@ -1062,6 +1537,16 @@ class App:
             x = self.root.winfo_x() + e.x - self._drag[0]
             y = self.root.winfo_y() + e.y - self._drag[1]
             self.root.geometry(f"+{x}+{y}")
+
+    def _drag_end(self, _event=None):
+        """Remember where the window was dropped, so it reopens there."""
+        if not self._drag:
+            return
+        self._drag = None
+        x, y = self.root.winfo_x(), self.root.winfo_y()
+        if CFG.get("window_x") != x or CFG.get("window_y") != y:
+            CFG["window_x"], CFG["window_y"] = x, y
+            _save_config(CFG)
 
     def _menu(self, e):
         self.menu.tk_popup(e.x_root, e.y_root)
@@ -1102,11 +1587,34 @@ class App:
         sub.add_command(label="选择日期…",
                         command=lambda: self._ask_renew(kind))
         m.add_cascade(label="续订日期", menu=sub)
+        if kind == "codex":
+            m.add_separator()
+            self.show_codex_credits = tk.BooleanVar(
+                value=bool(CFG.get("show_codex_credits", True)))
+            m.add_checkbutton(label="显示重置券", variable=self.show_codex_credits,
+                              command=self._toggle_codex_credits)
         if kind == "glm":
             m.add_separator()
             # config.json is plaintext; store new keys encrypted instead.
-            m.add_command(label="安全保存 API Key…", command=self._set_glm_key_secure)
-            m.add_command(label="清除已保存的 Key", command=self._clear_glm_key)
+            m.add_command(label="安全保存 API Key…",
+                          command=lambda: self._save_key_secure("glm"))
+            m.add_command(label="清除已保存的 Key",
+                          command=lambda: self._clear_key("glm"))
+        return m
+
+    def _toggle_codex_credits(self):
+        CFG["show_codex_credits"] = self.show_codex_credits.get()
+        _save_config(CFG)
+        self._render()
+        self._fit()
+
+    def _build_deepseek_menu(self):
+        """DeepSeek has no plans or renewal dates: only the API key."""
+        m = tk.Menu(self.menu, tearoff=0)
+        m.add_command(label="安全保存 API Key…",
+                      command=lambda: self._save_key_secure("deepseek"))
+        m.add_command(label="清除已保存的 Key",
+                      command=lambda: self._clear_key("deepseek"))
         return m
 
     def _set_plan(self, kind, name):
@@ -1175,7 +1683,7 @@ class App:
 
         mv = tk.StringVar(value=str(cm))
         dv = tk.StringVar(value=str(cd))
-        lbl = dict(bg=BG, fg=FG_TEXT, font=("Microsoft YaHei UI", 9))
+        lbl = dict(bg=BG, fg=FG_TEXT, font=FONT_TEXT)
         tk.Label(win, text="月", **lbl).grid(row=0, column=0, padx=(12, 4), pady=10)
         mc = ttk.Combobox(win, textvariable=mv, state="readonly", width=3,
                           values=[str(i) for i in range(1, 13)])
@@ -1206,6 +1714,13 @@ class App:
         # expose for smoke tests
         self._picker = (win, mv, dv, ok)
 
+        # A borderless, topmost parent makes Tk lazy about focus, which left the
+        # dialog unclickable until something else was clicked; raise it, force
+        # focus and only then take the grab.
+        win.update_idletasks()
+        win.lift()
+        win.focus_force()
+        mc.focus_set()
         win.grab_set()
         self.root.wait_window(win)
         self.root.attributes("-topmost", top)
@@ -1221,12 +1736,19 @@ class App:
         finally:
             self.root.attributes("-topmost", top)
 
-    def _set_glm_key_secure(self):
-        """Store a GLM key with DPAPI and remove any plaintext copy."""
-        key = self._ask_secret("GLM API Key", "GLM Coding Plan API Key：")
+    # Provider key handling shared by the GLM and DeepSeek settings menus.
+    KEY_TOOLS = {
+        "glm": ("GLM API Key", save_glm_key, clear_glm_key),
+        "deepseek": ("DeepSeek API Key", save_deepseek_key, clear_deepseek_key),
+    }
+
+    def _save_key_secure(self, kind):
+        """Store a provider key with DPAPI and remove any plaintext copy."""
+        title, save, _ = self.KEY_TOOLS[kind]
+        key = self._ask_secret(title, title + "：")
         if not key:
             return
-        if save_glm_key(key):
+        if save(key):
             self._notice("已保存", "Key 已用当前 Windows 账户加密保存在本机，\n"
                                    "config.json 里的明文已清除。")
         else:
@@ -1234,10 +1756,17 @@ class App:
                                      "（程序不会把 Key 以明文写进文件。）")
         self._apply_visibility()
 
-    def _clear_glm_key(self):
-        if clear_glm_key():
-            self._notice("已清除", "本机保存的 GLM Key 已删除。")
+    def _clear_key(self, kind):
+        _, _, clear = self.KEY_TOOLS[kind]
+        if clear():
+            self._notice("已清除", "本机保存的 Key 已删除。")
         self._apply_visibility()
+
+    def _set_glm_key_secure(self):
+        self._save_key_secure("glm")
+
+    def _clear_glm_key(self):
+        self._clear_key("glm")
 
     def _ask_secret(self, title, prompt):
         """Masked single-line input (tkinter has no masked simpledialog)."""
@@ -1252,11 +1781,11 @@ class App:
         win.configure(bg=BG)
         win.geometry(f"+{self.root.winfo_x() + 40}+{self.root.winfo_y() + 40}")
         tk.Label(win, text=prompt, bg=BG, fg=FG_TEXT, anchor="w",
-                 font=("Microsoft YaHei UI", 9)).grid(
+                 font=FONT_TEXT).grid(
             row=0, column=0, columnspan=2, sticky="w", padx=12, pady=(10, 2))
         tk.Label(win, text="只保存在本机（Windows 加密），不会写入 config.json。",
                  bg=BG, fg=FG_DIM, anchor="w",
-                 font=("Microsoft YaHei UI", 8)).grid(
+                 font=FONT_HINT).grid(
             row=1, column=0, columnspan=2, sticky="w", padx=12, pady=(0, 6))
         value = tk.StringVar()
         entry = tk.Entry(win, textvariable=value, show="•", width=44)
@@ -1274,6 +1803,12 @@ class App:
         win.bind("<Return>", ok)
         # expose for smoke tests
         self._secret_prompt = (win, value, ok)
+        # Same focus problem as the date picker: without an explicit lift and
+        # focus_force the entry is not clickable until the window is refocused.
+        win.update_idletasks()
+        win.lift()
+        win.focus_force()
+        entry.focus_set()
         win.grab_set()
         self.root.wait_window(win)
         self.root.attributes("-topmost", top)
@@ -1299,15 +1834,22 @@ class App:
         self.status.config(text="刷新中…（保留上次数据）")
 
     def _enabled_sources(self):
+        """Only query what the window is actually showing.
+
+        A hidden card costs nothing: no worker process, no API call, no third
+        party request.  The tray icon can only show a source that is queried, so
+        it follows the visible cards too (see _fix_tray_metric)."""
         names = []
-        if CFG.get("show_codex", True) or CFG.get("tray_metric", "cw_pct").startswith("c"):
+        if CFG.get("show_codex", True):
             names.append("codex")
-        if CFG.get("show_kimi", True) or CFG.get("tray_metric", "cw_pct").startswith("k"):
+        if CFG.get("show_kimi", True):
             names.append("kimi")
         if CFG.get("show_codex", True) and CFG.get("show_radar", True):
-            names.extend(("main", "community"))
+            names.append("main")
         if CFG.get("show_glm") and glm_api_key():
             names.append("glm")
+        if CFG.get("show_deepseek", True) and deepseek_api_key():
+            names.append("deepseek")
         return names
 
     # Sources whose payload can admit that the data describes an earlier
@@ -1351,9 +1893,9 @@ class App:
     @staticmethod
     def _source_keys(name):
         return {"kimi": ("k5_", "kw_", "k_plan"),
-                "codex": ("c5_", "cw_", "c_plan", "c_window"),
+                "codex": ("c5_", "cw_", "c_plan", "c_window", "cr_credit"),
                 "glm": ("g5_", "gw_", "g_plan"), "main": ("cr_main",),
-                "community": ("cr_resets",)}[name]
+                "deepseek": ("ds_",)}[name]
 
     def _save_cache(self):
         sources = {name: {"success_at": stamp,
@@ -1452,23 +1994,50 @@ class App:
         for wgt in widgets:
             (wgt.grid if visible else wgt.grid_remove)()
 
+    def _set_amount(self, key, amount, currency, note="", warn=True, whole_width=3):
+        """Render money instead of a percentage (pay-as-you-go balances).
+
+        Both money rows pad their integer part to the same width, so all of them
+        share the currency symbol position and the decimal point."""
+        pl, rl = self.rows[key]
+        if amount is None:
+            pl.config(text="--")
+            rl.config(text="")
+            return
+        symbols = {"CNY": "¥", "USD": "$"}
+        symbol = symbols.get(currency, currency + " " if currency else "")
+        whole, _, cents = f"{amount:,.2f}".partition(".")
+        pad = MONEY_PAD * max(whole_width - len(whole), 0)
+        text = "%s%s%s.%s" % (symbol, pad, whole, cents)
+        base = THEMES[getattr(self, "theme", "dark")]["FG_TEXT"]
+        # Money has no natural percentage, so warn on an absolute threshold.
+        limit = CFG.get("deepseek_low_balance") or 0
+        try:
+            limit = float(limit)
+        except (TypeError, ValueError):
+            limit = 0.0
+        color = base
+        if warn and limit > 0 and amount <= limit:
+            color = "#d04040" if amount <= limit / 4 else "#d08020"
+        pl.config(text=text, fg=color)
+        rl.config(text=note)
+
+    def _set_custom(self, key, value, note="", color=None):
+        """Rows that are neither a percentage nor money (counts, token volume)."""
+        pl, rl = self.rows[key]
+        pl.config(text="--" if value is None else str(value),
+                  fg=color or THEMES[getattr(self, "theme", "dark")]["FG_TEXT"])
+        rl.config(text=note or "")
+
     def _render_radar(self):
-        """Show the selected primary source plus the community signal."""
+        """Show the selected public reset-radar window."""
         win = CFG.get("radar_window", 24)
 
         main_pct = self.data.get("cr_main48" if win == 48 else "cr_main24")
-        self._set_row("cr_main", main_pct, f"主源·{win}h")
+        self._set_row("cr_main", main_pct, f"{win}h概率")
         if main_pct is not None:
             color = "#d08020" if main_pct >= 80 else THEMES[self.theme]["FG_DIM"]
             self.rows["cr_main"][0].config(fg=color)
-
-        resets_pct = self.data.get("cr_resets_pct")
-        self._set_row("cr_resets", resets_pct, "社区投票")
-        if resets_pct is None and self.data.get("cr_resets_mode") == "no_watch":
-            self.rows["cr_resets"][1].config(text="暂无投票")
-        if resets_pct is not None:
-            color = "#d08020" if resets_pct >= 80 else THEMES[self.theme]["FG_DIM"]
-            self.rows["cr_resets"][0].config(fg=color)
 
     def _render(self):
         d = self.data
@@ -1476,20 +2045,19 @@ class App:
         # override and renewal date must still be rendered in that case.
         k_plan = CFG.get("kimi_plan_name") or d.get("k_plan") or ""
         if k_plan or CFG.get("renew_kimi"):
-            self.section_titles["Kimi"].config(
-                text="Kimi · " + k_plan)
+            self._set_title("Kimi", "Kimi · " + k_plan)
             self.section_renews["Kimi"].config(
                 text="续订 " + CFG.get("renew_kimi", ""), fg=KIMI_BLUE_SOFT)
         if d.get("c_plan"):
             c_plan = CFG.get("codex_plan_name") or (
                 d["c_plan"] + CFG.get("codex_plan_suffix", ""))
-            self.section_titles["Codex"].config(text="Codex · " + c_plan)
+            self._set_title("Codex", "Codex · " + c_plan)
             self.section_renews["Codex"].config(
                 text="续订 " + CFG.get("renew_codex", ""), fg=CODEX_GREEN_SOFT)
         if d.get("g_plan"):
             g_title = "GLM" + ((" · " + CFG["glm_plan_name"])
                                if CFG.get("glm_plan_name") else "")
-            self.section_titles["GLM"].config(text=g_title)
+            self._set_title("GLM", g_title)
             renew_g = CFG.get("renew_glm", "")
             self.section_renews["GLM"].config(
                 text=("续订 " + renew_g) if renew_g and renew_g != "MM-DD" else "",
@@ -1504,14 +2072,56 @@ class App:
         self._set_row("c5", d.get("c5_pct"),
                       _countdown(d.get("c5_reset")) if d.get("c5_reset") else "")
         self._set_row("cw", d.get("cw_pct"), _fmt_reset(d.get("cw_reset")))
+        # Reset vouchers: hide the row when there are none (or when disabled).
+        count = d.get("cr_credit_count")
+        show_credits = bool(CFG.get("show_codex_credits", True)) and bool(count)
+        self._set_row_visible("cr_credit", show_credits)
+        if show_credits:
+            expiry = d.get("cr_credit_expiry")
+            note, color = "", THEMES[self.theme]["FG_TEXT"]
+            if isinstance(expiry, (int, float)):
+                note = _fmt_day(expiry) + " 到期"
+                if expiry - time.time() <= 7 * 86400:
+                    color = "#d08020"     # about to expire
+            self._set_custom("cr_credit", f"{int(count)} 张", note, color)
         self._set_row("g5", d.get("g5_pct"),
                       _countdown(d.get("g5_reset")) if d.get("g5_reset") else "")
         self._set_row("gw", d.get("gw_pct"), _fmt_reset(d.get("gw_reset")))
+        # DeepSeek is pay-as-you-go: the card shows money, not a percentage.
+        if d.get("ds_plan") or d.get("ds_balance") is not None:
+            self._set_title("DeepSeek", "DeepSeek")
+            self.section_renews["DeepSeek"].config(text="按量付费", fg=DEEPSEEK_SOFT)
+        # Both money rows share one integer width, so their currency symbols and
+        # decimal points line up (¥114.05 / ¥  4.68).
+        money = [v for v in (d.get("ds_balance"), d.get("ds_spend"))
+                 if isinstance(v, (int, float)) and not isinstance(v, bool)]
+        whole_width = max([len(f"{v:,.2f}".partition(".")[0]) for v in money] or [3])
+        if d.get("ds_balance") is not None:
+            # Peak hours cost double, so the note says which regime the last
+            # refresh fell into; a dead account still reports that instead.
+            if d.get("ds_available", True):
+                note = deepseek_peak_label(self._success_at.get("deepseek")
+                                           and datetime.fromtimestamp(
+                                               self._success_at["deepseek"],
+                                               timezone.utc))
+            else:
+                note = "账号不可用"
+            self._set_amount("ds", d.get("ds_balance"), d.get("ds_currency") or "",
+                             note, whole_width=whole_width)
+        # Today's spend is estimated from balance changes, never colour-warned.
+        # Its note shows how many tokens the local Harness used today, when that
+        # can be read (see local_harness_tokens); otherwise it stays empty.
+        metric = CFG.get("deepseek_token_metric", "total")
+        tokens = d.get("ds_tokens_" + ("fresh" if metric == "fresh" else "total"))
+        self._set_amount("ds_spend", d.get("ds_spend"), d.get("ds_currency") or "",
+                         (_fmt_tokens(tokens) or "") if metric != "off" else "",
+                         warn=False, whole_width=whole_width)
         self._render_radar()
         enabled = self._enabled_sources()
-        for source, keys in {"kimi": ("k5", "kw"), "codex": ("c5", "cw"),
+        for source, keys in {"kimi": ("k5", "kw"),
+                             "codex": ("c5", "cw", "cr_credit"),
                              "glm": ("g5", "gw"), "main": ("cr_main",),
-                             "community": ("cr_resets",)}.items():
+                             "deepseek": ("ds", "ds_spend")}.items():
             if source in enabled and self._is_stale(source):
                 text = self._stale_text(source)
                 for key in keys:
@@ -1519,14 +2129,25 @@ class App:
                     self.rows[key][0].config(fg=THEMES[self.theme]["FG_DIM"])
         stale = [name for name in enabled if self._is_stale(name)]
         parts = []
-        account_times = [self._success_at.get(name) for name in enabled if name in ("kimi", "codex", "glm")]
-        if account_times and all(account_times):
-            parts.append("额度更新 " + datetime.fromtimestamp(min(account_times)).strftime("%H:%M"))
-        if stale:
-            labels = {"kimi": "Kimi", "codex": "Codex", "glm": "GLM", "main": "主源", "community": "社区"}
-            parts.append("待更新:" + "/".join(labels[name] for name in stale))
-        if self._tray_failed:
-            parts.append("托盘不可用")
+        account_times = [self._success_at.get(name) for name in enabled
+                         if name in ("kimi", "codex", "glm", "deepseek")]
+        loaded = any(self._success_at.get(name) for name in enabled)
+        if not loaded:
+            # First load: listing every source as 待更新 made the status line
+            # long enough to widen the whole window, which then shrank again
+            # once the data arrived. Say one short thing instead.
+            parts.append("加载中…")
+        else:
+            if account_times and all(account_times):
+                parts.append("刷新时间 "
+                             + datetime.fromtimestamp(min(account_times)).strftime("%H:%M"))
+            if stale:
+                # Naming every stale source made this line the widest thing in
+                # the window (it shrank again once the names cleared). The rows
+                # themselves are greyed and labelled, so a count is enough.
+                parts.append("待更新:%d 项" % len(stale))
+            if self._tray_failed:
+                parts.append("托盘不可用")
         if not parts:
             parts.append("加载中…")
         self.status.config(text="  ".join(parts),
@@ -1541,7 +2162,7 @@ def query_worker(name):
         return
     try:
         fn = {"kimi": fetch_kimi, "codex": fetch_codex, "glm": fetch_glm,
-              "main": fetch_main_radar, "community": fetch_community_radar}[name]
+              "deepseek": fetch_deepseek, "main": fetch_main_radar}[name]
         data = validate_result(name, fn())
         payload = {"ok": True, "data": data}
     except Exception as ex:
