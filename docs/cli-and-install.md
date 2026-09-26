@@ -1,10 +1,18 @@
-# v1.3 安装、查询与诊断
+# 安装、查询与诊断
 
 对外作者：临界思潮。本文是实际技术合同，不是宣传稿。
 
 ## 普通Windows用户
 
-下载最新正式Release的 `ai-quota-widget-v<版本>-windows-source.zip`，完整解压，运行 `install.ps1`。需要Python 3.10+（含Tk）；缺少时安装器提供安装提示，不暗中安装系统软件。安装器在目标目录建立 `.venv-<版本>`，安装依赖后才替换程序文件，生成 `start.bat`。这是Python应用，不是免环境EXE。v1.3.2新装默认毛玻璃，升级保留原主题；只需配置你实际使用的来源。
+下载最新正式Release的 `ai-quota-widget-v<版本>-windows-x64.zip`，完整解压后双击 `install.cmd`，也可直接运行 `quota-widget.exe`。成品包自带 Python/Tk/依赖，**不需要自行安装环境**，面向 Windows 10/11 x64。首次使用中文快速设置，已有登录自动识别；无凭据可以跳过，之后右键设置。
+
+安装器校验全部文件，安装到 `%LOCALAPPDATA%\Programs\AIQuotaWidget\v<版本>`，创建桌面/开始菜单快捷方式；不默认开机自启。个人数据在 `%LOCALAPPDATA%\AIQuotaWidget`，升级保留，旧程序版本可回退。已知源码旧版可使用 `setup.ps1 -ExistingDataDir "旧目录"` 迁移；同名数据冲突会拒绝，不跨机器迁移DPAPI。成品版命令直接使用 `quota-cli.exe --doctor/--version/--once/--json`。
+
+`quick-install.ps1` 从官方 GitHub 正式 Release 下载成品包并核对SHA256，然后调用同一个离线安装器。网络不通会报错，不切到不明镜像。
+
+### 源码开发者（可选）
+
+`windows-source.zip` + `install.ps1` 是备用源码安装路线，仍需Python 3.10+含Tk；建立 `.venv-<版本>` 和start.bat。不要推荐给只想使用软件的人。新装默认毛玻璃，升级保留主题。
 
 升级前用右键菜单“退出”。运行中会拒绝覆盖，不强杀；安装失败回滚程序文件，保留个人配置、密钥和统计。依赖下载失败可能留下该版本环境，可重新运行安装器修复。桌面启动器不依赖临时uvx环境。`-SkipDependencies` 只用于已自行管理并验证的持久Python环境。
 
@@ -26,7 +34,7 @@ python quota_monitor.py --install --dest "C:\Apps\quota-widget" --no-autostart
 - `--doctor`：离线诊断，仅列版本、依赖可发现状态、文件齐全程度、凭据是否存在、缓存状态和安全错误类别。存在凭据不等于联网认证成功；存在模块不等于GUI已验证。也可右键“复制脱敏诊断”。
 - `--json` / `--once`：默认读缓存，不刷新、不写缓存、不启动GUI或定时任务；`--fresh` 才直接查询一次每个已配置来源。会读取本机已登录凭据，只有对应官方请求使用它们。DeepSeek鲜查会更新本地金额估算基线，token鲜查会更新统计缓存。
 - `--data-dir "实际安装目录"`：读取指定目录的配置、加密Key和缓存。CLI与桌面共同使用同一目录，不能把工具临时目录的空缓存当桌面丢数据。
-- 返回码：0=本命令检查/查询成功，1=部分失败或缓存待核验/旧数据，2=无可用账户数据、环境/安装错误。`--help/--version` 为0。具体以JSON各来源状态或诊断文字为准。
+- 返回码：0=本命令检查/查询成功，1=待配置或部分失败/缓存待核验/旧数据，2=查询无可用数据或安装错误。doctor无凭据为1，不是环境失败。`--help/--version` 为0。以诊断文字及JSON来源状态为准。
 - 输出不包含Key、Cookie、凭据路径、账户ID或日志原文；`--json/--once` **包含个人额度/余额**，不应当作公开脱敏报告。公开反馈用doctor。
 
 ## wheel / uvx
@@ -58,6 +66,6 @@ uvx --from .\ai_quota_widget-1.3.2-py3-none-any.whl quota_monitor --install --de
 
 雷达为第三方预测；Codex来源是本机CLI快照，并非官方实时承诺。token仅为本机Harness当日记录。正式发布不等于用户已验收，更不等于所有显示器/网络/杀毒软件组合已验证。
 
-卸载：右键退出，删除本工具创建的开机启动快捷方式（若启用），再移除自己的安装目录；其中加密Key、配置和历史也会被删除，需保留时先备份。不要删除CLI本身的凭据目录。
+卸载：右键退出，移除本工具程序目录和快捷方式；成品版个人数据在 `%LOCALAPPDATA%\AIQuotaWidget`，单独保留或删除，源码版数据在其安装目录。不要删除CLI本身的凭据目录。
 
 AI-Agent: Codex

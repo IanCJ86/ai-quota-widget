@@ -21,7 +21,7 @@ THEMES = {
                      ("#c6e8fb", "#c6e8fb", "#e1f278", "#c6e8fb"), "#ffd178", "#ffa398", border_width=1),
     "ink": _palette("电子墨水账本", "#e9e4d9", "#f6f2e8", "#272a26", "#55594f", "#b7b6aa", "#353e32",
                     ("#353e32", "#353e32", "#353e32", "#353e32"), "#79520c", "#9a3030"),
-    "glass": _palette("毛玻璃（兼容）", TRANSP_KEY, "#2b2b3d", "#f2f2f8", "#b8b8cc", "#55556e", "#b4cfff",
+    "glass": _palette("毛玻璃", "#2b2b3d", "#2b2b3d", "#f2f2f8", "#b8b8cc", "#55556e", "#b4cfff",
                       ("#9cc6ff", "#d0b5ff", "#97dbbf", "#a7b8ff"), "#f4ba66", "#ff9191", border_width=1),
 }
 THEME_CHOICES = tuple((palette["LABEL"], key) for key, palette in THEMES.items())

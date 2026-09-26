@@ -394,6 +394,9 @@ class SecretTests(unittest.TestCase):
         # was added would not see it in os.environ.
         with patch.object(monitor, "_windows_env", return_value="sk-registry"), \
                 patch.dict(os.environ, blank):
+            self.assertEqual(monitor.deepseek_api_key(), "")  # explicit empty masks HKCU
+            for name in blank:
+                os.environ.pop(name, None)
             self.assertEqual(monitor.deepseek_api_key(), "sk-registry")
 
         self.require_dpapi()

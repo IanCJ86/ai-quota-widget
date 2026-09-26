@@ -194,9 +194,13 @@ class QueryProcess:
         self.process = None
         self.job = KillJob()
         try:
-            executable = str(Path(sys.executable).with_name("python.exe")) if os.name == "nt" else sys.executable
+            if getattr(sys, 'frozen', False):
+                command = [str(Path(sys.executable).with_name('quota-cli.exe')), '--query', name]
+            else:
+                executable = str(Path(sys.executable).with_name("python.exe")) if os.name == "nt" else sys.executable
+                command = [executable, "-u", script, "--query", name]
             self.process = subprocess.Popen(
-                [executable, "-u", script, "--query", name], stdin=subprocess.PIPE,
+                command, stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
             # Worker cannot start network/spawn Codex before ownership is secured.

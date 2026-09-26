@@ -18,7 +18,7 @@ from PIL import Image
 from test_monitor import UITests, monitor
 
 
-def capture(root, path):
+def capture(root, path, decorated=False):
     user, gdi = ctypes.windll.user32, ctypes.windll.gdi32
     user.GetDC.argtypes = [wintypes.HWND]
     user.GetDC.restype = wintypes.HDC
@@ -35,6 +35,12 @@ def capture(root, path):
     gdi.DeleteDC.argtypes = [wintypes.HDC]
     hwnd = int(root.wm_frame(), 16)
     w, h = root.winfo_width(), root.winfo_height()
+    if decorated:
+        rectangle = wintypes.RECT()
+        user.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+        if not user.GetWindowRect(hwnd, ctypes.byref(rectangle)):
+            raise OSError('GetWindowRect failed')
+        w, h = rectangle.right-rectangle.left, rectangle.bottom-rectangle.top
     screen = user.GetDC(hwnd)
     dc = gdi.CreateCompatibleDC(screen)
     bits = ctypes.c_void_p()

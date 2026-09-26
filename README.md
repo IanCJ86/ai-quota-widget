@@ -58,19 +58,23 @@ v1.3的安装、wheel/uvx入口、离线诊断、CLI查询和异常显示语义�
 
 所有皮肤仍显示相同额度、金额、token、重置券和雷达；上方仪表依次选取已显示的 Codex / Kimi / GLM 周余量，并标明来源。不把 DeepSeek 金额当作百分比。过期或查询失败显示待更新，不画有效指针/油量。静态矢量绘制，没有常驻动画、额外查询或新依赖；透明度越低，可读性越容易受桌面背景影响。
 
-## 安装（让 AI agent 帮你装）
+## 安装：下载即用，不需要 Python
 
-不想自己动手？把这句话发给你的 AI agent（Kimi Code / Codex / Claude Code 等均可）：
+**Windows 10/11 x64**：从[最新正式 Release](https://github.com/IanCJ86/ai-quota-widget/releases/latest)下载 **`windows-x64.zip`** → 完整解压 → 双击 **`install.cmd`**。会创建桌面快捷方式并打开中文“快速设置”。也可以直接双击包里的 `quota-widget.exe`，不安装。
 
-> 帮我安装 https://github.com/IanCJ86/ai-quota-widget 的最新正式Release。阅读对应版本的AGENTS.md和SKILL.md，使用完整安装器，保留已有配置，最后核对版本、可用来源和托盘恢复。
+**无需 Python / Node.js / Git / pip。** 已有登录自动识别；只用某一家就选某一家，没有 Key 可以稍后设置。套餐名和续订日期不影响安装。
 
-让agent检查环境并操作安装器；登录或Key由你在本机完成，不必贴进聊天。推荐从[最新正式Release](https://github.com/IanCJ86/ai-quota-widget/releases/latest)下载 `windows-source.zip`，完整解压后运行：
+想让 AI 帮忙？发给它：
+
+> 请用中文帮我安装 https://github.com/IanCJ86/ai-quota-widget 最新正式 Release 的 windows-x64 成品包，校验 SHA256 后使用包内 setup.ps1。不要装 Python 或改源码。保留已有配置，打开软件即可；缺少 Key 由我在快速设置里填写，可以跳过。
+
+一条命令安装（PowerShell；先下载脚本到临时文件，再执行；成品包会核对同版SHA256）：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1
+$installer = Join-Path $env:TEMP 'ai-quota-quick-install.ps1'; Invoke-WebRequest -UseBasicParsing 'https://github.com/IanCJ86/ai-quota-widget/releases/latest/download/quick-install.ps1' -OutFile $installer; powershell -NoProfile -ExecutionPolicy Bypass -File $installer
 ```
 
-也可以手动安装：安装带Tk的Python 3.10+ → 下载正式ZIP → 完整解压 → 运行install.ps1 → 双击桌面quota-widget里的start.bat → 右键配置。Git用户请检出正式tag，不把main当已发布版本。升级先正常退出程序，再用原安装目录安装。
+升级前右键“退出”。成品版个人配置/Key在 `%LOCALAPPDATA%\AIQuotaWidget`，与程序分离。旧源码版迁移、开发者安装及CLI见[技术说明](docs/cli-and-install.md)。登录/Key留在本机操作，不要贴进聊天。下载耗时取决于网络；不会在用户电脑上重新安装开发环境。
 
 ## 功能
 
@@ -96,7 +100,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 - 高 DPI 屏幕原生渲染，字体清晰不毛边；窗口尺寸自动贴合内容
 - 主窗口使用 tkinter；托盘使用 Pillow 与 pystray
 
-## 使用方法
+## 源码开发方式（普通用户不需要）
 
 1. 安装 Python 3.10+（含 tkinter）；`install.ps1` 会通过 pip 安装 `requirements.txt` 中的托盘依赖
 2. 配置你使用的来源即可：Kimi Code登录、Codex登录（需可调用codex app-server）、GLM Coding Plan Key或DeepSeek Key。不要求四家都配置，也不要求仅用API Key的用户安装CLI
