@@ -7,6 +7,7 @@ param(
     [switch]$NoShortcut
 )
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 $watch = [Diagnostics.Stopwatch]::StartNew()
 $source = $PSScriptRoot
 $stage = $null
@@ -26,7 +27,7 @@ try {
     if ($root -eq [IO.Path]::GetPathRoot($root).TrimEnd('\') -or $root -eq $env:USERPROFILE -or $root -eq $source) { throw '请选择独立安装目录。' }
     $cursor = $root
     while ($cursor) {
-        if ((Test-Path -LiteralPath $cursor) -and ((Get-Item -LiteralPath $cursor).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw '安装目录不能包含重解析链接。' }
+        if ((Test-Path -LiteralPath $cursor) -and ((Get-Item -LiteralPath $cursor -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw '安装目录不能包含重解析链接。' }
         $cursor = [IO.Path]::GetDirectoryName($cursor)
     }
     $entries = @($manifest.files.PSObject.Properties)
@@ -85,7 +86,7 @@ try {
 } finally {
     if ($stage -and (Test-Path -LiteralPath $stage)) {
         $resolved = [IO.Path]::GetFullPath($stage)
-        if ($resolved.StartsWith($root+'\.install-',[StringComparison]::OrdinalIgnoreCase) -and -not ((Get-Item -LiteralPath $stage).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        if ($resolved.StartsWith($root+'\.install-',[StringComparison]::OrdinalIgnoreCase) -and -not ((Get-Item -LiteralPath $stage -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
             Remove-Item -LiteralPath $stage -Recurse -Force
         }
     }

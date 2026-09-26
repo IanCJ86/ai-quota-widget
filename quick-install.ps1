@@ -1,7 +1,9 @@
 ﻿# One-command entrypoint. Fetch only official release assets; no Python/npm/pip.
 [CmdletBinding()]
-param([string]$Version = 'latest', [string]$ExistingDataDir = '', [switch]$NoLaunch)
+param([string]$Version = 'latest', [string]$ExistingDataDir = '', [string]$Destination = '',
+      [switch]$NoLaunch, [switch]$NoShortcut)
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 $previousProgress = $ProgressPreference
 $temporary = $null
 try {
@@ -32,7 +34,8 @@ try {
     Write-Host '[3/3] 校验通过，解压并安装…'
     $unpack = Join-Path $temporary 'package'
     Expand-Archive -LiteralPath $zip -DestinationPath $unpack
-    $options = @{NoLaunch=$NoLaunch}
+    $options = @{NoLaunch=$NoLaunch;NoShortcut=$NoShortcut}
+    if ($Destination) { $options.Destination = $Destination }
     if ($ExistingDataDir) { $options.ExistingDataDir = $ExistingDataDir }
     & (Join-Path $unpack 'setup.ps1') @options
     if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) { throw '成品包安装器未完成，请看上方中文提示。' }
@@ -41,7 +44,7 @@ try {
     if ($temporary -and (Test-Path -LiteralPath $temporary)) {
         $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')+'\'
         $resolved = [IO.Path]::GetFullPath($temporary)
-        if ($resolved.StartsWith($tempRoot+'quota-download-',[StringComparison]::OrdinalIgnoreCase) -and -not ((Get-Item -LiteralPath $temporary).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        if ($resolved.StartsWith($tempRoot+'quota-download-',[StringComparison]::OrdinalIgnoreCase) -and -not ((Get-Item -LiteralPath $temporary -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
             Remove-Item -LiteralPath $temporary -Recurse -Force
         }
     }
