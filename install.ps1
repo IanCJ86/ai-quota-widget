@@ -29,8 +29,8 @@ if (-not $SkipDependencies) {
     & $py -m pip install --disable-pip-version-check -r (Join-Path $src "requirements.txt")
     if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed; no application files replaced." }
 }
-& $py -c "import PIL, pystray"
-if ($LASTEXITCODE -ne 0) { throw "Pillow/pystray missing. Run without -SkipDependencies." }
+& $py -c "import PIL, pystray, sys; __import__('backports.zstd' if sys.version_info < (3, 14) else 'compression.zstd')"
+if ($LASTEXITCODE -ne 0) { throw "Pillow/pystray/zstd missing. Run without -SkipDependencies." }
 # Use the same interpreter for launch and dependency installation.
 $resolvedPy = (& $py -c "import sys; print(sys.executable)").Trim()
 $pyw = Join-Path (Split-Path -Parent $resolvedPy) "pythonw.exe"
@@ -40,7 +40,7 @@ if (-not (Test-Path -LiteralPath $pyw)) { $pyw = $resolvedPy }
 $dest = [IO.Path]::GetFullPath($Destination)
 New-Item -ItemType Directory -Force -Path $dest | Out-Null
 if ([IO.Path]::GetFullPath($src).TrimEnd('\') -ne $dest.TrimEnd('\')) {
-    foreach ($file in @("quota_monitor.py", "monitor_runtime.py", "requirements.txt", "README.md", "LICENSE")) {
+    foreach ($file in @("quota_monitor.py", "monitor_runtime.py", "harness_stats.py", "requirements.txt", "README.md", "LICENSE")) {
         Copy-Item -LiteralPath (Join-Path $src $file) -Destination $dest -Force
     }
 }

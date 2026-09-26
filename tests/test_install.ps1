@@ -7,10 +7,10 @@ $resolvedRoot = (Resolve-Path -LiteralPath $testRoot).Path
 try {
     $dest = Join-Path $testRoot "app with spaces"
     & (Join-Path $repo "install.ps1") -Destination $dest -PythonPath $PythonPath -SkipDependencies -NoAutostartPrompt
-    foreach ($file in @("quota_monitor.py", "monitor_runtime.py", "start.bat", "requirements.txt", "config.json")) {
+    foreach ($file in @("quota_monitor.py", "monitor_runtime.py", "harness_stats.py", "start.bat", "requirements.txt", "config.json")) {
         if (-not (Test-Path -LiteralPath (Join-Path $dest $file))) { throw "Missing installed file: $file" }
     }
-    & $PythonPath -m py_compile (Join-Path $dest "quota_monitor.py") (Join-Path $dest "monitor_runtime.py")
+    & $PythonPath -m py_compile (Join-Path $dest "quota_monitor.py") (Join-Path $dest "monitor_runtime.py") (Join-Path $dest "harness_stats.py")
     if ($LASTEXITCODE -ne 0) { throw "Installed source compilation failed" }
     $configPath = Join-Path $dest "config.json"
     $customConfig = '{"kimi_plan_name":"INSTALLER_TEST","glm_api_key":""}'

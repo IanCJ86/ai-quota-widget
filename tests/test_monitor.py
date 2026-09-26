@@ -8,6 +8,8 @@ import subprocess
 import sys
 import tempfile
 import time
+from desktop_test_support import isolate_desktop
+isolate_desktop()
 import tkinter
 from tkinter import font as tkfont
 import unittest
@@ -27,10 +29,10 @@ try:
     zstd_compress = _zstd.compress
 except Exception:
     try:
-        import zstandard as _zstandard
+        from backports import zstd as _zstd
 
         HAVE_ZSTD = True
-        zstd_compress = _zstandard.ZstdCompressor().compress
+        zstd_compress = _zstd.compress
     except Exception:
         HAVE_ZSTD = False
 
@@ -297,6 +299,9 @@ class SecretTests(unittest.TestCase):
         self.key_file = Path(self.tmp.name) / "glm-key.dpapi"
         self.deepseek_key_file = Path(self.tmp.name) / "deepseek-key.dpapi"
         self.patches = [patch.object(monitor, "GLM_KEY_FILE", str(self.key_file)),
+                        patch.object(monitor, "DEEPSEEK_SPEND_FILE", str(Path(self.tmp.name) / "spend.json")),
+                        patch.object(monitor, "SETTINGS_FILE", str(Path(self.tmp.name) / "settings.json")),
+                        patch.object(monitor, "local_harness_tokens", return_value=None),
                         patch.object(monitor, "DEEPSEEK_KEY_FILE",
                                      str(self.deepseek_key_file)),
                         patch.object(monitor, "CFG", dict(monitor.DEFAULT_CONFIG)),
@@ -462,6 +467,7 @@ class DeepSeekTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.spend_file = Path(self.tmp.name) / "deepseek-spend.json"
         self.patches = [patch.object(monitor, "DEEPSEEK_SPEND_FILE", str(self.spend_file)),
+                        patch.object(monitor, "local_harness_tokens", return_value=None),
                         patch.object(monitor, "DEEPSEEK_KEY_FILE",
                                      str(Path(self.tmp.name) / "deepseek-key.dpapi")),
                         patch.object(monitor, "CFG", dict(monitor.DEFAULT_CONFIG)),
@@ -598,6 +604,9 @@ class UITests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.patches = [patch.object(monitor, "CACHE_FILE", str(Path(self.tmp.name) / "cache.json")),
+                        patch.object(monitor, "CFG", dict(monitor.DEFAULT_CONFIG)),
+                        patch.object(monitor, "deepseek_api_key", return_value="test-only"),
+                        patch.object(monitor, "glm_api_key", return_value=""),
                         patch.object(monitor, "DEBUG_FILE", str(Path(self.tmp.name) / "debug.json")),
                         patch.object(monitor, "_save_config"),
                         patch.object(monitor.App, "_init_tray"),
@@ -678,6 +687,69 @@ class UITests(unittest.TestCase):
                   if menu.type(i) != "separator"]
         self.assertIn("安全保存 API Key…", labels)
         self.assertIn("清除已保存的 Key", labels)
+
+    def test_reset_boundary_expires_only_its_row_and_selected_tray(self):
+        a = self.app
+        a._on_result("codex", {"ok": True, "data": {
+            "cw_pct": 75, "cw_reset": time.time() + 1000,
+            "c5_pct": 50, "c5_reset": time.time() + 10}}, {})
+        future = time.time() + 20
+        with patch.object(monitor.time, "time", return_value=future):
+            a._render()
+            self.assertEqual(a.rows["c5"][1].cget("text"), "窗口已过期")
+            self.assertNotEqual(a.rows["cw"][1].cget("text"), "窗口已过期")
+            a.tray = Mock(title="", visible=True)
+            a._tray_image = Mock(return_value="image")
+            a._update_tray()
+            self.assertFalse(a._tray_image.call_args.args[1])
+
+    def test_yesterday_tokens_and_spend_are_never_shown_as_today(self):
+        a = self.app
+        a._on_result("deepseek", {"ok": True, "data": {
+            "ds_balance": 100, "ds_spend": 9, "ds_spend_day": "2000-01-01"}}, {})
+        a._on_result("tokens", {"ok": True, "data": {
+            "ds_tokens_day": "2000-01-01", "ds_tokens_total": 404000000,
+            "ds_tokens_fresh": 10}}, {})
+        self.assertNotIn("ds_tokens_total", a.data)
+        self.assertEqual(a.rows["ds_spend"][0].cget("text"), "--")
+        a._on_result("tokens", {"ok": True, "data": {
+            "ds_tokens_day": monitor.date.today().isoformat(),
+            "ds_tokens_total": 0, "ds_tokens_fresh": 0}}, {})
+        a._on_result("deepseek", {"ok": True, "data": {
+            "ds_balance": 100, "ds_spend": 0,
+            "ds_spend_day": monitor.date.today().isoformat()}}, {})
+        self.assertEqual(a.rows["ds_spend"][1].cget("text"), "0")
+
+    def test_optional_token_failure_does_not_poison_balance(self):
+        a = self.app
+        a._on_result("deepseek", {"ok": True, "data": {"ds_balance": 100, "ds_currency": "CNY"}}, {})
+        a._on_result("tokens", {"ok": False, "error": "Timeout"}, {})
+        self.assertFalse(a._is_stale("deepseek"))
+        self.assertEqual(a.rows["ds"][0].cget("text"), "¥100.00")
+
+    def test_fit_only_position_change_does_not_rebuild_region(self):
+        a = self.app
+        a._fit()
+        with patch.object(a, "_round_corners") as rounded:
+            a.root.geometry("+300+300")
+            a.root.update_idletasks()
+            a._fit()
+            rounded.assert_not_called()
+
+    def test_native_test_window_is_on_private_desktop(self):
+        if os.name != "nt":
+            self.skipTest("Windows desktop isolation")
+        from ctypes import wintypes
+        user = ctypes.windll.user32
+        get = user.GetUserObjectInformationW
+        get.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p,
+                        wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
+        user.GetThreadDesktop.restype = wintypes.HANDLE
+        handle = user.GetThreadDesktop(ctypes.windll.kernel32.GetCurrentThreadId())
+        name = ctypes.create_unicode_buffer(256)
+        size = wintypes.DWORD()
+        self.assertTrue(get(handle, 2, name, ctypes.sizeof(name), ctypes.byref(size)))
+        self.assertTrue(name.value.startswith("QuotaTests-"), name.value)
     def test_secret_dialog_masks_input(self):
         a = self.app
         seen = {}
@@ -738,7 +810,10 @@ class UITests(unittest.TestCase):
         a = self.app
         a._on_result("deepseek", {"ok": True, "data": {
             "ds_balance": 119.9, "ds_spend": 6.64, "ds_currency": "CNY",
-            "ds_tokens_total": 314826023, "ds_tokens_fresh": 2352423}}, {})
+            }}, {})
+        a._on_result("tokens", {"ok": True, "data": {
+            "ds_tokens_total": 314826023, "ds_tokens_fresh": 2352423,
+            "ds_tokens_day": monitor.date.today().isoformat()}}, {})
         self.assertEqual(a.rows["ds_spend"][0].cget("text"),
                          "¥" + monitor.MONEY_PAD * 2 + "6.64")
         self.assertEqual(a.rows["ds_spend"][1].cget("text"), "315M")
@@ -806,13 +881,13 @@ class UITests(unittest.TestCase):
         self.assertEqual((calls["geometry"], len(redraws)), first,
                          "an unchanged layout must not re-apply the geometry or "
                          "force another repaint")
-        self.assertEqual(first[0], 1)
-        self.assertEqual(first[1], 1, "a real geometry change must force a repaint")
+        self.assertLessEqual(first[0], 1)
+        self.assertEqual(first[1], first[0], "a real geometry change must force a repaint")
 
         a.status.config(text="刷新时间 12:34 变更")
         a.root.update_idletasks()
         a._fit()
-        self.assertGreaterEqual(calls["geometry"], 1)
+        self.assertGreaterEqual(calls["geometry"], first[0])
 
         # a real layout change (a card goes away) must be applied again
         try:

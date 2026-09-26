@@ -14,7 +14,7 @@
 - 单实例、休眠返回补查、配置/缓存原子写入；托盘不可用时保留主窗口。
 - 数字/新旧状态不变时不重绘图标，空闲不常驻查询子进程。
 
-升级前先从右键菜单退出旧版，再运行 `install.ps1`，已有 `config.json` 会保留。新版必须同时包含 `quota_monitor.py`、`monitor_runtime.py`，托盘依赖由安装器安装。
+升级前先从右键菜单退出旧版，再运行 `install.ps1`，已有 `config.json` 会保留。新版必须同时包含 `quota_monitor.py`、`monitor_runtime.py`、`harness_stats.py`，依赖由安装器安装。
 
 ## 30 秒安装（让 AI agent 帮你装）
 
@@ -79,7 +79,7 @@ python quota_monitor.py
 - GLM 数据来自 `open.bigmodel.cn/api/monitor/usage/quota/limit`（国际版 `api.z.ai` 同路径），用配置的 apiKey 鉴权
 - DeepSeek 数据来自官方 `api.deepseek.com/user/balance`（Bearer Key）；官方没有用量/额度接口（实测 `/user/usage`、`/dashboard/billing/usage` 均为 404），所以只能显示余额。「今日消耗」是本机估算：以当天第一次读到的余额为起点，按之后每次余额的减少量累加，充值会自动抬高起点（不会出现负数），跨天归零；起点之前（当天 Widget 没运行时）的消耗统计不到
 - DeepSeek 的**计费时段**按官方规则判断：高峰 = 北京时间周一至周五 9:00–12:00 与 14:00–18:00，其余（含周末）为空闲、单价减半。**中国法定节假日没有内置日历**，所以节假日的白天会按高峰显示（实际按空闲计费）
-- 「今日」行的 token 数来自**本机 DeepSeek Harness 的会话记录**（`~/.dsh/sessions`，每条请求都带 token 用量），因此它只覆盖这台机器上 Harness 的用量，不代表账户全部消耗；需要 zstd 支持（Python 3.14+ 或 `zstandard` 包），不支持时该位置留空。缓存读取量通常远大于新 token（同一段上下文每轮都会命中缓存），`total` 会把它们算进去，所以数字可能很大而金额很小
+- 「今日」行的 token 数来自**本机 DeepSeek Harness 的会话记录**（`~/.dsh/sessions`），只覆盖本机 Harness，不代表账户全部消耗；需要 Python 3.14 标准库或旧版 Python 的 `backports.zstd`（安装器自动处理）。不可用时留空。缓存读取量通常远大于新 token，`total` 会把它们算进去，所以数字可能很大而金额很小。
 - CLI 凭证只从本机读取，仅用于对应官方服务的认证，不发送给雷达网站，不打印或写入诊断文件
 
 ## 配置项
@@ -119,11 +119,11 @@ python quota_monitor.py
 
 **API Key 的存放顺序**（先命中者生效）：
 
-1. 环境变量：GLM 用 `AI_QUOTA_WIDGET_GLM_API_KEY`；DeepSeek 用 `AI_QUOTA_WIDGET_DEEPSEEK_API_KEY` 或官方的 `DEEPSEEK_API_KEY`（完全不落盘，最推荐）
+1. 环境变量：GLM 用 `AI_QUOTA_WIDGET_GLM_API_KEY`；DeepSeek 用 `AI_QUOTA_WIDGET_DEEPSEEK_API_KEY` 或官方的 `DEEPSEEK_API_KEY`（程序不另存副本；Windows 持久环境变量本身存于注册表，并非加密保险箱）
 2. 本机加密文件 `glm-key.dpapi` / `deepseek-key.dpapi`（Windows DPAPI 加密，只有当前 Windows 账户能解密）
 3. `config.json` 的 `glm_api_key` / `deepseek_api_key`（旧版明文，仅兼容）
 
-Windows 上程序还会直接读 `HKCU\Environment`，所以新设的环境变量不需要重启资源管理器或电脑。右键菜单 `GLM Coding Plan 设置` / `DeepSeek 设置` → 「安全保存 API Key…」会弹出口令输入框（输入内容不回显），加密保存到第 2 项并**清空 config.json 里的明文**；「清除已保存的 Key」删除全部副本。系统加密不可用时程序会明确报错并且**不会退回明文写入**。
+Windows 上程序还会直接读 `HKCU\Environment`，所以新设的环境变量不需要重启资源管理器或电脑。右键菜单 `GLM Coding Plan 设置` / `DeepSeek 设置` → 「安全保存 API Key…」加密保存后清理 config.json / 旧 settings.json 的对应明文字段；任何一步失败都会提示未完成，不把“已生成加密副本”误报为“明文清理完成”。「清除已保存的 Key」清理本程序的文件副本，不删除用户环境变量。系统加密不可用时不会退回明文写入。
 
 ### 关于 GLM 卡片
 
@@ -135,10 +135,10 @@ GLM 额度接口（`monitor/usage/quota/limit`）是智谱官方 Claude Code 插
 这是 Windows Python 应用，不通过 npm 安装。`install.ps1` 负责检查 Python/tkinter、安装托盘依赖、复制文件、生成启动器和可选开机自启。
 
 **需要提供 token 吗？**
-不需要。Kimi / Codex 凭证来自本机已登录的 CLI；GLM 是唯一的例外，需要你自己在 config.json 里填 API Key。
+Kimi / Codex 凭证来自本机已登录的 CLI；可选 GLM / DeepSeek 需要自己的 API Key，推荐用右键菜单加密保存，不必编辑配置文件。
 
 **雷达是什么？**
-对「Codex 额度什么时候发生全球重置」的两个第三方公共信号，仅供参考，不代表官方信息；赠送/补偿重置卡、个人 5 小时/每周额度必须以 Codex 官方状态为准。
+`codexreset.org` 对「Codex 额度什么时候发生全球重置」的第三方公开预测，仅供参考，不代表官方信息；赠送/补偿重置卡、个人 5 小时/每周额度必须以 Codex 官方状态为准。
 
 ## 支持范围与局限
 
@@ -150,6 +150,12 @@ GLM 额度接口（`monitor/usage/quota/limit`）是智谱官方 Claude Code 插
 - 套餐名与续订日期无法从接口自动读取，需要手动配置（见上文「配置项」）
 
 欢迎 issue / PR 扩展更多服务商。
+
+## 开发与回归验证
+
+运行 `python -m unittest discover -s tests -v`。Windows 上真实 Tk 测试会自动进入独立、不可见的测试桌面（不切换用户桌面）；如果无法隔离则测试失败，不回退到用户正在工作的桌面。测试内的 Codex 75%、DeepSeek ¥119.90 / ¥6.64 / 315M 是合成数据，不是实际额度。
+
+本地 token 聚合由独立查询进程负责，不再阻塞余额请求。使用跨帧流式解压与按文件变化的计数缓存；单轮扫描有时间、行长、解压量限制，异常或不完整时留空，余额仍可刷新。`harness-totals.json` 只包含路径哈希、日期、大小、时间戳和计数，不存会话文本。Python 3.10–3.13 安装时自动补充标准库兼容实现 backports.zstd，3.14 使用标准库。token 与今日金额都有日期边界，缓存不能把昨天的数据伪装成今天；金额仍是账户余额差额估算，token 仅覆盖本机 Harness，二者范围不同。
 
 ## 隐私与安全说明
 

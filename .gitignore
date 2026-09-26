@@ -4,6 +4,8 @@ last-good.json
 glm-key.dpapi
 deepseek-key.dpapi
 deepseek-spend.json
+harness-totals.json
+.review-deps/
 dist/
 
 # python
