@@ -1,6 +1,6 @@
 # Changelog
 
-## 未发布 — 1.2.1
+## v1.2.1 — 2026-09-26
 
 - 将 App 中的设置菜单、输入弹窗、原生 Windows 效果和托盘生命周期拆成独立组件；颜色字体集中到 widget_style.py，保留原外观。App 从 v1.2.0 的1350行降为964行，结构债分阶段处理，不代表全项目代码总量减少。
 - 新增 app_version.py 唯一版本定义；HTTP User-Agent、Codex RPC clientInfo、debug.txt 与右键版本项、`--version` 均引用它，缓存/加密文件的 schema version 保持不变。
