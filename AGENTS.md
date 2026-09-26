@@ -24,7 +24,7 @@ cd ai-quota-widget
 powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
-脚本会：检查 Python 3.10+/tkinter → 安装 Pillow 和 pystray → 复制两个 Python 模块到 `%USERPROFILE%\Desktop\quota-widget\` → 生成使用同一解释器的 `start.bat` → 询问是否开机自启（默认 N）。无交互安装使用 `-NoAutostartPrompt`；支持 `-PythonPath` 和 `-Destination` 指定解释器与安装目录。依赖已安装时可加 `-SkipDependencies`，脚本仍会验证导入。升级前从托盘菜单退出旧版，已有 config.json 不覆盖。
+脚本会：检查 Python 3.10+/tkinter → 安装 Pillow、pystray 及旧版 Python 的 backports.zstd → 复制 quota_monitor.py、monitor_runtime.py、harness_stats.py 到 `%USERPROFILE%\Desktop\quota-widget\` → 生成使用同一解释器的 `start.bat` → 询问是否开机自启（默认 N）。无交互安装使用 `-NoAutostartPrompt`；支持 `-PythonPath` 和 `-Destination` 指定解释器与安装目录。依赖已安装时可加 `-SkipDependencies`。升级前从托盘菜单退出旧版，已有 config.json 不覆盖。
 
 ### 3. 根据用户口述写 config.json
 
@@ -65,7 +65,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 | `show_deepseek` | 是否显示 DeepSeek 卡片。DeepSeek 是按量付费，卡片显示**余额金额**而不是百分比 |
 | `deepseek_api_key` | 可选。DeepSeek API Key，**明文仅兼容**。优先用环境变量 `DEEPSEEK_API_KEY`（用户机器上通常已有）或 `AI_QUOTA_WIDGET_DEEPSEEK_API_KEY`，或让用户点右键菜单「DeepSeek 设置 → 安全保存 API Key…」 |
 | `deepseek_low_balance` | 余额低于此金额显示橙色、低于四分之一显示红色；`0` = 关闭变色提醒 |
-| `deepseek_token_metric` | DeepSeek「今日」行右侧显示本机 Harness 当天 token：`"total"`（含缓存读取，默认）/ `"fresh"`（只算新输入+输出）/ `"off"`。余额行右侧固定显示计费时段：**梁文峰 时段**（北京时间工作日 9:00–12:00、14:00–18:00）或**梁文谷 时段**（其余时段）；需要 zstd（Python 3.14+ 或 `zstandard`），没有时该位置留空 |
+| `deepseek_token_metric` | DeepSeek「今日」行右侧显示本机 Harness 当天 token：`"total"`（含缓存读取，默认）/ `"fresh"`（只算新输入+输出）/ `"off"`。依赖 Python 3.14 标准库或 `backports.zstd`，安装器自动处理；扫描失败留空、不阻断余额。计费标签离线覆盖2026年节假日；未覆盖年份的可能高峰时段留空，需更新官方年度日历 |
 | `show_codex_credits` | 是否显示 Codex「重置券」行（可用券为 0 时该行本就不显示）。重置券需要较新的 codex 运行时：程序优先用 `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe` 里最新的那个 |
 
 注意：GLM 卡片只有在**能取到 Key**（环境变量 / `glm-key.dpapi` / `glm_api_key` 任一来源）且 `show_glm` 为 true 时才出现；DeepSeek 卡片同理（`DEEPSEEK_API_KEY`、`deepseek-key.dpapi`、`deepseek_api_key` 任一 + `show_deepseek`）。需要**有效的 GLM Coding Plan** 才能取到 GLM 数据。不要主动把用户的 Key 明文写进 config.json——让用户自己在右键菜单里保存。
@@ -82,7 +82,7 @@ cd "%USERPROFILE%\Desktop\quota-widget" && start.bat
 - `"errors": {}` 且 `"data"` 里有 `k5_pct` / `c5_pct` / `ds_balance` 等数值 → 安装成功，告诉用户完成。
 - `errors` 里出现 `kimi` → 用户没登录 Kimi Code CLI，让其先运行一次 Kimi Code 登录。
 - `errors` 里出现 `codex` → 检查 CLI 安装与登录。默认托盘也查询 Codex；仅隐藏卡片不会关闭托盘需要的查询。
-- `errors` 里出现 `deepseek` → 用户机器上没有可用的 DeepSeek Key（环境变量 `DEEPSEEK_API_KEY`、`deepseek-key.dpapi`、`deepseek_api_key` 都没有）；`HTTP401` 表示 Key 无效。`ds_spend` 是本地估算的今日消耗（`deepseek-spend.json`），官方没有用量接口，不要拿它当账单。
+- `errors` 里出现 `deepseek` → 核对余额请求错误码与 Key 来源，并非所有错误都代表缺 Key；`HTTP401` 表示认证失败。`ds_spend` 是本地估算，不是正式账单。`tokens` 是独立本地扫描，异常不会阻断余额刷新。
 - 底部“待更新:N 项”表示有 N 个来源尚未取得新数据（对应卡片里的备注显示“旧 HH:MM”，从未成功过则显示“等待更新”）。查看对应来源的错误，不把所有 `--` 当成同一种故障。
 
 ### 5. 完成

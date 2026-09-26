@@ -4,6 +4,7 @@
 # Never prints or logs any token.
 import base64
 import json
+import math
 import os
 import sys
 import calendar
@@ -17,6 +18,7 @@ import urllib.parse
 import urllib.error
 from datetime import datetime, date, timezone, timedelta
 from html import unescape
+from html.parser import HTMLParser
 from monitor_runtime import (Scheduler, SingleInstance, atomic_json, dpapi_protect,
                              dpapi_unprotect, validate_result)
 
@@ -61,7 +63,7 @@ CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "last-good
 # GLM key storage: config.json is plaintext, so the settings menu encrypts the
 # key with Windows DPAPI instead (user-scoped, decryptable only on this account).
 GLM_KEY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "glm-key.dpapi")
-GLM_KEY_ENV = "AI_QUOTA_WIDGET_GLM_API_KEY"   # preferred: no secret on disk at all
+GLM_KEY_ENV = "AI_QUOTA_WIDGET_GLM_API_KEY"   # no extra copy in app files
 # DeepSeek is pay-as-you-go: its API reports a money balance, not a percentage.
 DEEPSEEK_KEY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "deepseek-key.dpapi")
 DEEPSEEK_KEY_ENV = "AI_QUOTA_WIDGET_DEEPSEEK_API_KEY"
@@ -125,8 +127,9 @@ def _load_config():
 def _save_config(cfg):
     try:
         atomic_json(CONFIG_FILE, cfg)
+        return True
     except Exception:
-        pass
+        return False
 
 
 CFG = _load_config()
@@ -177,7 +180,6 @@ DEEPSEEK_OFFPEAK = "梁文谷 时段"
 BEIJING = timezone(timedelta(hours=8))
 # Local DeepSeek Harness transcripts, used for an optional "tokens today" figure.
 DSH_SESSIONS = os.path.expanduser(r"~\.dsh\sessions")
-_ZSTD = None
 # One type scale for the whole widget: card titles 9, every body row (labels,
 # values, notes) and the refresh line 8.  Same-role text uses the same size;
 # values are told apart by weight only.
@@ -520,23 +522,34 @@ def _fetch_public_text(url, accept):
         return raw
 
 
-def _int_match(pattern, text):
-    match = re.search(pattern, text, flags=re.IGNORECASE)
-    if not match:
-        return None
-    try:
-        return int(match.group(1))
-    except Exception:
-        return None
+class _RadarParser(HTMLParser):
+    """Attribute order/quote style must not break the public page adapter."""
+    def __init__(self):
+        super().__init__()
+        self.values = {}
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        name = attrs.get("data-testid")
+        if name not in ("probability-ring-24h", "probability-ring-48h"):
+            return
+        try:
+            value = int(attrs.get("data-target-value"))
+        except (TypeError, ValueError):
+            return
+        if 0 <= value <= 100:
+            self.values[name] = value
 
 
 def fetch_main_radar():
     html = _fetch_public_text(CODEX_RADAR_URL, "text/html").decode("utf-8", errors="replace")
+    parser = _RadarParser()
+    parser.feed(html)
+    if not parser.values:
+        raise ValueError("missing radar probabilities")
     return {
-        "cr_main24": _int_match(
-            r'data-testid="probability-ring-24h"[^>]*data-target-value="(\d+)"', html),
-        "cr_main48": _int_match(
-            r'data-testid="probability-ring-48h"[^>]*data-target-value="(\d+)"', html),
+        "cr_main24": parser.values.get("probability-ring-24h"),
+        "cr_main48": parser.values.get("probability-ring-48h"),
         "cr_main_updated": datetime.now(timezone.utc).isoformat(),
         "cr_main_mode": "model",
     }
@@ -605,25 +618,40 @@ def save_provider_key(path, field, key):
                            "data": base64.b64encode(blob).decode("ascii")})
     except OSError:
         return False
-    if CFG.get(field):
-        CFG[field] = ""   # the encrypted copy replaces the plaintext one
-        _save_config(CFG)
+    return _clear_plaintext_key(field)
+
+
+def _clear_plaintext_key(field):
+    candidate = dict(CFG, **{field: ""})
+    if not _save_config(candidate):
+        return False
+    CFG[field] = ""
+    try:
+        with open(SETTINGS_FILE, encoding="utf-8") as stream:
+            legacy = json.load(stream)
+        if not isinstance(legacy, dict):
+            return False
+        if legacy.get(field):
+            legacy[field] = ""
+            atomic_json(SETTINGS_FILE, legacy)
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError):
+        return False
     return True
 
 
 def clear_provider_key(path, field):
     """Delete every stored copy: the encrypted file and the legacy field."""
-    removed = False
+    if not _clear_plaintext_key(field):
+        return False
     try:
         os.unlink(path)
-        removed = True
-    except OSError:
+    except FileNotFoundError:
         pass
-    if CFG.get(field):
-        CFG[field] = ""
-        _save_config(CFG)
-        removed = True
-    return removed
+    except OSError:
+        return False
+    return True
 
 
 def glm_api_key():
@@ -704,6 +732,8 @@ def deepseek_spend(balance, today=None):
     endpoint. The first reading of a day becomes the baseline; a top-up raises
     the baseline instead of producing negative spend. Returns the amount spent
     so far today (0.0 when nothing has been observed yet)."""
+    if isinstance(balance, bool) or not isinstance(balance, (int, float)) or not math.isfinite(balance) or balance < 0:
+        raise ValueError("invalid balance")
     today = today or date.today().isoformat()
     state = {}
     try:
@@ -711,13 +741,15 @@ def deepseek_spend(balance, today=None):
             state = json.load(stream)
     except Exception:
         state = {}
+    if not isinstance(state, dict):
+        state = {}
     opened = state.get("open")
     if (state.get("day") != today or isinstance(opened, bool)
-            or not isinstance(opened, (int, float))):
+            or not isinstance(opened, (int, float)) or not math.isfinite(opened)):
         state = {"version": 1, "day": today, "open": balance, "last": balance}
     else:
         previous = state.get("last")
-        if isinstance(previous, (int, float)) and not isinstance(previous, bool):
+        if isinstance(previous, (int, float)) and not isinstance(previous, bool) and math.isfinite(previous):
             delta = previous - balance
             if delta < 0:
                 state["open"] = round(state["open"] - delta, 2)  # top-up
@@ -731,82 +763,31 @@ def deepseek_spend(balance, today=None):
 
 
 def local_harness_tokens(day=None, root=None):
-    """Tokens this machine's DeepSeek Harness used on `day`, or None.
-
-    The Harness writes one JSON line per request under ~/.dsh/sessions, usage
-    included, so the widget can show a real number instead of guessing one from
-    the balance.  Needs zstd (Python 3.14+ or the `zstandard` package); when the
-    codec or the logs are missing this simply returns None.
-    """
-    root = root or DSH_SESSIONS
-    if not os.path.isdir(root):
-        return None
-    day = day or date.today()
-    start = int(datetime.combine(day, datetime.min.time()).timestamp() * 1000)
-    end = start + 24 * 60 * 60 * 1000
-    total = fresh = 0
-    for base, _dirs, files in os.walk(root):
-        for name in files:
-            if not name.endswith(".jsonl.zstd"):
-                continue
-            path = os.path.join(base, name)
-            try:
-                if os.path.getmtime(path) * 1000 < start:
-                    continue          # untouched today, so nothing of today in it
-                raw = _zstd_decompress(path)
-            except Exception:
-                continue
-            if raw is None:
-                return None
-            for line in raw.splitlines():
-                if '"usage"' not in line:
-                    continue
-                try:
-                    record = json.loads(line)
-                except ValueError:
-                    continue
-                stamp = record.get("time")
-                usage = (record.get("data") or {}).get("usage")
-                if not isinstance(stamp, (int, float)) or not isinstance(usage, dict):
-                    continue
-                if not start <= stamp < end:
-                    continue
-                total += int(usage.get("totalTokens") or 0)
-                fresh += (int(usage.get("inputTokens") or 0)
-                          + int(usage.get("outputTokens") or 0))
-    if not total and not fresh:
-        return None
-    return {"total": total, "fresh": fresh}
+    """Independent optional worker: bounded streaming, metadata-only cache."""
+    from harness_stats import totals
+    cache = None if root is not None else os.path.join(os.path.dirname(CONFIG_FILE),
+                                                       "harness-totals.json")
+    return totals(root or DSH_SESSIONS, day, cache)
 
 
-def _zstd_decompress(path):
-    """Decompress one Harness transcript, or None if no codec is available."""
-    global _ZSTD
-    if _ZSTD is False:
-        return None
-    if _ZSTD is None:
-        try:
-            from compression import zstd
-            _ZSTD = lambda data: zstd.decompress(data)
-        except Exception:
-            try:
-                import zstandard
-                _ZSTD = lambda data: zstandard.ZstdDecompressor().decompress(
-                    data, max_output_size=256 << 20)
-            except Exception:
-                _ZSTD = False
-                return None
-    with open(path, "rb") as handle:
-        return _ZSTD(handle.read()).decode("utf-8", "replace")
+# Offline calendar: State Council's 2026 public holiday schedule. Weekends stay
+# off-peak even on make-up working days: the provider explicitly says Mon-Fri.
+# https://www.beijing.gov.cn/fuwu/bmfw/sy/jrts/202511/t20251104_4258838.html
+DEEPSEEK_HOLIDAYS = {
+    2026: frozenset(date(2026, month, day)
+                    for month, first, last in ((1, 1, 3), (2, 15, 23), (4, 4, 6),
+                                               (5, 1, 5), (6, 19, 21),
+                                               (9, 25, 27), (10, 1, 7))
+                    for day in range(first, last + 1)),
+}
 
 
 def deepseek_peak_label(when=None):
     """梁文峰 during DeepSeek's double-price windows, 梁文谷 otherwise.
 
-    Peak is Beijing time Monday-Friday 09:00-12:00 and 14:00-18:00; weekends and
-    every other hour are billed at half price.  Chinese public holidays are not
-    special-cased (no holiday calendar ships with the widget), so a holiday
-    weekday still reports 梁文峰 even though it is billed off-peak.
+    Peak is Beijing Mon-Fri 09:00-12:00 and 14:00-18:00, excluding holidays.
+    Outside known calendar years, potential peak hours have no label rather
+    than inventing a holiday policy; known off-peak hours remain unambiguous.
     """
     if when is None:
         when = datetime.now(timezone.utc)
@@ -816,6 +797,11 @@ def deepseek_peak_label(when=None):
     minutes = local.hour * 60 + local.minute
     peak = local.weekday() < 5 and (9 * 60 <= minutes < 12 * 60
                                     or 14 * 60 <= minutes < 18 * 60)
+    if peak:
+        holidays = DEEPSEEK_HOLIDAYS.get(local.year)
+        if holidays is None:
+            return ""
+        peak = local.date() not in holidays
     return DEEPSEEK_PEAK if peak else DEEPSEEK_OFFPEAK
 
 
@@ -879,28 +865,36 @@ def fetch_deepseek():
                 infos[0])
 
     def amount(field):
-        try:
-            return round(float(info.get(field) or 0), 2)
-        except (TypeError, ValueError):
-            return 0.0
+        value = info.get(field, 0 if field != "total_balance" else None)
+        if isinstance(value, bool) or value is None:
+            raise ValueError("invalid balance field")
+        value = float(value)
+        if not math.isfinite(value) or value < 0:
+            raise ValueError("invalid balance field")
+        return round(value, 2)
 
     balance = amount("total_balance")
     result = {
         "ds_balance": balance,
-        "ds_spend": deepseek_spend(balance),
         "ds_granted": amount("granted_balance"),
         "ds_topped_up": amount("topped_up_balance"),
         "ds_currency": str(info.get("currency") or "").upper()[:8],
         "ds_available": bool(d.get("is_available")),
         "ds_plan": "按量付费",
     }
-    # Optional local figure: what this machine's Harness spent today, in tokens.
-    if CFG.get("deepseek_token_metric", "total") != "off":
-        tokens = local_harness_tokens()
-        if tokens:
-            result["ds_tokens_total"] = tokens["total"]
-            result["ds_tokens_fresh"] = tokens["fresh"]
+    validate_result("deepseek", result)
+    result["ds_spend"] = deepseek_spend(balance)
+    result["ds_spend_day"] = date.today().isoformat()
     return result
+
+
+def fetch_tokens():
+    day = date.today()
+    tokens = local_harness_tokens(day)
+    if tokens is None:
+        raise FileNotFoundError("local usage unavailable")
+    return {"ds_tokens_total": tokens["total"], "ds_tokens_fresh": tokens["fresh"],
+            "ds_tokens_day": day.isoformat()}
 
 
 # ---------------- UI ----------------
@@ -963,12 +957,9 @@ class App:
         self.tray = None
         self._cards = []
         self._name_labels = []
-        self._bg_frames = []
-        self._card_frames = []      # headers/spacers inside cards (theme colours)
 
         sp1 = tk.Frame(self.root, bg=BG, height=6)
         sp1.grid(row=0, column=0)
-        self._bg_frames.append(sp1)
         self.rows = {}  # key -> (pct_label, reset_label)
         self.row_labels = {}
         self.section_titles = {}
@@ -996,7 +987,6 @@ class App:
 
         bar = tk.Frame(self.root, bg=BG)
         bar.grid(row=8, column=0, sticky="ew", padx=(19, 12), pady=(3, 2))
-        self._bg_frames.append(bar)
         self.status = tk.Label(bar, text="初始化…", fg=FG_DIM, bg=BG,
                                font=FONT_STATUS, anchor="w")
         self.status.pack(side="left")
@@ -1018,7 +1008,6 @@ class App:
         # evenly padded.
         sp2 = tk.Frame(self.root, bg=BG, height=3)
         sp2.grid(row=9, column=0)
-        self._bg_frames.append(sp2)
         self.root.grid_columnconfigure(0, weight=1)
 
         for wgt in self.root.winfo_children():
@@ -1172,33 +1161,41 @@ class App:
             x = 8
         if y < -h // 2:
             y = 8
-        # Touching the geometry (or the region) of a layered window makes Windows
-        # re-create its surface; if that happens needlessly the panel can keep a
-        # stale, partial copy of itself on screen for seconds.  Only act on a real
-        # change, and then force a repaint so no old surface survives.
+        # Avoid needless geometry/region churn. This is redraw hardening, not
+        # proof that a screenshot of another window is a compositor artifact.
         target = (w, h, x, y)
         if target != self._geom:
-            self._geom = target
+            resized = self._geom is None or target[:2] != self._geom[:2]
             self.root.geometry("%dx%d+%d+%d" % target)
-            self._round_corners()
+            self.root.update_idletasks()  # apply pending size before reading HWND dimensions
+            if resized:
+                self._round_corners()
             self._redraw()
+            self._geom = target
 
     def _redraw(self):
         """Invalidate the whole window (RDW_INVALIDATE|UPDATENOW|ALLCHILDREN)."""
         try:
+            from ctypes import wintypes
             hwnd = int(self.root.wm_frame(), 16)
-            ctypes.windll.user32.RedrawWindow(
-                hwnd, None, None, 0x0001 | 0x0100 | 0x0080)
+            redraw = ctypes.windll.user32.RedrawWindow
+            redraw.argtypes = [wintypes.HWND, ctypes.c_void_p, wintypes.HRGN, wintypes.UINT]
+            redraw.restype = wintypes.BOOL
+            redraw(hwnd, None, None, 0x0001 | 0x0100 | 0x0080)
         except Exception:
             pass
 
     def _round_corners(self, radius=8):
         """Rounded corners: prefer Win11 DWM native rounding (antialiased)."""
         try:
+            from ctypes import wintypes
             hwnd = int(self.root.wm_frame(), 16)
             # DWMWA_WINDOW_CORNER_PREFERENCE = 33, DWMWCP_ROUND = 2
             pref = ctypes.c_int(2)
-            ok = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            dwm = ctypes.windll.dwmapi.DwmSetWindowAttribute
+            dwm.argtypes = [wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
+            dwm.restype = ctypes.c_long
+            ok = dwm(
                 hwnd, 33, ctypes.byref(pref), ctypes.sizeof(pref))
             if ok == 0:
                 return  # DWM handled rounding
@@ -1206,12 +1203,22 @@ class App:
             pass
         # fallback for older Windows: region-based rounding (aliased)
         try:
+            from ctypes import wintypes
             hwnd = int(self.root.wm_frame(), 16)
             w = self.root.winfo_width()
             h = self.root.winfo_height()
-            rgn = ctypes.windll.gdi32.CreateRoundRectRgn(0, 0, w + 1, h + 1,
-                                                         radius, radius)
-            ctypes.windll.user32.SetWindowRgn(hwnd, rgn, True)
+            create = ctypes.windll.gdi32.CreateRoundRectRgn
+            create.argtypes = [ctypes.c_int] * 6
+            create.restype = wintypes.HRGN
+            assign = ctypes.windll.user32.SetWindowRgn
+            assign.argtypes = [wintypes.HWND, wintypes.HRGN, wintypes.BOOL]
+            assign.restype = ctypes.c_int
+            delete = ctypes.windll.gdi32.DeleteObject
+            delete.argtypes = [wintypes.HANDLE]
+            delete.restype = wintypes.BOOL
+            rgn = create(0, 0, w + 1, h + 1, radius, radius)
+            if rgn and not assign(hwnd, rgn, True):
+                delete(rgn)  # ownership transfers only on successful SetWindowRgn
         except Exception:
             pass
 
@@ -1346,7 +1353,7 @@ class App:
         metric = CFG.get("tray_metric", "cw_pct")
         value = self.data.get(metric)
         source = "codex" if metric.startswith("c") else "kimi" if metric.startswith("k") else "glm"
-        stale = self._is_stale(source)
+        stale = self._transport_stale(source) or self._window_expired(metric.split("_")[0])
         key = (metric, value, stale)
         if key != self._tray_value:
             self.tray.icon = self._tray_image(value, stale)
@@ -1477,16 +1484,7 @@ class App:
             CFG["theme"] = name
             _save_config(CFG)
         t = THEMES[name]
-        self.root.configure(bg=t["BG"])
-        for fr in self._bg_frames:
-            fr.configure(bg=t["BG"])
-        for divider in self._dividers:
-            divider.configure(bg=t["BORDER"])
-        for card in self._cards:
-            card.configure(bg=t["BG_CARD"],
-                           highlightbackground=t["BORDER"])
-        for fr in self._card_frames:
-            fr.configure(bg=t["BG_CARD"])
+        self._paint_backgrounds(t)
         for lbl in self._name_labels:
             lbl.configure(fg=t["FG_DIM"], bg=t["BG_CARD"])
         for pl, rl in self.rows.values():
@@ -1503,6 +1501,27 @@ class App:
             b.configure(fg=t["FG_DIM"], bg=t["BG"])
         self._render()  # pct 颜色按当前主题重算
 
+    def _paint_backgrounds(self, palette):
+        """Inherit the containing card/root surface, including new nested widgets.
+
+        Only separators and card borders need explicit roles. Dialogs and menus
+        own their styling; do not mutate their widgets during a theme switch.
+        """
+        def visit(widget, background):
+            if isinstance(widget, (tk.Toplevel, tk.Menu)):
+                return
+            if widget in self._cards:
+                background = palette["BG_CARD"]
+                widget.configure(highlightbackground=palette["BORDER"])
+            if widget in self._dividers:
+                widget.configure(bg=palette["BORDER"])
+                return
+            if widget is self.root or isinstance(widget, (tk.Frame, tk.Label)):
+                widget.configure(bg=background)
+            for child in widget.winfo_children():
+                visit(child, background)
+        visit(self.root, palette["BG"])
+
     def _section(self, row, title, color, lines):
         f = tk.Frame(self.root, bg=BG_CARD,
                      highlightbackground="#33334a", highlightthickness=1)
@@ -1518,10 +1537,8 @@ class App:
         # its height in the grid, so the header cannot influence the columns.
         spacer = tk.Frame(f, bg=BG_CARD, height=self._head_height)
         spacer.grid(row=0, column=0, columnspan=3, pady=(3, 0))
-        self._card_frames.append(spacer)
         head = tk.Frame(f, bg=BG_CARD)
         head.place(x=7, y=3, relwidth=1, width=-10, height=self._head_height)
-        self._card_frames.append(head)
         title_lbl = tk.Label(head, text=title, fg=color, bg=BG_CARD,
                              font=FONT_TITLE, anchor="w")
         title_lbl.pack(side="left")
@@ -1586,6 +1603,7 @@ class App:
             _save_config(CFG)
 
     def _toggle_lock_position(self):
+        self._drag_end()
         CFG["lock_position"] = self.lock_position.get()
         _save_config(CFG)
         self._render()
@@ -1794,14 +1812,16 @@ class App:
             self._notice("已保存", "Key 已用当前 Windows 账户加密保存在本机，\n"
                                    "config.json 里的明文已清除。")
         else:
-            self._notice("保存失败", "本机加密不可用，Key 未保存。\n"
-                                     "（程序不会把 Key 以明文写进文件。）")
+            self._notice("保存未完成", "加密保存或旧明文清理未完成，请检查文件写入权限。\n"
+                                      "可能已生成加密副本；不能确认旧明文已清除。")
         self._apply_visibility()
 
     def _clear_key(self, kind):
         _, _, clear = self.KEY_TOOLS[kind]
         if clear():
             self._notice("已清除", "本机保存的 Key 已删除。")
+        else:
+            self._notice("清除未完成", "部分本机文件未能清除，请检查文件写入权限。")
         self._apply_visibility()
 
     def _set_glm_key_secure(self):
@@ -1892,6 +1912,8 @@ class App:
             names.append("glm")
         if CFG.get("show_deepseek", True) and deepseek_api_key():
             names.append("deepseek")
+            if CFG.get("deepseek_token_metric", "total") != "off":
+                names.append("tokens")
         return names
 
     # Sources whose payload can admit that the data describes an earlier
@@ -1899,14 +1921,27 @@ class App:
     EXPIRED_KEY = {"codex": "c_window_expired"}
 
     def _data_expired(self, source):
+        if source == "codex":
+            keys = ["cw"] + (["c5"] if self.show_codex_5h.get() else [])
+            known = [self.data.get(k + "_reset") for k in keys]
+            if any(isinstance(v, (int, float)) for v in known):
+                return any(self._window_expired(k) for k in keys)
         key = self.EXPIRED_KEY.get(source)
         return bool(key and self.data.get(key))
+
+    def _window_expired(self, key):
+        value = self.data.get(key + "_reset")
+        return (isinstance(value, (int, float)) and not isinstance(value, bool)
+                and value <= time.time())
+
+    def _transport_stale(self, source):
+        return (source not in self._verified or source in self.errors or
+                time.time() - self._success_at.get(source, 0) > REFRESH_SECONDS + 60)
 
     def _is_stale(self, source):
         if self._data_expired(source):
             return True
-        return (source not in self._verified or source in self.errors or
-                time.time() - self._success_at.get(source, 0) > REFRESH_SECONDS + 60)
+        return self._transport_stale(source)
 
     def _stale_text(self, source):
         """Label why a source is grey: no data, outdated, or an ended window."""
@@ -1925,6 +1960,9 @@ class App:
                     if not 0 < stamp <= time.time() + 60:
                         continue
                     data = validate_result(name, record["data"])
+                    if name == "deepseek" and "ds_spend_day" not in data:
+                        data = dict(data)
+                        data.pop("ds_spend", None)  # legacy cache has no trustworthy day
                     self.data.update(data)
                     self._success_at[name] = stamp
                 except (KeyError, TypeError, ValueError):
@@ -1937,7 +1975,9 @@ class App:
         return {"kimi": ("k5_", "kw_", "k_plan"),
                 "codex": ("c5_", "cw_", "c_plan", "c_window", "cr_credit"),
                 "glm": ("g5_", "gw_", "g_plan"), "main": ("cr_main",),
-                "deepseek": ("ds_",)}[name]
+                "deepseek": ("ds_balance", "ds_spend", "ds_granted", "ds_topped_up",
+                             "ds_currency", "ds_available", "ds_plan"),
+                "tokens": ("ds_tokens_",)}[name]
 
     def _save_cache(self):
         sources = {name: {"success_at": stamp,
@@ -2085,6 +2125,12 @@ class App:
 
     def _render(self):
         d = self.data
+        today = date.today().isoformat()
+        if d.get("ds_tokens_day") != today:
+            d.pop("ds_tokens_total", None)
+            d.pop("ds_tokens_fresh", None)
+        if d.get("ds_spend_day") and d["ds_spend_day"] != today:
+            d["ds_spend"] = None
         # The Kimi usage endpoint may omit membership.level. The local display
         # override and renewal date must still be rendered in that case.
         k_plan = CFG.get("kimi_plan_name") or d.get("k_plan") or ""
@@ -2141,13 +2187,9 @@ class App:
                  if isinstance(v, (int, float)) and not isinstance(v, bool)]
         whole_width = max([len(f"{v:,.2f}".partition(".")[0]) for v in money] or [3])
         if d.get("ds_balance") is not None:
-            # Peak hours cost double, so the note says which regime the last
-            # refresh fell into; a dead account still reports that instead.
+            # Use the current clock, not the last balance refresh timestamp.
             if d.get("ds_available", True):
-                note = deepseek_peak_label(self._success_at.get("deepseek")
-                                           and datetime.fromtimestamp(
-                                               self._success_at["deepseek"],
-                                               timezone.utc))
+                note = deepseek_peak_label()
             else:
                 note = "账号不可用"
             self._set_amount("ds", d.get("ds_balance"), d.get("ds_currency") or "",
@@ -2157,16 +2199,24 @@ class App:
         # can be read (see local_harness_tokens); otherwise it stays empty.
         metric = CFG.get("deepseek_token_metric", "total")
         tokens = d.get("ds_tokens_" + ("fresh" if metric == "fresh" else "total"))
+        if self._transport_stale("tokens"):
+            tokens = None
         self._set_amount("ds_spend", d.get("ds_spend"), d.get("ds_currency") or "",
                          (_fmt_tokens(tokens) or "") if metric != "off" else "",
                          warn=False, whole_width=whole_width)
         self._render_radar()
-        enabled = self._enabled_sources()
+        enabled = [s for s in self._enabled_sources() if s != "tokens"]
         for source, keys in {"kimi": ("k5", "kw"),
                              "codex": ("c5", "cw", "cr_credit"),
                              "glm": ("g5", "gw"), "main": ("cr_main",),
                              "deepseek": ("ds", "ds_spend")}.items():
-            if source in enabled and self._is_stale(source):
+            if source == "codex" and source in enabled and not self._transport_stale(source):
+                for key in ("c5", "cw"):
+                    if self._window_expired(key) or (not any(d.get(k + "_reset") for k in ("c5", "cw"))
+                                                    and d.get("c_window_expired")):
+                        self.rows[key][1].config(text="窗口已过期")
+                        self.rows[key][0].config(fg=THEMES[self.theme]["FG_DIM"])
+            elif source in enabled and self._is_stale(source):
                 text = self._stale_text(source)
                 for key in keys:
                     self.rows[key][1].config(text=text)
@@ -2206,7 +2256,7 @@ def query_worker(name):
         return
     try:
         fn = {"kimi": fetch_kimi, "codex": fetch_codex, "glm": fetch_glm,
-              "deepseek": fetch_deepseek, "main": fetch_main_radar}[name]
+              "deepseek": fetch_deepseek, "main": fetch_main_radar, "tokens": fetch_tokens}[name]
         data = validate_result(name, fn())
         payload = {"ok": True, "data": data}
     except Exception as ex:

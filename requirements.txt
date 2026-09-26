@@ -1,2 +1,3 @@
 Pillow==12.2.0
 pystray==0.19.5
+backports.zstd==1.7.0; python_version < "3.14"

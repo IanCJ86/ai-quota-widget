@@ -2,6 +2,7 @@
 import ctypes
 from ctypes import wintypes
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -160,10 +161,11 @@ PERCENT_KEYS = {
     "glm": ("g5_pct", "gw_pct"), "main": ("cr_main24", "cr_main48"),
     # Pay-as-you-go accounts have no percentage quota; they report money.
     "deepseek": (),
+    "tokens": (),
 }
 
 # Sources that report amounts instead of (or in addition to) percentages.
-REQUIRED_KEYS = {"deepseek": ("ds_balance",)}
+REQUIRED_KEYS = {"deepseek": ("ds_balance",), "tokens": ("ds_tokens_total", "ds_tokens_fresh")}
 
 
 def validate_result(name, data):
@@ -176,8 +178,12 @@ def validate_result(name, data):
             raise ValueError("invalid percentage")
     for key in REQUIRED_KEYS.get(name, ()):
         value = data.get(key)
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
             raise ValueError("invalid amount")
+    if name == "tokens":
+        from datetime import date
+        if data.get("ds_tokens_day") != date.today().isoformat():
+            raise ValueError("wrong usage date")
     if all(value is None for value in values) and not REQUIRED_KEYS.get(name):
         raise ValueError("missing quota/probability")
     return data
@@ -268,6 +274,13 @@ class Scheduler:
         success = bool(payload.get("ok"))
         if success:
             state.update(attempt=0, due=now + self.interval)
+            if name == "codex":
+                wall = self.wall()
+                resets = [payload["data"].get(k) for k in ("c5_reset", "cw_reset")]
+                future = [v - wall + 1 for v in resets
+                          if isinstance(v, (int, float)) and math.isfinite(v) and v > wall]
+                if future:
+                    state["due"] = min(state["due"], now + min(future))
         elif payload.get("retryable", True) and state["attempt"] < 3:
             state["due"] = now + (2 if state["attempt"] == 1 else 5)
         else:
