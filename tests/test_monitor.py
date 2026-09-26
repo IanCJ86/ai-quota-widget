@@ -433,7 +433,7 @@ class SecretTests(unittest.TestCase):
             data = monitor.fetch_deepseek()
         self.assertEqual(seen["auth"], "Bearer sk-env")
         self.assertEqual(data["ds_currency"], "CNY")     # CNY preferred
-        self.assertEqual(data["ds_balance"], 119.9)
+        self.assertEqual(data["ds_balance"], 119.901)  # precision retained until presentation
         self.assertEqual(data["ds_granted"], 1.5)
         self.assertEqual(data["ds_plan"], "按量付费")
         runtime.validate_result("deepseek", data)
@@ -701,7 +701,7 @@ class UITests(unittest.TestCase):
         self.assertEqual(a.data["cw_pct"], 75)
         self.assertEqual(a._success_at["codex"], stamp)
         self.assertTrue(a._is_stale("codex"))
-        self.assertTrue(a.rows["cw"][1].cget("text").startswith("旧 "))
+        self.assertTrue(a.rows["cw"][0].cget("text").endswith("·旧"))
         a.data = {}
         a._load_cache()
         self.assertEqual(a.data["cw_pct"], 75)

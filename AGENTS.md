@@ -24,7 +24,7 @@ cd ai-quota-widget
 powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
-脚本会：检查 Python 3.10+/tkinter → 安装 Pillow、pystray 及旧版 Python 的 backports.zstd → 按 runtime-files.txt 清单复制全部运行模块（包含内建版本、UI组件与查询模块） 到 `%USERPROFILE%\Desktop\quota-widget\` → 生成使用同一解释器的 `start.bat` → 询问是否开机自启（默认 N）。无交互安装使用 `-NoAutostartPrompt`；支持 `-PythonPath` 和 `-Destination` 指定解释器与安装目录。依赖已安装时可加 `-SkipDependencies`。升级前从托盘菜单退出旧版，已有 config.json 不覆盖。
+脚本会：检查Python 3.10+ → 在目标目录建立版本化持久虚拟环境 → 安装/检查Tk、Pillow、pystray及旧版Python的backports.zstd → 按runtime-files.txt完整清单校验并替换模块 → 生成绑定该环境的start.bat → 询问开机自启（默认N）。Tk需Python本身提供，缺失时明确失败。无交互用 `-NoAutostartPrompt`；可指定 `-PythonPath`、`-Destination`。`-SkipDependencies` 仅用于自行验证过的持久解释器。升级前右键退出；检测到运行实例拒绝覆盖，复制失败回滚，config.json保留。完整CLI/安装合同见 [技术使用说明](docs/cli-and-install.md)。
 
 ### 3. 根据用户口述写 config.json
 
@@ -83,7 +83,7 @@ cd "%USERPROFILE%\Desktop\quota-widget" && start.bat
 - `errors` 里出现 `kimi` → 用户没登录 Kimi Code CLI，让其先运行一次 Kimi Code 登录。
 - `errors` 里出现 `codex` → 检查 CLI 安装与登录。默认托盘也查询 Codex；仅隐藏卡片不会关闭托盘需要的查询。
 - `errors` 里出现 `deepseek` → 核对余额请求错误码与 Key 来源，并非所有错误都代表缺 Key；`HTTP401` 表示认证失败。`ds_spend` 是本地估算，不是正式账单。`tokens` 是独立本地扫描，异常不会阻断余额刷新。
-- 底部“待更新:N 项”表示有 N 个来源尚未取得新数据（对应卡片里的备注显示“旧 HH:MM”，从未成功过则显示“等待更新”）。查看对应来源的错误，不把所有 `--` 当成同一种故障。
+- 底部“待更新:N 项”表示有N个来源尚未取得新数据；旧值灰显并加“旧”，日期等业务备注保留。首次失败为查询失败，不无限加载。用 `--doctor --data-dir "安装目录"` 或右键复制脱敏诊断，不公开原始debug.txt或含余额的JSON。
 
 ### 5. 完成
 
