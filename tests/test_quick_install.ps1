@@ -2,25 +2,32 @@ param([Parameter(Mandatory=$true)][string]$ZipPath)
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $global:QuotaFixtureZip = (Resolve-Path -LiteralPath $ZipPath).Path
+if ([IO.Path]::GetFileName($global:QuotaFixtureZip) -notmatch '^ai-quota-widget-v(\d+\.\d+\.\d+)-windows-x64\.zip$') { throw 'Unexpected fixture filename' }
+$global:QuotaFixtureVersion = $Matches[1]
+$global:QuotaFixtureName = [IO.Path]::GetFileName($global:QuotaFixtureZip)
 $global:QuotaFixtureHash = (Get-FileHash -LiteralPath $global:QuotaFixtureZip -Algorithm SHA256).Hash
 $global:QuotaFixtureBadHash = $false
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('quota-quick-test-'+[Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $testRoot | Out-Null
 function Invoke-RestMethod {
     param($Uri,$Headers,$TimeoutSec)
-    return [pscustomobject]@{tag_name='v1.4.0';draft=$false;prerelease=$false;assets=@(
-        [pscustomobject]@{name='ai-quota-widget-v1.4.0-windows-x64.zip';size=(Get-Item -LiteralPath $global:QuotaFixtureZip).Length;browser_download_url='https://github.com/IanCJ86/ai-quota-widget/releases/download/v1.4.0/app.zip'},
-        [pscustomobject]@{name='SHA256SUMS.txt';browser_download_url='https://github.com/IanCJ86/ai-quota-widget/releases/download/v1.4.0/SHA256SUMS.txt'})}
+    $url = 'https://github.com/IanCJ86/ai-quota-widget/releases/download/v'+$global:QuotaFixtureVersion+'/'
+    return [pscustomobject]@{tag_name=('v'+$global:QuotaFixtureVersion);draft=$false;prerelease=$false;assets=@(
+        [pscustomobject]@{name=$global:QuotaFixtureName;size=(Get-Item -LiteralPath $global:QuotaFixtureZip).Length;browser_download_url=($url+'app.zip')},
+        [pscustomobject]@{name='SHA256SUMS.txt';browser_download_url=($url+'SHA256SUMS.txt')})}
 }
 function Invoke-WebRequest {
     param([switch]$UseBasicParsing,$Uri,$OutFile,$TimeoutSec)
-    if ($OutFile) { Copy-Item -LiteralPath $global:QuotaFixtureZip -Destination $OutFile; return }
+    if ($OutFile) {
+        if ($TimeoutSec -lt 900 -or $TimeoutSec -gt 1200) { throw 'Slow-network download needs a bounded, sufficient budget' }
+        Copy-Item -LiteralPath $global:QuotaFixtureZip -Destination $OutFile; return
+    }
     $hash = $(if ($global:QuotaFixtureBadHash) { '0'*64 } else { $global:QuotaFixtureHash })
-    return [pscustomobject]@{Content=[Text.Encoding]::UTF8.GetBytes($hash+'  ai-quota-widget-v1.4.0-windows-x64.zip'+"`n")}
+    return [pscustomobject]@{Content=[Text.Encoding]::UTF8.GetBytes($hash+'  '+$global:QuotaFixtureName+"`n")}
 }
 try {
     & (Join-Path $repo 'quick-install.ps1') -NoLaunch -NoShortcut -Destination (Join-Path $testRoot 'good')
-    if (-not (Test-Path -LiteralPath (Join-Path $testRoot 'good/v1.4.0/quota-widget.exe'))) { throw 'Quick install did not produce the app' }
+    if (-not (Test-Path -LiteralPath (Join-Path $testRoot ('good/v'+$global:QuotaFixtureVersion+'/quota-widget.exe')))) { throw 'Quick install did not produce the app' }
     $global:QuotaFixtureBadHash=$true
     $rejected=$false
     try { & (Join-Path $repo 'quick-install.ps1') -NoLaunch -NoShortcut -Destination (Join-Path $testRoot 'bad') }
