@@ -18,7 +18,21 @@
 
 右键菜单可查看内建版本，也可运行 `python quota_monitor.py --version`。`debug.txt` 中的 `app_version` / `user_agent` 表示实际运行代码版本；文件里的其他 `version: 1` 是数据格式版本，不是程序版本。DeepSeek 的 `439M tok` 表示本机累计约4.39亿 token，不是内存大小。
 
-开发模块边界及后续主题方向见 [结构说明](docs/architecture.md)。main 中的待发布版本不等于已经发布的 Release。
+开发模块边界见 [结构说明](docs/architecture.md)。待发布分支不等于已经发布的 Release。
+
+## 五套主题（1.3.0-dev）
+
+右键面板 → **主题** 即时切换，选择自动保存；旧配置的 `dark` / `light` 对应月之暗面 / 月之亮面，毛玻璃保留为兼容项。
+
+| 主题 | 风格 | 实际界面（测试数据） |
+| --- | --- | --- |
+| 月之暗面 `dark` | 石墨黑、月牙、柔和品牌色 | [预览](docs/themes/dark-100.png) |
+| 月之亮面 `light` | 白色卡片、浅蓝灰背景、满月 | [预览](docs/themes/light-100.png) |
+| 蒸汽算力机 `steam` | 黄铜仪表、铆钉、棕黑面板 | [预览](docs/themes/steam-100.png) |
+| Token 加油站 `fuel` | 油枪图标、荧光油量条、深蓝面板 | [预览](docs/themes/fuel-100.png) |
+| 电子墨水账本 `ink` | 暖纸白、墨黑数字、细线账本 | [预览](docs/themes/ink-100.png) |
+
+所有皮肤仍显示相同额度、金额、token、重置券和雷达；上方仪表依次选取已显示的 Codex / Kimi / GLM 周余量，并标明来源。不把 DeepSeek 金额当作百分比。过期或查询失败显示待更新，不画有效指针/油量。静态矢量绘制，没有常驻动画、额外查询或新依赖；透明度越低，可读性越容易受桌面背景影响。
 
 ## 30 秒安装（让 AI agent 帮你装）
 
@@ -103,7 +117,7 @@ python quota_monitor.py
 | `renew_kimi` / `renew_codex` / `renew_glm` | 各续订日期，仅用于显示（右键菜单可改） | `"09-01"` |
 | `kimi_plan_name` / `codex_plan_name` / `glm_plan_name` | 套餐显示名（右键菜单可改）；codex 留空 = 接口值 + 后缀 | `"Allegro"` |
 | `codex_plan_suffix` | Codex 套餐名后缀，追加在接口返回值后 | `" 20x"` |
-| `theme` | 主题：`dark` / `light` / `glass` | `"dark"` |
+| `theme` | 主题：`dark` / `light` / `steam` / `fuel` / `ink`；`glass` 为毛玻璃兼容项 | `"dark"` |
 | `show_kimi` / `show_codex` / `show_glm` | 各卡片是否显示 | `true` / `false` |
 | `show_codex_5h` | Codex 每 5 小时行；`null` 按套餐自动（Pro 隐藏，其余显示） | `null` / `true` / `false` |
 | `show_codex_credits` | 是否显示「重置券」行（0 张时无论如何都不显示） | `true` / `false` |

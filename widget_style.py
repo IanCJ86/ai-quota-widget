@@ -1,19 +1,30 @@
 """Shared UI tokens; importing this module creates no windows or services."""
 
 TRANSP_KEY = "#010102"  # glass colorkey: root pixels of this color go transparent
+def _palette(label, bg, card, text, muted, border, accent, brands,
+             warning, danger, relief="flat", border_width=0):
+    return dict(LABEL=label, BG=bg, BG_CARD=card, FG_TEXT=text, FG_DIM=muted,
+                BORDER=border, ACCENT=accent, BRANDS=dict(zip(("Kimi", "GLM", "Codex", "DeepSeek"), brands)),
+                KIMI_SOFT=brands[0], GLM_SOFT=brands[1], CODEX_SOFT=brands[2], DEEPSEEK_SOFT=brands[3],
+                WARNING=warning, DANGER=danger, RELIEF=relief, BORDER_WIDTH=border_width)
+
+
+# Stable config IDs: old dark/light preferences become the two lunar skins.
 THEMES = {
-    "dark": dict(BG="#1e1e2e", BG_CARD="#262638", BORDER="#3a3a4e",
-                 FG_DIM="#7a7a90", FG_TEXT="#e8e8f4",
-                 KIMI_SOFT="#8db4e8", CODEX_SOFT="#83d4ab"),
-    "light": dict(BG="#f2f3f7", BG_CARD="#ffffff", BORDER="#d9dae4",
-                  FG_DIM="#8a8a9a", FG_TEXT="#23233a",
-                  KIMI_SOFT="#4a7fc9", CODEX_SOFT="#3a9e6e"),
-    # glass: root/spacer/bar pixels use TRANSP_KEY and become see-through,
-    # acrylic blur is applied behind them; cards stay solid for readability
-    "glass": dict(BG=TRANSP_KEY, BG_CARD="#2b2b3d", BORDER="#55556e",
-                  FG_DIM="#a0a0b8", FG_TEXT="#f2f2f8",
-                  KIMI_SOFT="#8db4e8", CODEX_SOFT="#83d4ab"),
+    "dark": _palette("月之暗面", "#11151c", "#1b222c", "#f1f4f8", "#b1bccb", "#303b49", "#c6ddff",
+                     ("#9cc6ff", "#d0b5ff", "#97dbbf", "#a7b8ff"), "#f4ba66", "#ff9191"),
+    "light": _palette("月之亮面", "#eff3f8", "#ffffff", "#152438", "#536277", "#d6dee9", "#234f86",
+                      ("#285785", "#6c4586", "#1e674e", "#354e98"), "#875100", "#ac2634"),
+    "steam": _palette("蒸汽算力机", "#211b16", "#322920", "#ffe8b6", "#cfb894", "#a8844f", "#e5b768",
+                      ("#f3d595", "#f3d595", "#f3d595", "#f3d595"), "#ffc16b", "#ff9c8e", "ridge", 2),
+    "fuel": _palette("Token 加油站", "#101f28", "#1a303b", "#f5f8e9", "#b7c9d1", "#38515c", "#e1f278",
+                     ("#c6e8fb", "#c6e8fb", "#e1f278", "#c6e8fb"), "#ffd178", "#ffa398", border_width=1),
+    "ink": _palette("电子墨水账本", "#e9e4d9", "#f6f2e8", "#272a26", "#55594f", "#b7b6aa", "#353e32",
+                    ("#353e32", "#353e32", "#353e32", "#353e32"), "#79520c", "#9a3030"),
+    "glass": _palette("毛玻璃（兼容）", TRANSP_KEY, "#2b2b3d", "#f2f2f8", "#b8b8cc", "#55556e", "#b4cfff",
+                      ("#9cc6ff", "#d0b5ff", "#97dbbf", "#a7b8ff"), "#f4ba66", "#ff9191", border_width=1),
 }
+THEME_CHOICES = tuple((palette["LABEL"], key) for key, palette in THEMES.items())
 BG = "#1e1e2e"
 BG_CARD = "#262638"
 FG_DIM = "#7a7a90"

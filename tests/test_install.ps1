@@ -18,7 +18,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Source version query failed" }
     $installedVersion = (& $PythonPath (Join-Path $dest "quota_monitor.py") --version).Trim()
     if ($LASTEXITCODE -ne 0 -or $installedVersion -ne $expectedVersion) { throw "Installed version mismatch" }
-    & $PythonPath -c "import sys; sys.path.insert(0, sys.argv[1]); import widget_dialogs, widget_settings, widget_style, widget_tray, widget_windows" $dest
+    & $PythonPath -c "import sys; sys.path.insert(0, sys.argv[1]); import widget_dialogs, widget_settings, widget_style, widget_tray, widget_windows, widget_themes" $dest
     if ($LASTEXITCODE -ne 0) { throw "Installed components cannot import" }
     $configPath = Join-Path $dest "config.json"
     $customConfig = '{"kimi_plan_name":"INSTALLER_TEST","glm_api_key":""}'
