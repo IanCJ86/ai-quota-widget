@@ -62,6 +62,9 @@ DEEPSEEK_KEY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "de
 DEEPSEEK_KEY_ENV = "AI_QUOTA_WIDGET_DEEPSEEK_API_KEY"
 DEEPSEEK_ENV = "DEEPSEEK_API_KEY"             # name used by the official CLI/SDK
 DEEPSEEK_BALANCE_URL = "https://api.deepseek.com/user/balance"
+# Local balance history, because the API has no usage endpoint (see deepseek_spend).
+DEEPSEEK_SPEND_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   "deepseek-spend.json")
 
 DEFAULT_CONFIG = {
     # ---- personal display options (edit config.json, not this file) ----
@@ -654,6 +657,37 @@ def fetch_glm():
 
 # ---------------- DeepSeek (pay-as-you-go balance) ----------------
 
+def deepseek_spend(balance, today=None):
+    """Estimate today's spend from balance changes, since the API has no usage
+    endpoint. The first reading of a day becomes the baseline; a top-up raises
+    the baseline instead of producing negative spend. Returns the amount spent
+    so far today (0.0 when nothing has been observed yet)."""
+    today = today or date.today().isoformat()
+    state = {}
+    try:
+        with open(DEEPSEEK_SPEND_FILE, encoding="utf-8") as stream:
+            state = json.load(stream)
+    except Exception:
+        state = {}
+    opened = state.get("open")
+    if (state.get("day") != today or isinstance(opened, bool)
+            or not isinstance(opened, (int, float))):
+        state = {"version": 1, "day": today, "open": balance, "last": balance}
+    else:
+        previous = state.get("last")
+        if isinstance(previous, (int, float)) and not isinstance(previous, bool):
+            delta = previous - balance
+            if delta < 0:
+                state["open"] = round(state["open"] - delta, 2)  # top-up
+            state["last"] = balance
+    state["updated"] = datetime.now().isoformat(timespec="seconds")
+    try:
+        atomic_json(DEEPSEEK_SPEND_FILE, state)
+    except OSError:
+        pass
+    return round(max(0.0, state["open"] - balance), 2)
+
+
 def fetch_deepseek():
     """DeepSeek API balance. There is no percentage quota and no public usage
     endpoint; `/user/balance` returns money, so the card shows money."""
@@ -679,8 +713,10 @@ def fetch_deepseek():
         except (TypeError, ValueError):
             return 0.0
 
+    balance = amount("total_balance")
     return {
-        "ds_balance": amount("total_balance"),
+        "ds_balance": balance,
+        "ds_spend": deepseek_spend(balance),
         "ds_granted": amount("granted_balance"),
         "ds_topped_up": amount("topped_up_balance"),
         "ds_currency": str(info.get("currency") or "").upper()[:8],
@@ -753,7 +789,8 @@ class App:
         self._divider3 = tk.Frame(self.root, bg="#3a3a4e", height=1)
         self._divider3.grid(row=6, column=0, sticky="ew", padx=10, pady=1)
         # DeepSeek is pay-as-you-go, so this card shows a money balance.
-        self._section(7, "DeepSeek", DEEPSEEK_BLUE, [("ds", "余额")])
+        self._section(7, "DeepSeek", DEEPSEEK_BLUE,
+                      [("ds", "余额"), ("ds_spend", "今日消耗")])
         self._dividers = [self._divider, self._divider2, self._divider3]
 
         bar = tk.Frame(self.root, bg=BG)
@@ -1594,7 +1631,7 @@ class App:
         for wgt in widgets:
             (wgt.grid if visible else wgt.grid_remove)()
 
-    def _set_amount(self, key, amount, currency, note=""):
+    def _set_amount(self, key, amount, currency, note="", warn=True):
         """Render money instead of a percentage (pay-as-you-go balances)."""
         pl, rl = self.rows[key]
         if amount is None:
@@ -1611,7 +1648,7 @@ class App:
         except (TypeError, ValueError):
             limit = 0.0
         color = base
-        if limit > 0 and amount <= limit:
+        if warn and limit > 0 and amount <= limit:
             color = "#d04040" if amount <= limit / 4 else "#d08020"
         pl.config(text=text, fg=color)
         rl.config(text=note)
@@ -1678,12 +1715,15 @@ class App:
         if d.get("ds_balance") is not None:
             self._set_amount("ds", d.get("ds_balance"), d.get("ds_currency") or "",
                              "可用" if d.get("ds_available", True) else "账号不可用")
+        # Today's spend is estimated from balance changes, never colour-warned.
+        self._set_amount("ds_spend", d.get("ds_spend"), d.get("ds_currency") or "",
+                         "", warn=False)
         self._render_radar()
         enabled = self._enabled_sources()
         for source, keys in {"kimi": ("k5", "kw"), "codex": ("c5", "cw"),
                              "glm": ("g5", "gw"), "main": ("cr_main",),
                              "community": ("cr_resets",),
-                             "deepseek": ("ds",)}.items():
+                             "deepseek": ("ds", "ds_spend")}.items():
             if source in enabled and self._is_stale(source):
                 text = self._stale_text(source)
                 for key in keys:

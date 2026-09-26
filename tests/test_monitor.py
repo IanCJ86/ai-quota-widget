@@ -390,6 +390,67 @@ class SecretTests(unittest.TestCase):
                 monitor.fetch_deepseek()
 
 
+class DeepSeekTests(unittest.TestCase):
+    """Pay-as-you-go balance: money plus a locally estimated daily spend."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.spend_file = Path(self.tmp.name) / "deepseek-spend.json"
+        self.patches = [patch.object(monitor, "DEEPSEEK_SPEND_FILE", str(self.spend_file)),
+                        patch.object(monitor, "DEEPSEEK_KEY_FILE",
+                                     str(Path(self.tmp.name) / "deepseek-key.dpapi")),
+                        patch.object(monitor, "CFG", dict(monitor.DEFAULT_CONFIG)),
+                        patch.object(monitor, "_save_config"),
+                        patch.object(monitor, "_windows_env", return_value="")]
+        for item in self.patches:
+            item.start()
+    def tearDown(self):
+        for item in reversed(self.patches):
+            item.stop()
+        self.tmp.cleanup()
+
+    def test_spend_tracks_drops_and_ignores_top_ups(self):
+        day = "2026-09-26"
+        self.assertEqual(monitor.deepseek_spend(120.0, today=day), 0.0)   # baseline
+        self.assertEqual(monitor.deepseek_spend(119.5, today=day), 0.5)
+        self.assertEqual(monitor.deepseek_spend(119.0, today=day), 1.0)
+        # A top-up raises the baseline instead of producing negative spend.
+        self.assertEqual(monitor.deepseek_spend(169.0, today=day), 1.0)
+        self.assertEqual(monitor.deepseek_spend(168.25, today=day), 1.75)
+        # A new day starts a fresh baseline.
+        self.assertEqual(monitor.deepseek_spend(168.0, today="2026-09-27"), 0.0)
+
+    def test_spend_state_is_written_and_recovers_from_garbage(self):
+        monitor.deepseek_spend(50.0, today="2026-09-26")
+        self.assertEqual(json.loads(self.spend_file.read_text(encoding="utf-8"))["day"],
+                         "2026-09-26")
+        self.spend_file.write_text("not json", encoding="utf-8")
+        self.assertEqual(monitor.deepseek_spend(49.0, today="2026-09-26"), 0.0)
+
+    def test_fetch_deepseek_reports_today_spend(self):
+        class Response(io.StringIO):
+            def __enter__(self):
+                return self
+            def __exit__(self, *exc):
+                return False
+
+        def payload(balance):
+            return ('{"is_available": true, "balance_infos": [{"currency": "CNY",'
+                    ' "total_balance": "%s", "granted_balance": "0",'
+                    ' "topped_up_balance": "%s"}]}' % (balance, balance))
+
+        with patch.dict(os.environ, {monitor.DEEPSEEK_ENV: "sk-env"}):
+            with patch.object(monitor.urllib.request, "urlopen",
+                              side_effect=lambda req, timeout=None: Response(payload("10.50"))):
+                first = monitor.fetch_deepseek()
+            with patch.object(monitor.urllib.request, "urlopen",
+                              side_effect=lambda req, timeout=None: Response(payload("10.00"))):
+                second = monitor.fetch_deepseek()
+        self.assertEqual(first["ds_spend"], 0.0)     # first reading is the baseline
+        self.assertEqual(second["ds_balance"], 10.0)
+        self.assertEqual(second["ds_spend"], 0.5)
+        runtime.validate_result("deepseek", second)
+
+
 def alive(pid):
     api = ctypes.WinDLL("kernel32", use_last_error=True)
     api.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
@@ -590,6 +651,18 @@ class UITests(unittest.TestCase):
         with patch.dict(monitor.CFG, {"deepseek_low_balance": 500.0}):
             a._render()
             self.assertEqual(a.rows["ds"][0].cget("fg"), "#d04040")   # below a quarter
+    def test_deepseek_spend_row_is_never_colour_warned(self):
+        a = self.app
+        a._on_result("deepseek", {"ok": True, "data": {
+            "ds_balance": 8.0, "ds_spend": 0.5, "ds_currency": "CNY",
+            "ds_available": True, "ds_plan": "按量付费"}}, {})
+        self.assertEqual(a.rows["ds"][0].cget("text"), "¥8.00")
+        self.assertEqual(a.rows["ds_spend"][0].cget("text"), "¥0.50")
+        # 8.00 is under the default 20 limit (but above a quarter of it), so the
+        # balance warns while the spend row (always small) stays neutral.
+        self.assertEqual(a.rows["ds"][0].cget("fg"), "#d08020")
+        self.assertNotEqual(a.rows["ds_spend"][0].cget("fg"), "#d08020")
+
     def test_dividers_need_a_visible_card_on_both_sides(self):
         a = self.app
         def shown(widget):

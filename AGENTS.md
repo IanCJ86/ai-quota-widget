@@ -78,7 +78,7 @@ cd "%USERPROFILE%\Desktop\quota-widget" && start.bat
 - `"errors": {}` 且 `"data"` 里有 `k5_pct` / `c5_pct` / `ds_balance` 等数值 → 安装成功，告诉用户完成。
 - `errors` 里出现 `kimi` → 用户没登录 Kimi Code CLI，让其先运行一次 Kimi Code 登录。
 - `errors` 里出现 `codex` → 检查 CLI 安装与登录。默认托盘也查询 Codex；仅隐藏卡片不会关闭托盘需要的查询。
-- `errors` 里出现 `deepseek` → 用户机器上没有可用的 DeepSeek Key（环境变量 `DEEPSEEK_API_KEY`、`deepseek-key.dpapi`、`deepseek_api_key` 都没有）；`HTTP401` 表示 Key 无效。
+- `errors` 里出现 `deepseek` → 用户机器上没有可用的 DeepSeek Key（环境变量 `DEEPSEEK_API_KEY`、`deepseek-key.dpapi`、`deepseek_api_key` 都没有）；`HTTP401` 表示 Key 无效。`ds_spend` 是本地估算的今日消耗（`deepseek-spend.json`），官方没有用量接口，不要拿它当账单。
 - 社区显示“暂无投票”表示接口明确无活跃投票；“待更新”或“旧 HH:MM”表示尚未取得新数据。查看对应来源的错误，不把所有 `--` 当成同一种故障。
 
 ### 5. 完成

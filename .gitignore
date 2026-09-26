@@ -3,6 +3,7 @@ debug.txt
 last-good.json
 glm-key.dpapi
 deepseek-key.dpapi
+deepseek-spend.json
 dist/
 
 # python

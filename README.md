@@ -36,7 +36,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 
 - 显示 Kimi Code / Codex 的 **每 5 小时** 与 **每周** 额度剩余百分比
 - **Codex 全球重置雷达**：显示 [codexreset.org](https://codexreset.org) 的 24/48 小时主源预测，以及 [codex-resets.com](https://codex-resets.com) 的社区投票辅助信号。原 [codex-reset.com](https://codex-reset.com) 已移除。两者都是第三方公共信号，不统计个人赠送/补偿重置卡，也不代表个人账户真值
-- **可选 DeepSeek 余额卡片**：填入 API Key（见「配置项」）后显示账户余额；DeepSeek 是按量付费，官方只有余额、没有百分比额度与用量接口，所以这张卡片显示金额，余额偏低时自动变色提醒
+- **可选 DeepSeek 余额卡片**：填入 API Key（见「配置项」）后显示账户余额与**今日消耗**；DeepSeek 是按量付费，官方只有余额、没有百分比额度与用量接口，所以这张卡片显示金额，余额偏低时自动变色提醒
 - **可选 GLM Coding Plan 卡片**：在 config.json 填入 `glm_api_key` 并启用 `show_glm`，显示 5 小时 / 每周额度与重置时间（需有效的 GLM Coding Plan Key，见「配置项」）
 - 显示额度重置时间（5 小时窗显示倒计时，每周窗显示具体时间）
 - 显示套餐名与续订日期（接口不返回；**右键 → Kimi / Codex / GLM 设置 里直接选**，也可在 `config.json` 里改）
@@ -71,7 +71,7 @@ python quota_monitor.py
 - Codex 数据通过本机 `codex app-server`（stdio JSON-RPC）读取 `account/rateLimits/read`。该接口返回的是本机 Codex 保存的**快照**，不带采集时间：某个窗口的重置时间若已经过去，说明这份数字属于上一个窗口，界面会把该卡片标灰并显示「窗口已过期」，同时计入底部「待更新」，不把历史额度当成实时值（窗口尚未结束的滞后无法被识别，见「支持范围与局限」）
 - 雷达数据来自 `codexreset.org` 和 `codex-resets.com` 的第三方公开页面/API，不含任何个人凭证；主源使用 24/48 小时预测，复数域名使用社区投票信号
 - GLM 数据来自 `open.bigmodel.cn/api/monitor/usage/quota/limit`（国际版 `api.z.ai` 同路径），用配置的 apiKey 鉴权
-- DeepSeek 数据来自官方 `api.deepseek.com/user/balance`（Bearer Key）；官方没有用量/额度接口（实测 `/user/usage`、`/dashboard/billing/usage` 均为 404），所以只能显示余额
+- DeepSeek 数据来自官方 `api.deepseek.com/user/balance`（Bearer Key）；官方没有用量/额度接口（实测 `/user/usage`、`/dashboard/billing/usage` 均为 404），所以只能显示余额。「今日消耗」是本机估算：以当天第一次读到的余额为起点，按之后每次余额的减少量累加，充值会自动抬高起点（不会出现负数），跨天归零；起点之前（当天 Widget 没运行时）的消耗统计不到
 - CLI 凭证只从本机读取，仅用于对应官方服务的认证，不发送给雷达网站，不打印或写入诊断文件
 
 ## 配置项
@@ -132,6 +132,7 @@ GLM 额度接口（`monitor/usage/quota/limit`）是智谱官方 Claude Code 插
 - 支持 Kimi Code、Codex、DeepSeek 余额，可选 GLM Coding Plan；暂无 Claude 等方案
 - 仅支持 Windows（依赖本机 CLI 凭证与 tkinter）
 - Codex 额度是本机 Codex 保存的快照，不含采集时间，可能滞后于真实值；只有「窗口已重置」这种情况能被自动识别并标灰
+- DeepSeek 的「今日消耗」是本地估算，起点是当天第一次读到余额的时刻；官方没有用量接口，所以它不能替代官网账单
 - 套餐名与续订日期无法从接口自动读取，需要手动配置（见上文「配置项」）
 
 欢迎 issue / PR 扩展更多服务商。
@@ -151,7 +152,7 @@ GLM 额度接口（`monitor/usage/quota/limit`）是智谱官方 Claude Code 插
 
 - `debug.txt`：最近结果、每个来源的成功时间、查询耗时、错误类别和重试间隔。
 - `last-good.json`：本机最近成功数据缓存；旧值会明确标识，不能作为实时额度。
-- 不要上传个人 `config.json`、凭据、缓存、`glm-key.dpapi`、`deepseek-key.dpapi` 或诊断文件。仓库中的 config.json 仅为占位模板。
+- 不要上传个人 `config.json`、凭据、缓存、`glm-key.dpapi`、`deepseek-key.dpapi`、`deepseek-spend.json` 或诊断文件。仓库中的 config.json 仅为占位模板。
 - 单次查询硬上限：Kimi 65 秒、Codex 50 秒、其他来源 25 秒；Windows Job Object 回收整个查询树，包括主程序意外退出的情况。
 - 离线回归测试：`python -m unittest discover -s tests -v`，需要 Windows、tkinter 和托盘依赖，不访问真实账号或网络。
 - v1.1.0 本机验证：25 项测试通过；独立调度器连续 90 轮查询句柄数稳定；真实四源查询成功（包含社区明确无活跃投票）。单机空闲 30 秒样本约 69 MiB 工作集、0.016 秒 CPU 时间，不代表所有电脑或查询峰值。
