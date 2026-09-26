@@ -188,7 +188,7 @@ Kimi / Codex 凭证来自本机已登录的 CLI；可选 GLM / DeepSeek 需要�
 
 ## License
 
-MIT © IanCJ86
+MIT © 临界思潮 (IanCJ86)
 ---
 
 作者：**临界思潮**（GitHub [@IanCJ86](https://github.com/IanCJ86)）
