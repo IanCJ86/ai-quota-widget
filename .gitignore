@@ -1,6 +1,7 @@
 # runtime debug output
 debug.txt
 last-good.json
+glm-key.dpapi
 dist/
 
 # python

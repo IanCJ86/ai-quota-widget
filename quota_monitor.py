@@ -2,6 +2,7 @@
 # Quota Monitor: Kimi Code + Codex floating widget.
 # Reads local credentials only; public radar calls are read-only and credential-free.
 # Never prints or logs any token.
+import base64
 import json
 import os
 import sys
@@ -16,7 +17,8 @@ import urllib.parse
 import urllib.error
 from datetime import datetime, date, timezone
 from html import unescape
-from monitor_runtime import Scheduler, SingleInstance, atomic_json, validate_result
+from monitor_runtime import (Scheduler, SingleInstance, atomic_json, dpapi_protect,
+                             dpapi_unprotect, validate_result)
 
 QUERY_MODE = len(sys.argv) == 3 and sys.argv[1] == "--query"
 if not QUERY_MODE:
@@ -51,6 +53,10 @@ DEBUG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug.txt
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")  # legacy
 CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "last-good.json")
+# GLM key storage: config.json is plaintext, so the settings menu encrypts the
+# key with Windows DPAPI instead (user-scoped, decryptable only on this account).
+GLM_KEY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "glm-key.dpapi")
+GLM_KEY_ENV = "AI_QUOTA_WIDGET_GLM_API_KEY"   # preferred: no secret on disk at all
 
 DEFAULT_CONFIG = {
     # ---- personal display options (edit config.json, not this file) ----
@@ -74,9 +80,11 @@ DEFAULT_CONFIG = {
     "show_radar": True,
     "radar_window": 24,   # 24 or 48 hours
     "tray_metric": "cw_pct",  # Codex weekly percentage in the Windows tray
-    "show_glm": False,            # GLM card visibility; rows show "--" until glm_api_key works
+    "show_glm": False,            # GLM card visibility; rows show "--" until a key works
     # ---- GLM Coding Plan (optional) ----
-    "glm_api_key": "",            # z.ai / open.bigmodel.cn API key; empty = disabled
+    # Legacy plaintext field: still honoured, but the settings menu stores new
+    # keys encrypted (GLM_KEY_FILE) and clears this one on save.
+    "glm_api_key": "",
     "glm_region": "cn",           # "cn" -> open.bigmodel.cn, "intl" -> api.z.ai
 }
 
@@ -383,12 +391,29 @@ def fetch_codex():
     wins = [w for w in (window(rl.get("primary")), window(rl.get("secondary"))) if w]
     five_h = next((w for w in wins if w["mins"] and abs(w["mins"] - 300) <= 5), None)
     weekly = next((w for w in wins if w["mins"] and abs(w["mins"] - 10080) <= 60), None)
+
+    def expired(node):
+        """True when the window this percentage belongs to already ended.
+
+        The app-server serves the locally stored snapshot and exposes no
+        capture time; a reset timestamp in the past is the only freshness
+        signal available, and it means the percentage describes an older
+        window."""
+        try:
+            return float(node["reset"]) <= time.time()
+        except (KeyError, TypeError, ValueError):
+            return False
+
+    shown = [w for w in (five_h, weekly) if w]
     return {
         "c5_pct": five_h["pct"] if five_h else None,
         "c5_reset": five_h["reset"] if five_h else None,
         "cw_pct": weekly["pct"] if weekly else None,
         "cw_reset": weekly["reset"] if weekly else None,
         "c_plan": str(account.get("planType") or rl.get("planType") or "").title(),
+        # Any displayed window that already reset makes the snapshot stale; the
+        # UI greys it instead of passing it off as the current value.
+        "c_window_expired": bool(shown) and any(expired(w) for w in shown),
     }
 
 
@@ -460,11 +485,72 @@ def fetch_community_radar():
 
 # ---------------- GLM Coding Plan (optional) ----------------
 
+def _read_protected_key():
+    """Read the DPAPI-protected GLM key written by the settings menu."""
+    try:
+        with open(GLM_KEY_FILE, encoding="utf-8") as stream:
+            record = json.load(stream)
+        if record.get("scheme") != "dpapi":
+            return ""
+        secret = dpapi_unprotect(base64.b64decode(record.get("data") or ""))
+        return secret.decode("utf-8").strip() if secret else ""
+    except Exception:
+        return ""
+
+
+def glm_api_key():
+    """Resolve the GLM key: environment, then encrypted file, then legacy config.
+
+    config.json is plaintext on disk, so the settings menu writes keys through
+    Windows DPAPI and drops the plaintext copy; the legacy field keeps working
+    for existing installs.
+    """
+    for candidate in (os.environ.get(GLM_KEY_ENV, ""), _read_protected_key(),
+                      CFG.get("glm_api_key") or ""):
+        if candidate and candidate.strip():
+            return candidate.strip()
+    return ""
+
+
+def save_glm_key(key):
+    """Encrypt the key for the current user. Never falls back to plaintext."""
+    key = (key or "").strip()
+    if not key:
+        return False
+    blob = dpapi_protect(key)
+    if not blob:
+        return False
+    try:
+        atomic_json(GLM_KEY_FILE, {"version": 1, "scheme": "dpapi",
+                                   "data": base64.b64encode(blob).decode("ascii")})
+    except OSError:
+        return False
+    if CFG.get("glm_api_key"):
+        CFG["glm_api_key"] = ""   # the encrypted copy replaces the plaintext one
+        _save_config(CFG)
+    return True
+
+
+def clear_glm_key():
+    """Delete every stored copy: the encrypted file and the legacy field."""
+    removed = False
+    try:
+        os.unlink(GLM_KEY_FILE)
+        removed = True
+    except OSError:
+        pass
+    if CFG.get("glm_api_key"):
+        CFG["glm_api_key"] = ""
+        _save_config(CFG)
+        removed = True
+    return removed
+
+
 def fetch_glm():
-    """GLM Coding Plan quota. Requires CFG['glm_api_key'].
+    """GLM Coding Plan quota. Requires a configured GLM Coding Plan key.
     Endpoint returns a list of limits: two TOKENS_LIMIT entries
     (5-hour then weekly, ascending reset_time) plus a TIME_LIMIT (MCP)."""
-    key = (CFG.get("glm_api_key") or "").strip()
+    key = glm_api_key()
     if not key:
         return {}
     url = GLM_QUOTA_URLS.get(CFG.get("glm_region"), GLM_QUOTA_URLS["cn"])
@@ -697,6 +783,13 @@ class App:
             return
         self._closed = True
         self.scheduler.close()  # Reap only our Job Object trees, never other Codex tasks.
+        # Nothing may run after destroy(): a callback that outlives its
+        # interpreter only produces Tcl "invalid command name" noise.
+        try:
+            for timer in self.root.tk.eval("after info").split():
+                self.root.tk.call("after", "cancel", timer)
+        except Exception:
+            pass
         try:
             self.root.withdraw()
         except Exception:
@@ -1009,6 +1102,11 @@ class App:
         sub.add_command(label="选择日期…",
                         command=lambda: self._ask_renew(kind))
         m.add_cascade(label="续订日期", menu=sub)
+        if kind == "glm":
+            m.add_separator()
+            # config.json is plaintext; store new keys encrypted instead.
+            m.add_command(label="安全保存 API Key…", command=self._set_glm_key_secure)
+            m.add_command(label="清除已保存的 Key", command=self._clear_glm_key)
         return m
 
     def _set_plan(self, kind, name):
@@ -1113,6 +1211,74 @@ class App:
         self.root.attributes("-topmost", top)
         return result.get("v")
 
+    def _notice(self, title, text):
+        """messagebox that stays in front of the borderless topmost window."""
+        top = self.topmost.get()
+        self.root.attributes("-topmost", True)
+        self.root.lift()
+        try:
+            messagebox.showinfo(title, text, parent=self.root)
+        finally:
+            self.root.attributes("-topmost", top)
+
+    def _set_glm_key_secure(self):
+        """Store a GLM key with DPAPI and remove any plaintext copy."""
+        key = self._ask_secret("GLM API Key", "GLM Coding Plan API Key：")
+        if not key:
+            return
+        if save_glm_key(key):
+            self._notice("已保存", "Key 已用当前 Windows 账户加密保存在本机，\n"
+                                   "config.json 里的明文已清除。")
+        else:
+            self._notice("保存失败", "本机加密不可用，Key 未保存。\n"
+                                     "（程序不会把 Key 以明文写进文件。）")
+        self._apply_visibility()
+
+    def _clear_glm_key(self):
+        if clear_glm_key():
+            self._notice("已清除", "本机保存的 GLM Key 已删除。")
+        self._apply_visibility()
+
+    def _ask_secret(self, title, prompt):
+        """Masked single-line input (tkinter has no masked simpledialog)."""
+        top = self.topmost.get()
+        self.root.attributes("-topmost", True)
+        self.root.lift()
+        win = tk.Toplevel(self.root)
+        win.title(title)
+        win.attributes("-topmost", True)
+        win.transient(self.root)
+        win.resizable(False, False)
+        win.configure(bg=BG)
+        win.geometry(f"+{self.root.winfo_x() + 40}+{self.root.winfo_y() + 40}")
+        tk.Label(win, text=prompt, bg=BG, fg=FG_TEXT, anchor="w",
+                 font=("Microsoft YaHei UI", 9)).grid(
+            row=0, column=0, columnspan=2, sticky="w", padx=12, pady=(10, 2))
+        tk.Label(win, text="只保存在本机（Windows 加密），不会写入 config.json。",
+                 bg=BG, fg=FG_DIM, anchor="w",
+                 font=("Microsoft YaHei UI", 8)).grid(
+            row=1, column=0, columnspan=2, sticky="w", padx=12, pady=(0, 6))
+        value = tk.StringVar()
+        entry = tk.Entry(win, textvariable=value, show="•", width=44)
+        entry.grid(row=2, column=0, columnspan=2, padx=12, pady=(0, 8))
+        entry.focus_set()
+        result = {}
+
+        def ok(event=None):
+            result["v"] = value.get().strip()
+            win.destroy()
+
+        tk.Button(win, text="保存", command=ok, width=6).grid(row=3, column=0, pady=(0, 10))
+        tk.Button(win, text="取消", command=win.destroy, width=6).grid(
+            row=3, column=1, pady=(0, 10))
+        win.bind("<Return>", ok)
+        # expose for smoke tests
+        self._secret_prompt = (win, value, ok)
+        win.grab_set()
+        self.root.wait_window(win)
+        self.root.attributes("-topmost", top)
+        return result.get("v")
+
     def _ask(self, title, prompt, initial=""):
         """simpledialog that stays in front of our borderless topmost window."""
         top = self.topmost.get()
@@ -1140,13 +1306,30 @@ class App:
             names.append("kimi")
         if CFG.get("show_codex", True) and CFG.get("show_radar", True):
             names.extend(("main", "community"))
-        if CFG.get("show_glm") and CFG.get("glm_api_key"):
+        if CFG.get("show_glm") and glm_api_key():
             names.append("glm")
         return names
 
+    # Sources whose payload can admit that the data describes an earlier
+    # window: the query succeeds, but the number is not current.
+    EXPIRED_KEY = {"codex": "c_window_expired"}
+
+    def _data_expired(self, source):
+        key = self.EXPIRED_KEY.get(source)
+        return bool(key and self.data.get(key))
+
     def _is_stale(self, source):
+        if self._data_expired(source):
+            return True
         return (source not in self._verified or source in self.errors or
                 time.time() - self._success_at.get(source, 0) > REFRESH_SECONDS + 60)
+
+    def _stale_text(self, source):
+        """Label why a source is grey: no data, outdated, or an ended window."""
+        if self._data_expired(source):
+            return "窗口已过期"
+        stamp = self._success_at.get(source)
+        return "旧 " + datetime.fromtimestamp(stamp).strftime("%H:%M") if stamp else "等待更新"
 
     def _load_cache(self):
         try:
@@ -1167,7 +1350,8 @@ class App:
 
     @staticmethod
     def _source_keys(name):
-        return {"kimi": ("k5_", "kw_", "k_plan"), "codex": ("c5_", "cw_", "c_plan"),
+        return {"kimi": ("k5_", "kw_", "k_plan"),
+                "codex": ("c5_", "cw_", "c_plan", "c_window"),
                 "glm": ("g5_", "gw_", "g_plan"), "main": ("cr_main",),
                 "community": ("cr_resets",)}[name]
 
@@ -1329,8 +1513,7 @@ class App:
                              "glm": ("g5", "gw"), "main": ("cr_main",),
                              "community": ("cr_resets",)}.items():
             if source in enabled and self._is_stale(source):
-                stamp = self._success_at.get(source)
-                text = "旧 " + datetime.fromtimestamp(stamp).strftime("%H:%M") if stamp else "等待更新"
+                text = self._stale_text(source)
                 for key in keys:
                     self.rows[key][1].config(text=text)
                     self.rows[key][0].config(fg=THEMES[self.theme]["FG_DIM"])

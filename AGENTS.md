@@ -55,10 +55,10 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 | `codex_plan_suffix` | Codex 套餐名后缀，例如 `" 20x"` |
 | `theme` | 主题：`dark` / `light` / `glass`（毛玻璃），右键菜单可切换 |
 | `show_kimi` / `show_codex` / `show_glm` | 各卡片是否显示（右键菜单也可切换） |
-| `glm_api_key` | 可选。填入有效的 GLM Coding Plan API Key 后 GLM 卡片自动出现 |
+| `glm_api_key` | 可选。GLM Coding Plan API Key；**明文存储，仅兼容旧配置**。优先用环境变量 `AI_QUOTA_WIDGET_GLM_API_KEY`，或让用户点右键菜单「GLM Coding Plan 设置 → 安全保存 API Key…」（DPAPI 加密，且会清空这里的明文） |
 | `glm_region` | `"cn"` 用 open.bigmodel.cn，`"intl"` 用 api.z.ai |
 
-注意：GLM 卡片只有在 `glm_api_key` 非空且 `show_glm` 为 true 时才出现。需要**有效的 GLM Coding Plan** 才能取到数据。
+注意：GLM 卡片只有在**能取到 Key**（环境变量 / `glm-key.dpapi` / `glm_api_key` 任一来源）且 `show_glm` 为 true 时才出现。需要**有效的 GLM Coding Plan** 才能取到数据。不要主动把用户的 Key 明文写进 config.json——让用户自己在右键菜单里保存。
 
 ### 4. 启动并验证
 
@@ -76,7 +76,7 @@ cd "%USERPROFILE%\Desktop\quota-widget" && start.bat
 
 ### 5. 完成
 
-向用户汇报：安装目录、如何改配置（右键菜单设置套餐/续订日期/主题，GLM Key 等文件配置重启生效）。底部 ✕ 仅隐藏到托盘，右键菜单“退出”才会结束程序；重复运行启动器会唤回已有窗口。
+向用户汇报：安装目录、如何改配置（右键菜单设置套餐/续订日期/主题）。GLM Key 让用户自己在右键菜单 `GLM Coding Plan 设置 → 安全保存 API Key…` 里输入（加密保存到本机，不写 config.json 明文）；文件里的配置项重启 widget 才生效。底部 ✕ 仅隐藏到托盘，右键菜单“退出”才会结束程序；重复运行启动器会唤回已有窗口。
 
 ## 排错速查
 
