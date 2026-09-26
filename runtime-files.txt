@@ -12,3 +12,4 @@ widget_themes.py
 widget_tray.py
 widget_windows.py
 widget_viewport.py
+widget_onboarding.py

@@ -30,7 +30,7 @@ class TrayIcon:
             pystray.MenuItem("退出", lambda *args: self.commands.put("quit")),
         )
         try:
-            self.icon = pystray.Icon("quota-monitor", self.image(None), "Codex 每周 --", menu)
+            self.icon = pystray.Icon("quota-monitor", self.image(None), "AI 额度监控", menu)
             self.thread = threading.Thread(target=self._run, daemon=True)
             self.thread.start()
         except Exception:

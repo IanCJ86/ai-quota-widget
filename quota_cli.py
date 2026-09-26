@@ -133,7 +133,7 @@ def doctor(m):
     from quota_install import source_paths, running
     code_root, assets = source_paths()
     manifest = (assets/'runtime-files.txt').read_text(encoding='utf-8').splitlines()
-    missing = [n for n in manifest if not (code_root/n).is_file()]
+    missing = [n for n in manifest if not (module_available(n[:-3]) if getattr(sys,'frozen',False) else (code_root/n).is_file())]
     deps = {'tkinter':module_available('tkinter'),'Pillow':module_available('PIL'),
             'pystray':module_available('pystray'),
             'zstd':module_available('compression.zstd' if sys.version_info >= (3,14) else 'backports.zstd')}
@@ -160,7 +160,7 @@ def doctor(m):
         lines.append('最近界面/启动异常：' + error_label(debug.get('startup_error') or debug.get('ui_error')))
     if not any(flags.values()):
         lines.append('未检测到已登录的AI CLI或API Key：请登录Kimi/Codex，或配置GLM/DeepSeek Key。')
-        code = 2
+        code = 1  # configuration pending, not a broken installation
     else:
         code = 1 if missing or not all(deps.values()) or m.CONFIG_ISSUES or recent_errors or debug.get('startup_error') or debug.get('ui_error') else 0
     return '\n'.join(lines), code
@@ -211,6 +211,9 @@ def main(argv=None):
         print(APP_VERSION)
         return 0
     if args.launch_check:
+        if getattr(sys, 'frozen', False):
+            import tkinter, PIL, pystray
+            return 0
         import subprocess
         check = subprocess.run([sys.executable,'-c','import tkinter,PIL,pystray'], capture_output=True)
         if check.returncode:

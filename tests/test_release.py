@@ -101,7 +101,7 @@ class GuiReleaseTests(unittest.TestCase):
         a=self.app
         for name in ('kimi','codex','glm','deepseek','radar'): getattr(a,'show_'+name).set(False)
         a._apply_visibility(); a._render()
-        self.assertIn('未显示账户',a.status.cget('text'))
+        self.assertIn('快速设置',a.status.cget('text'))
     def test_tiny_and_large_amounts(self):
         a=self.app
         for value, expected in ((0,'¥0.00'),(.3,'¥0.30'),(.001,'<¥0.01'),(12345.67,'¥12,345.67'),(1000000,'¥100.00万')):
@@ -152,7 +152,7 @@ class CliTests(unittest.TestCase):
         for p in self.patches: p.start(); self.addCleanup(p.stop)
     def test_doctor_no_sources_and_no_leaked_values(self):
         with patch.object(installer,'running',return_value=False): report,code=cli.doctor(monitor)
-        self.assertEqual(code,2)
+        self.assertEqual(code,1)
         self.assertIn('未检测到',report)
         self.assertNotIn(str(Path.home()),report)
     def test_doctor_healthy(self):

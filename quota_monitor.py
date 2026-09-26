@@ -57,7 +57,8 @@ if not HEADLESS_MODE:
 # crisp rendering on high-DPI displays (declare per-monitor DPI awareness)
 try:
     import ctypes
-    ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    if not ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
 except Exception:
     try:
         ctypes.windll.user32.SetProcessDPIAware()
@@ -93,7 +94,9 @@ DEEPSEEK_BALANCE_URL = "https://api.deepseek.com/user/balance"
 # Local balance history, because the API has no usage endpoint (see deepseek_spend).
 DEEPSEEK_SPEND_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                    "deepseek-spend.json")
-DATA_DIR = os.environ.get('AI_QUOTA_WIDGET_DATA_DIR') or os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.environ.get('AI_QUOTA_WIDGET_DATA_DIR') or (
+    os.path.join(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')), 'AIQuotaWidget')
+    if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__)))
 if 'site-packages' in DATA_DIR and not os.environ.get('AI_QUOTA_WIDGET_DATA_DIR'):
     DATA_DIR = os.path.join(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')), 'AIQuotaWidget')
 DEBUG_FILE, CONFIG_FILE, SETTINGS_FILE, CACHE_FILE, GLM_KEY_FILE, DEEPSEEK_KEY_FILE, DEEPSEEK_SPEND_FILE = (
@@ -586,7 +589,9 @@ def provider_key(path, env_names, field):
     for existing installs.
     """
     for name in env_names:
-        value = (os.environ.get(name) or _windows_env(name) or "").strip()
+        # An explicitly empty process variable must mask a registry value too
+        # (isolated runs / deliberate credential removal), not resurrect it.
+        value = (os.environ[name] if name in os.environ else _windows_env(name) or "").strip()
         if value:
             return value
     stored = _read_protected_key(path)
@@ -895,6 +900,11 @@ def fetch_tokens():
 
 class App:
     def __init__(self, instance=None):
+        self._first_run = bool(getattr(sys, 'frozen', False) and not os.path.isfile(CONFIG_FILE))
+        if self._first_run:
+            from quota_cli import configured
+            for name, ready in configured(sys.modules[__name__]).items():
+                CFG['show_'+name] = ready
         self.root = tk.Tk()
         # Hide it before anything else: wm overrideredirect() maps the window as
         # a side effect, and Windows paints it at its default position first, so
@@ -1020,6 +1030,7 @@ class App:
                                   variable=self.lock_position,
                                   command=self._toggle_lock_position)
         self.menu.add_command(label="立即刷新", command=self.refresh_async)
+        self.menu.add_command(label="快速设置…", command=self._setup_sources)
         self.menu.add_separator()
         self.show_kimi = tk.BooleanVar(value=self._st.get("show_kimi", True))
         self.show_codex = tk.BooleanVar(value=self._st.get("show_codex", True))
@@ -1080,7 +1091,15 @@ class App:
         if self.theme == "glass":        # acrylic needs the window mapped
             self._acrylic_on = self._apply_acrylic(True)
         self.refresh_async()
+        self._write_debug()  # startup evidence also exists when no source is configured
         self.root.after(100, self._poll)
+        if self._first_run:
+            self.root.after(200, self._setup_sources)
+
+    def _setup_sources(self):
+        from widget_onboarding import show_setup
+        from quota_cli import configured
+        show_setup(self, CFG, _save_config, lambda: configured(sys.modules[__name__]))
 
     def _sync_columns(self):
         """Give every card the same three columns, each only as wide as needed.
@@ -1099,7 +1118,7 @@ class App:
         # (the card border and cell paddings account for the rest), so reserve
         # whatever the widest title is missing - capped, so an absurd plan name
         # is shortened instead of widening every card.
-        title_font = tkfont.Font(font=FONT_TITLE)
+        title_font = tkfont.Font(font=self.section_titles['DeepSeek'].cget('font'))
         widest = max([title_font.measure(self._title_text.get(name, lbl.cget("text")))
                       for name, lbl in self.section_titles.items()] or [0])
         room = label_w + value_w + 1
@@ -1110,6 +1129,13 @@ class App:
         for card in self._cards:
             card.grid_columnconfigure(0, minsize=label_w)
             card.grid_columnconfigure(1, minsize=value_w)
+        # Placed header labels do not participate in Tk's requested size.
+        # Reserve the notes column even before the first query has returned.
+        for name, card in zip(self.section_titles, self._cards):
+            card.grid_columnconfigure(2, minsize=self.section_renews[name].winfo_reqwidth()+12)
+            height = max(self.section_titles[name].winfo_reqheight(), self.section_renews[name].winfo_reqheight()+1)
+            card.winfo_children()[0].configure(height=height)
+            self.section_titles[name].master.place_configure(height=height)
         for name, lbl in self.section_titles.items():
             renew = self.section_renews.get(name)
             if renew is None:
@@ -1218,7 +1244,7 @@ class App:
         self.tray_menu.delete(0, "end")
         choices = self._visible_tray_choices()
         if not choices:
-            self.tray_menu.add_command(label="（没有显示的卡片）", state="disabled")
+            self.tray_menu.add_command(label="（未显示百分比账户）", state="disabled")
             return
         for metric, label in choices:
             self.tray_menu.add_radiobutton(label=label, value=metric,
@@ -1250,6 +1276,12 @@ class App:
 
     def _update_tray(self):
         if self.tray_controller.icon is None or self._closed:
+            return
+        if not self._visible_tray_choices():
+            if self.tray_controller.last_value != ('no_percentage',):
+                self.tray_controller.icon.icon = self.tray_controller.image(None)
+                self.tray_controller.last_value = ('no_percentage',)
+            self.tray_controller.icon.title = 'AI 额度监控 · 点击打开'
             return
         metric = CFG.get("tray_metric", "cw_pct")
         value = self.data.get(metric)
@@ -1338,15 +1370,11 @@ class App:
         if name not in THEMES:
             name = DEFAULT_CONFIG["theme"]
         leaving_glass = getattr(self, "theme", "dark") == "glass" and name != "glass"
+        # A colour key makes every background pixel mouse-transparent on
+        # Windows, including the spaces between footer buttons. Never use it.
+        self.root.attributes("-transparentcolor", "")
         if name == "glass":
-            # Acrylic is best-effort: if SetWindowCompositionAttribute or the
-            # colorkey is unsupported, the window just stays solid with the
-            # glass palette (readable, no blur) -- a deliberate graceful degrade.
             self._acrylic_on = self._apply_acrylic(True)
-            try:
-                self.root.attributes("-transparentcolor", TRANSP_KEY)
-            except Exception:
-                self._acrylic_on = False
         elif leaving_glass:
             try:
                 self.root.attributes("-transparentcolor", "")
@@ -1496,7 +1524,12 @@ class App:
         self.scheduler.configure(self._enabled_sources())
         self.scheduler.refresh()
         self.scheduler.tick()
-        self.status.config(text="刷新中…（保留上次数据）")
+        if self._enabled_sources():
+            self.status.config(text="刷新中…（保留上次数据）")
+        else:
+            self._render()
+        self._fit()
+        self._write_debug()
 
     def _enabled_sources(self):
         """Only query what the window is actually showing.
@@ -1515,7 +1548,7 @@ class App:
             names.append("glm")
         if CFG.get("show_deepseek", True) and deepseek_api_key():
             names.append("deepseek")
-            if CFG.get("deepseek_token_metric", "total") != "off":
+            if CFG.get("deepseek_token_metric", "total") != "off" and os.path.isdir(DSH_SESSIONS):
                 names.append("tokens")
         return names
 
@@ -1617,6 +1650,9 @@ class App:
             atomic_json(DEBUG_FILE, {
                 "app_version": APP_VERSION, "user_agent": USER_AGENT,
                 "updated": datetime.now().isoformat(timespec="seconds"), "pid": os.getpid(),
+                "ui_thread": threading.get_native_id(),
+                "window": {"state": self.root.state(), "geometry": self.root.geometry(),
+                           "dpi": self.viewport._dpi},
                 "data": self.data, "errors": self.errors, "ui_error": self._ui_error,
                 "success_at": {name: datetime.fromtimestamp(ts).isoformat(timespec="seconds")
                                for name, ts in self._success_at.items()},
@@ -1845,12 +1881,17 @@ class App:
                         note_label.config(text=text)
                     self.rows[key][0].config(fg=THEMES[self.theme]["FG_DIM"])
         stale = [name for name in enabled if self._is_stale(name)]
+        for source, keys in (('deepseek', ('ds','ds_spend')), ('glm', ('g5','gw'))):
+            if CFG.get('show_'+source) and source not in enabled:
+                for key in keys:
+                    self.rows[key][0].configure(text='--')
+                    self.rows[key][1].configure(text='未配置 Key')
         parts = []
         account_times = [self._success_at.get(name) for name in enabled
                          if name in ("kimi", "codex", "glm", "deepseek")]
         loaded = any(self._success_at.get(name) for name in enabled)
         if not enabled:
-            parts.append('未显示账户·右键选择')
+            parts.append('右键 → 快速设置')
         elif not loaded and self.errors:
             parts.append('查询失败·右键诊断')
         elif not loaded:

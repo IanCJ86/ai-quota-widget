@@ -33,6 +33,13 @@ with tempfile.TemporaryDirectory(prefix='quota-release-build-') as temporary:
     finalzip.write_bytes(archive.read_bytes())
     subprocess.run(['uv','build','--wheel','--out-dir',str(output),str(tree)],check=True)
     wheel=output/f'ai_quota_widget-{version}-py3-none-any.whl'
-    sums=''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in (finalzip,wheel))
+    assets = [finalzip, wheel]
+    if '--windows' in sys.argv:
+        subprocess.run([sys.executable,str(tree/'tests/build_windows.py'),str(output)],check=True,cwd=tree)
+        assets.append(output/f'ai-quota-widget-v{version}-windows-x64.zip')
+        quick=output/'quick-install.ps1'
+        quick.write_text((tree/'quick-install.ps1').read_text(encoding='utf-8-sig'),encoding='utf-8-sig')
+        assets.append(quick)
+    sums=''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in assets)
     (output/'SHA256SUMS.txt').write_text(sums,encoding='utf-8')
-    print(json.dumps({'commit':commit,'version':version,'files':[finalzip.name,wheel.name,'SHA256SUMS.txt']}))
+    print(json.dumps({'commit':commit,'version':version,'files':[p.name for p in assets]+['SHA256SUMS.txt']}))

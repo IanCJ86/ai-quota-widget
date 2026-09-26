@@ -36,7 +36,8 @@ class Viewport:
         self.canvas = tk.Canvas(root,highlightthickness=0,bd=0,width=1,height=1)
         self.canvas.grid(row=0,column=0,sticky='nsew')
         self.body = tk.Frame(self.canvas)
-        self.canvas.create_window(0,0,window=self.body,anchor='nw')
+        self._window = self.canvas.create_window(0,0,window=self.body,anchor='nw')
+        self.canvas.bind('<Configure>', self._stretch_body)
         self.vertical = tk.Scrollbar(root,orient='vertical',command=self.canvas.yview)
         self.horizontal = tk.Scrollbar(root,orient='horizontal',command=self.canvas.xview)
         self.vertical._no_drag = self.horizontal._no_drag = True
@@ -47,6 +48,11 @@ class Viewport:
         self._dpi = round(float(root.tk.call('tk','scaling'))*72)
         self._fonts = []
         root.bind('<MouseWheel>',self.wheel,add='+')
+
+    def _stretch_body(self, event=None):
+        # A wide footer must not leave a narrow, disconnected card island.
+        width = max(self.body.winfo_reqwidth(), self.canvas.winfo_width())
+        self.canvas.itemconfigure(self._window, width=width)
 
     def wheel(self,event):
         if self.vertical.winfo_manager():
@@ -72,6 +78,7 @@ class Viewport:
                 self.horizontal.grid_remove()
                 self.canvas.xview_moveto(0)
             self._size=size
+        self._stretch_body()
 
     def update_dpi(self,app):
         try:
@@ -101,9 +108,11 @@ class Viewport:
                     visit(child)
             visit(self.root)
             self._fonts=list(fonts.values())
-            from widget_style import FONT_TITLE
-            for card in app._cards:
-                card.winfo_children()[0].configure(height=font.Font(font=FONT_TITLE).metrics('linespace')+4)
+            for name, card in zip(app.section_titles, app._cards):
+                header = app.section_titles[name].master
+                height = font.Font(font=app.section_titles[name].cget('font')).metrics('linespace')+4
+                card.winfo_children()[0].configure(height=height)
+                header.place_configure(height=height)
             painter=app.theme_painter
             painter.scale=dpi/96
             painter.canvas.configure(width=236*painter.scale,height=50*painter.scale)
