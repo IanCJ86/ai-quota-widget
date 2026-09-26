@@ -794,12 +794,12 @@ class App:
         self._divider2.grid(row=4, column=0, sticky="ew", padx=10, pady=1)
         self._section(5, "Codex", CODEX_GREEN,
                       [("c5", "每5小时"), ("cw", "每周"),
-                       ("cr_credit", "重置券"), ("cr_main", "主源")])
+                       ("cr_credit", "重置券"), ("cr_main", "重置雷达")])
         self._divider3 = tk.Frame(self.root, bg="#3a3a4e", height=1)
         self._divider3.grid(row=6, column=0, sticky="ew", padx=10, pady=1)
         # DeepSeek is pay-as-you-go, so this card shows a money balance.
         self._section(7, "DeepSeek", DEEPSEEK_BLUE,
-                      [("ds", "余额"), ("ds_spend", "今日消耗")])
+                      [("ds", "余额"), ("ds_spend", "今日")])
         self._dividers = [self._divider, self._divider2, self._divider3]
 
         bar = tk.Frame(self.root, bg=BG)
@@ -1197,11 +1197,12 @@ class App:
             self.row_labels[key] = (nl,)
             # One shared numeric column for every card: wide enough for money
             # ("¥118.73" needs ~45px, four average characters only give 38) and
-            # right-aligned, so percentages, counts and amounts line up.
+            # left-aligned, so percentages, counts and amounts all start at the
+            # same x as each other and as the labels above them.
             pct = tk.Label(f, text="…", fg=FG_TEXT, bg=BG_CARD,
                            font=("Microsoft YaHei UI", 9, "bold"),
-                           anchor="e", width=8)
-            pct.grid(row=i, column=1, sticky="e", padx=(6, 0))
+                           anchor="w", width=8)
+            pct.grid(row=i, column=1, sticky="w", padx=(6, 0))
             rst = tk.Label(f, text="", fg=FG_DIM, bg=BG_CARD,
                            font=("Microsoft YaHei UI", 9), anchor="w", width=11)
             rst.grid(row=i, column=2, sticky="w", padx=(12, 7),
@@ -1689,7 +1690,7 @@ class App:
         win = CFG.get("radar_window", 24)
 
         main_pct = self.data.get("cr_main48" if win == 48 else "cr_main24")
-        self._set_row("cr_main", main_pct, f"主源·{win}h")
+        self._set_row("cr_main", main_pct, f"{win}h概率")
         if main_pct is not None:
             color = "#d08020" if main_pct >= 80 else THEMES[self.theme]["FG_DIM"]
             self.rows["cr_main"][0].config(fg=color)
@@ -1771,7 +1772,7 @@ class App:
         if account_times and all(account_times):
             parts.append("额度更新 " + datetime.fromtimestamp(min(account_times)).strftime("%H:%M"))
         if stale:
-            labels = {"kimi": "Kimi", "codex": "Codex", "glm": "GLM", "main": "主源",
+            labels = {"kimi": "Kimi", "codex": "Codex", "glm": "GLM", "main": "重置雷达",
                       "deepseek": "DeepSeek"}
             parts.append("待更新:" + "/".join(labels[name] for name in stale))
         if self._tray_failed:
