@@ -4,11 +4,13 @@
 
 ## 普通Windows用户
 
-下载正式Release的 `ai-quota-widget-v1.3.0-windows-source.zip`，完整解压，运行 `install.ps1`。需要Python 3.10+（含Tk）；缺少时安装器提供安装提示，不暗中安装系统软件。安装器在目标目录建立 `.venv-1.3.0`，安装依赖后才替换程序文件，生成 `start.bat`。这是Python应用，不是免环境EXE。
+下载最新正式Release的 `ai-quota-widget-v<版本>-windows-source.zip`，完整解压，运行 `install.ps1`。需要Python 3.10+（含Tk）；缺少时安装器提供安装提示，不暗中安装系统软件。安装器在目标目录建立 `.venv-<版本>`，安装依赖后才替换程序文件，生成 `start.bat`。这是Python应用，不是免环境EXE。v1.3.2新装默认毛玻璃，升级保留原主题；只需配置你实际使用的来源。
 
 升级前用右键菜单“退出”。运行中会拒绝覆盖，不强杀；安装失败回滚程序文件，保留个人配置、密钥和统计。依赖下载失败可能留下该版本环境，可重新运行安装器修复。桌面启动器不依赖临时uvx环境。`-SkipDependencies` 只用于已自行管理并验证的持久Python环境。
 
 ## 无界面命令
+
+以下示例假设在完整源码环境中运行。诊断已安装版本时，使用安装目录start.bat绑定的Python绝对路径、安装目录中的quota_monitor.py，并加`--data-dir "实际安装目录"`；不要用另一个全局Python诊断后误报缺依赖。
 
 ```powershell
 python quota_monitor.py --help
@@ -32,8 +34,8 @@ python quota_monitor.py --install --dest "C:\Apps\quota-widget" --no-autostart
 Release附有wheel，不要求上传PyPI。已有uv的用户可以下载wheel后运行：
 
 ```powershell
-uvx --from .\ai_quota_widget-1.3.0-py3-none-any.whl quota_monitor --help
-uvx --from .\ai_quota_widget-1.3.0-py3-none-any.whl quota_monitor --install --dest "C:\Apps\quota-widget" --no-autostart
+uvx --from .\ai_quota_widget-1.3.2-py3-none-any.whl quota_monitor --help
+uvx --from .\ai_quota_widget-1.3.2-py3-none-any.whl quota_monitor --install --dest "C:\Apps\quota-widget" --no-autostart
 ```
 
 `uvx`只是安装/查询入口。GUI安装需要带Tk的持久Python；精简或无Tk的uv托管Python会在预检失败，此时改用python.org的Windows安装版运行源码安装器。没有声明任意uv环境都能启动GUI。

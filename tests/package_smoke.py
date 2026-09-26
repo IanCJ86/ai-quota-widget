@@ -1,5 +1,6 @@
 """Test the real distributable in isolated directories, without account queries."""
 from pathlib import Path
+import json
 import os
 import subprocess
 import sys
@@ -44,7 +45,8 @@ with tempfile.TemporaryDirectory(prefix='quota-package-test-') as temp:
                     p=subprocess.run([str(installed_python),'-c',f'import {module}'],capture_output=True,env=env)
                     print('fixture import',module,'exit',p.returncode,flush=True)
             raise
-        sentinel = '{"kimi_plan_name":"TEST_ONLY","show_kimi":false,"show_codex":false}'
+        assert json.loads((dest/'config.json').read_text(encoding='utf-8'))['theme'] == 'glass'
+        sentinel = '{"kimi_plan_name":"TEST_ONLY","theme":"steam","show_kimi":false,"show_codex":false}'
         (dest/'config.json').write_text(sentinel,encoding='utf-8')
         run([exe,'--install','--dest',dest,'--no-autostart'])
         assert (dest/'config.json').read_text(encoding='utf-8') == sentinel

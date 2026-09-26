@@ -4,7 +4,7 @@
 
 ## 前提
 
-- 用户系统是 Windows，且已登录过 Kimi Code CLI 和/或 Codex CLI。
+- 用户系统是 Windows。配置一种来源即可：已登录 Kimi/Codex CLI，或GLM Coding Plan / DeepSeek Key；仅使用API Key不必安装CLI。
 - **不需要向用户索要 CLI token 或密码**：读取本机已登录 CLI 的凭证，只用于对应官方服务认证。雷达访问 `codexreset.org` 这个第三方公开网站，不带任何凭据。
 
 ## 步骤
@@ -14,9 +14,12 @@
 ```bash
 git clone https://github.com/IanCJ86/ai-quota-widget.git
 cd ai-quota-widget
+# 再检出用户指定或最新正式Release的tag，不直接把main当发布版。
 ```
 
 （没有 git 就从 GitHub 下载 ZIP 解压。）
+
+也可从GitHub最新正式Release下载完整windows-source.zip，解压后运行，无需Git。
 
 ### 2. 运行安装脚本
 
@@ -58,7 +61,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 | `codex_plan_name` | Codex 套餐显示名覆盖，如 `"Pro 20x"`（右键菜单可改）；留空则用接口值 + `codex_plan_suffix` |
 | `glm_plan_name` | GLM 套餐显示名，如 `"Pro"`（右键菜单可改） |
 | `codex_plan_suffix` | Codex 套餐名后缀，例如 `" 20x"` |
-| `theme` | 主题：`dark`（月之暗面）/ `light`（月之亮面）/ `steam`（蒸汽算力机）/ `fuel`（Token 加油站）/ `ink`（电子墨水账本）；`glass` 为毛玻璃兼容项。右键菜单即时切换并保存 |
+| `theme` | 新安装默认`glass`（毛玻璃）；另有`dark` / `light` / `steam` / `fuel` / `ink`。升级保留原选择，右键可即时切换 |
 | `show_kimi` / `show_codex` / `show_glm` | 各卡片是否显示（右键菜单也可切换） |
 | `glm_api_key` | 可选。GLM Coding Plan API Key；**明文存储，仅兼容旧配置**。优先用环境变量 `AI_QUOTA_WIDGET_GLM_API_KEY`，或让用户点右键菜单「GLM Coding Plan 设置 → 安全保存 API Key…」（DPAPI 加密，且会清空这里的明文） |
 | `glm_region` | `"cn"` 用 open.bigmodel.cn，`"intl"` 用 api.z.ai |
@@ -77,11 +80,10 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 cd "%USERPROFILE%\Desktop\quota-widget" && start.bat
 ```
 
-等待约 20 秒后检查同目录 `debug.txt`：
+使用start.bat绑定的Python执行安装目录quota_monitor.py的`--doctor --data-dir "安装目录"`，不要用其他全局Python误报依赖。doctor离线不证明查询成功。启动后通常数十秒，再本机检查同目录debug.txt：
 
-- `"errors": {}` 且 `"data"` 里有 `k5_pct` / `c5_pct` / `ds_balance` 等数值 → 安装成功，告诉用户完成。
-- `errors` 里出现 `kimi` → 用户没登录 Kimi Code CLI，让其先运行一次 Kimi Code 登录。
-- `errors` 里出现 `codex` → 检查 CLI 安装与登录。默认托盘也查询 Codex；仅隐藏卡片不会关闭托盘需要的查询。
+- 对已配置且可见的来源，确认success_at晚于本次启动、实际数值回来，ui_error为空；旧缓存、errors为空或pythonw存在本身不等于验收通过。再验证右键、托盘隐藏及恢复。
+- `errors` 里出现 `kimi` / `codex` → 按具体错误区分认证、网络、超时和解析；只在认证问题时要求重登录。隐藏卡片不查询，托盘只从可见卡片选择。
 - `errors` 里出现 `deepseek` → 核对余额请求错误码与 Key 来源，并非所有错误都代表缺 Key；`HTTP401` 表示认证失败。`ds_spend` 是本地估算，不是正式账单。`tokens` 是独立本地扫描，异常不会阻断余额刷新。
 - 底部“待更新:N 项”表示有N个来源尚未取得新数据；旧值灰显并加“旧”，日期等业务备注保留。首次失败为查询失败，不无限加载。用 `--doctor --data-dir "安装目录"` 或右键复制脱敏诊断，不公开原始debug.txt或含余额的JSON。
 
@@ -91,6 +93,6 @@ cd "%USERPROFILE%\Desktop\quota-widget" && start.bat
 
 ## 排错速查
 
-- 双击 start.bat 没反应 → 用 `python quota_monitor.py` 前台跑，看终端报错。
+- 双击 start.bat 没反应 → 用start.bat绑定的python.exe运行安装目录quota_monitor.py查看错误；公开反馈只用脱敏诊断，不贴凭据或原始debug。
 - 窗口不出现但 debug.txt 正常 → 窗口在屏幕右下角，可能被其他窗口挡住（默认置顶）。
 - 修改 config.json 不生效 → 重启 widget（文件配置只在启动时读取；右键菜单里的套餐、续订日期、显示开关都是即时生效并写回 config.json）。
