@@ -696,13 +696,15 @@ class UITests(unittest.TestCase):
         balance = a.rows["ds"][0].cget("text")
         spend = a.rows["ds_spend"][0].cget("text")
         self.assertEqual(balance, "¥113.83")
-        self.assertEqual(spend, "¥  4.90")          # padded to the same width
+        # the short amount is padded with figure-width spaces, not plain ones
+        self.assertEqual(spend, "¥" + monitor.MONEY_PAD * 2 + "4.90")
         self.assertEqual(balance.index("."), spend.index("."))
-        # The money font is monospaced, so equal character counts really are
-        # equal pixel widths (a YaHei space is 4px while a digit is 9px).
+        # ...and those spaces really are one digit wide, so the amounts share
+        # the symbol position and the decimal point in pixels too
         font = tkfont.Font(font=a.rows["ds"][0].cget("font"))
         self.assertEqual(font.measure(balance.split(".")[0]),
-                         font.measure(spend.split(".")[0]))   # same pixel x too
+                         font.measure(spend.split(".")[0]))
+        self.assertEqual(font.measure(monitor.MONEY_PAD), font.measure("0"))
 
     def test_every_theme_repaints_the_card_header(self):
         """The card header row is built from its own frames; if the theme pass
@@ -719,6 +721,29 @@ class UITests(unittest.TestCase):
                                  "%s theme left a header label unpainted" % theme)
             for card in a._cards:
                 self.assertEqual(card.cget("bg"), expected)
+
+    def test_renewal_date_sits_at_the_notes_column(self):
+        """The renewal date shares the title's row but must line up with the
+        notes column underneath it, on every card."""
+        a = self.app
+        for name in ("kimi", "codex", "deepseek"):
+            a._on_result(name, {"ok": True, "data": {
+                "kw_pct": 100, "cw_pct": 82, "cr_credit_count": 1,
+                "cr_credit_expiry": 1792700757, "ds_balance": 113.83,
+                "ds_spend": 4.9, "ds_currency": "CNY"}}, {})
+        a._fit()
+        a._fit()
+        positions = set()
+        for card_name in ("Kimi", "Codex", "DeepSeek"):
+            card = a.section_renews[card_name].master.master
+            label_w = card.grid_columnconfigure(0)["minsize"]
+            value_w = card.grid_columnconfigure(1)["minsize"]
+            head_x = a.section_renews[card_name].master.winfo_x() or 7
+            expected = label_w + value_w + 9 - head_x      # notes cell + padding
+            self.assertEqual(int(a.section_renews[card_name].place_info()["x"]),
+                             expected, "%s's renewal date is off" % card_name)
+            positions.add(expected)
+        self.assertEqual(len(positions), 1, "cards disagree: %s" % positions)
 
     def test_short_titles_are_left_alone(self):
         """Titles and the renewal date are packed left/right, so a normal title

@@ -172,22 +172,27 @@ DEEPSEEK_BLUE = "#4d6bfe"
 DEEPSEEK_SOFT = "#8fa2ff"
 # One type scale for the whole widget: card titles 9, every body row (labels,
 # values, notes) and the refresh line 8.  Same-role text uses the same size;
-# values are told apart by weight only.  Money is monospaced because padding
-# with spaces only lines the decimal points up when a space is as wide as a
-# digit - and its nominal size is one up, because monospaced digits look smaller
-# than proportional ones (both measure a 16px line space here).
+# values are told apart by weight only.
 FONT_FAMILY = "Microsoft YaHei UI"
 FONT_TITLE = (FONT_FAMILY, 9, "bold")
 FONT_TEXT = (FONT_FAMILY, 8)
 FONT_VALUE = (FONT_FAMILY, 8, "bold")
 FONT_STATUS = (FONT_FAMILY, 8)
 FONT_HINT = (FONT_FAMILY, 8)
-MONEY_FONT = ("Cascadia Mono", 9, "bold")       # falls back to Consolas
-MONEY_FALLBACK = ("Consolas", 10, "bold")
+# Money is padded to a shared integer width so its currency symbol and decimal
+# point line up.  An ordinary space cannot do that (it is 3px where a digit is
+# 7px) and a monospaced font makes the amounts look spaced out next to the
+# percentages; U+2002 happens to be exactly one digit wide in this font.
+MONEY_PAD = "\u2002"
 # A card title shares its row with the renewal date. They are placed left and
 # right so they can never overlap; this cap only stops an absurd plan name from
 # taking the whole row.
 TITLE_MAX_PX = 220
+# How much width the widest title may add to the value column so that it can sit
+# left of the renewal date, and the breathing room kept between the two.
+TITLE_RESERVE_MAX = 40
+TITLE_GAP = 8        # minimum space between a title and the renewal date
+TITLE_SLACK = 6      # font metrics can differ a little between processes
 PLAN_PRESETS = {
     "kimi": ["Andante", "Moderato", "Allegretto", "Allegro"],
     "codex": ["Go", "Plus", "Pro 5x", "Pro 20x"],
@@ -793,14 +798,6 @@ class App:
         self._name_labels = []
         self._bg_frames = []
         self._card_frames = []      # headers/spacers inside cards (theme colours)
-        # Monospaced digits look smaller than proportional ones at the same
-        # nominal size, so money uses a size up; keep a working fallback font.
-        self.money_font = MONEY_FONT
-        try:
-            if MONEY_FONT[0] not in set(tkfont.families()):
-                self.money_font = MONEY_FALLBACK
-        except Exception:
-            pass
 
         w, h = 232, 212
         sw = self.root.winfo_screenwidth()
@@ -830,12 +827,9 @@ class App:
                        ("cr_credit", "重置券"), ("cr_main", "雷达")])
         self._divider3 = tk.Frame(self.root, bg="#3a3a4e", height=1)
         self._divider3.grid(row=6, column=0, sticky="ew", padx=10, pady=1)
-        # DeepSeek is pay-as-you-go, so this card shows a money balance. Money
-        # rows are marked so their values use the monospaced font: only there do
-        # a space and a digit have the same width, which is what lets "¥113.83"
-        # and "¥  4.90" share a currency symbol position AND a decimal point.
+        # DeepSeek is pay-as-you-go, so this card shows a money balance.
         self._section(7, "DeepSeek", DEEPSEEK_BLUE,
-                      [("ds", "余额", "money"), ("ds_spend", "今日", "money")])
+                      [("ds", "余额"), ("ds_spend", "今日")])
         self._dividers = [self._divider, self._divider2, self._divider3]
 
         bar = tk.Frame(self.root, bg=BG)
@@ -937,24 +931,32 @@ class App:
         # than the minimum grows a few pixels and stops matching its neighbours.
         label_w = max([lbl.winfo_reqwidth() for lbl in self._name_labels] or [0]) + 7
         value_w = max([pl.winfo_reqwidth() for pl, _ in self.rows.values()] or [0]) + 4
+        # A title shares its row with the renewal date, which has to sit exactly
+        # at the notes column's x so it lines up with the notes underneath. A
+        # title may use everything left of it, i.e. label_w + value_w + 1 pixels
+        # (the card border and cell paddings account for the rest), so reserve
+        # whatever the widest title is missing - capped, so an absurd plan name
+        # is shortened instead of widening every card.
+        title_font = tkfont.Font(font=FONT_TITLE)
+        widest = max([title_font.measure(self._title_text.get(name, lbl.cget("text")))
+                      for name, lbl in self.section_titles.items()] or [0])
+        room = label_w + value_w + 1
+        value_w += min(max(widest + TITLE_GAP + TITLE_SLACK - room, 0),
+                       TITLE_RESERVE_MAX)
+        room = label_w + value_w + 1
+        notes_x = room + 8                           # notes label's own x
         for card in self._cards:
             card.grid_columnconfigure(0, minsize=label_w)
             card.grid_columnconfigure(1, minsize=value_w)
-        # A title shares its row with the renewal date and must never reach it.
-        # The header spans the card (a title cannot change that), so reading the
-        # card's width here is safe and stable.
-        font = tkfont.Font(font=FONT_TITLE)
         for name, lbl in self.section_titles.items():
             renew = self.section_renews.get(name)
-            card = lbl.master.master
-            # winfo_width() is 1 until the window is mapped (tests, first fit).
-            width = card.winfo_width()
-            if width <= 1:
-                width = self.root.winfo_reqwidth() - 24
-            room = width - 10 - (renew.winfo_reqwidth() if renew else 0) - 8
+            if renew is None:
+                continue
+            head_x = renew.master.winfo_x() or 7     # header's own x inside card
+            renew.place_configure(x=max(notes_x - head_x, 0), y=1)
             full = self._title_text.get(name, lbl.cget("text"))
-            lbl.configure(text=self._ellipsize(font, full,
-                                               min(TITLE_MAX_PX, max(room, 60))))
+            lbl.configure(text=self._ellipsize(title_font, full,
+                                               max(room - TITLE_GAP, 60)))
 
     @staticmethod
     def _ellipsize(font, text, limit):
@@ -1266,10 +1268,11 @@ class App:
         self._cards.append(f)
         # Column widths are equalised across cards in _sync_columns(); nothing is
         # fixed here, so each column is only as wide as its content needs.
-        # Title and renewal share their own full-width row: the title sits left,
-        # the renewal right, so they can never overlap and the title may use the
-        # whole card width. The row is placed (with a spacer keeping its height
-        # in the grid) so the header cannot influence the three data columns.
+        # Title and renewal share their own full-width row. The title is packed
+        # left and the renewal is placed at the third column's x (set in
+        # _sync_columns), so the renewal lines up with the notes below it and
+        # the two can never overlap. The row is placed, with a spacer keeping
+        # its height in the grid, so the header cannot influence the columns.
         spacer = tk.Frame(f, bg=BG_CARD, height=self._head_height)
         spacer.grid(row=0, column=0, columnspan=3, pady=(3, 0))
         self._card_frames.append(spacer)
@@ -1279,14 +1282,13 @@ class App:
         title_lbl = tk.Label(head, text=title, fg=color, bg=BG_CARD,
                              font=FONT_TITLE, anchor="w")
         title_lbl.pack(side="left")
-        renew_lbl = tk.Label(head, text="", bg=BG_CARD, anchor="e",
+        renew_lbl = tk.Label(head, text="", bg=BG_CARD, anchor="w",
                              font=FONT_TEXT)
-        renew_lbl.pack(side="right")
+        renew_lbl.place(x=0, y=1)
         self.section_titles[title] = title_lbl
         self.section_renews[title] = renew_lbl
         for i, line in enumerate(lines, start=1):
             key, name = line[0], line[1]
-            money = len(line) > 2 and line[2] == "money"
             nl = tk.Label(f, text=name, fg=FG_DIM, bg=BG_CARD,
                           font=FONT_TEXT, anchor="w")
             nl.grid(row=i, column=0, sticky="w", padx=(7, 0))
@@ -1294,8 +1296,7 @@ class App:
             self.row_labels[key] = (nl,)
             # One shared, left-aligned numeric column for every card.
             pct = tk.Label(f, text="…", fg=FG_TEXT, bg=BG_CARD,
-                           font=self.money_font if money else FONT_VALUE,
-                           anchor="w")
+                           font=FONT_VALUE, anchor="w")
             pct.grid(row=i, column=1, sticky="w", padx=(4, 0))
             rst = tk.Label(f, text="", fg=FG_DIM, bg=BG_CARD,
                            font=FONT_TEXT, anchor="w")
@@ -1763,7 +1764,8 @@ class App:
         symbols = {"CNY": "¥", "USD": "$"}
         symbol = symbols.get(currency, currency + " " if currency else "")
         whole, _, cents = f"{amount:,.2f}".partition(".")
-        text = "%s%*s.%s" % (symbol, max(whole_width, len(whole)), whole, cents)
+        pad = MONEY_PAD * max(whole_width - len(whole), 0)
+        text = "%s%s%s.%s" % (symbol, pad, whole, cents)
         base = THEMES[getattr(self, "theme", "dark")]["FG_TEXT"]
         # Money has no natural percentage, so warn on an absolute threshold.
         limit = CFG.get("deepseek_low_balance") or 0
