@@ -44,7 +44,8 @@ class Viewport:
         root.grid_rowconfigure(0,weight=1)
         self.body.grid_columnconfigure(0,weight=1)
         self._size = None
-        self._dpi = None
+        self._dpi = round(float(root.tk.call('tk','scaling'))*72)
+        self._fonts = []
         root.bind('<MouseWheel>',self.wheel,add='+')
 
     def wheel(self,event):
@@ -85,17 +86,21 @@ class Viewport:
                 return False
             self._dpi=dpi
             self.root.tk.call('tk','scaling',dpi/72)
+            from tkinter import font
+            fonts = {}
             def visit(widget):
                 if isinstance(widget,tk.Label):
-                    spec=self.root.tk.splitlist(widget.cget('font'))
-                    if len(spec)>1:
-                        # Force font recreation after changing monitor DPI.
-                        widget.configure(font=(spec[0],int(spec[1])+1,*spec[2:]))
-                        widget.configure(font=spec)
+                    spec=font.Font(root=self.root,font=widget.cget('font')).actual()
+                    key=tuple(sorted(spec.items()))
+                    if key not in fonts:
+                        fonts[key]=font.Font(root=self.root,**spec)
+                    # A new named font is essential: reapplying the same tuple
+                    # reuses Tk's cached old-DPI metrics while other labels use it.
+                    widget.configure(font=fonts[key])
                 for child in widget.winfo_children():
                     visit(child)
-            visit(self.body)
-            from tkinter import font
+            visit(self.root)
+            self._fonts=list(fonts.values())
             from widget_style import FONT_TITLE
             for card in app._cards:
                 card.winfo_children()[0].configure(height=font.Font(font=FONT_TITLE).metrics('linespace')+4)

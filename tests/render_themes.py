@@ -60,6 +60,8 @@ if __name__ == '__main__':
     # App obtains system DPI early; emulate each monitor scale explicitly.
     with patch.object(monitor.ctypes.windll.user32, 'GetDpiForSystem', return_value=96*dpi//100):
         fixture.setUp()
+    dpi_patch = patch.object(monitor.ctypes.windll.user32,'GetDpiForWindow',return_value=96*dpi//100)
+    dpi_patch.start()
     try:
         a = fixture.app
         a.root.attributes('-alpha', 1.0)
@@ -90,3 +92,4 @@ if __name__ == '__main__':
             print(path)
     finally:
         fixture.tearDown()
+        dpi_patch.stop()

@@ -130,6 +130,16 @@ class GuiReleaseTests(unittest.TestCase):
         for widget in (a.viewport.vertical,a.viewport.horizontal,a.close_btn):
             a._drag_start(SimpleNamespace(widget=widget,x=2,y=2))
             self.assertIsNone(a._drag)
+    def test_dpi_change_rebuilds_actual_text_metrics_not_only_header(self):
+        a=self.app
+        a.root.update()
+        before=a.rows['cw'][0].winfo_reqheight()
+        target=round(float(a.root.tk.call('tk','scaling'))*144)
+        with patch.object(monitor.ctypes.windll.user32,'GetDpiForWindow',Mock(return_value=target)):
+            self.assertTrue(a.viewport.update_dpi(a))
+            a._fit(); a.root.update()
+            self.assertGreater(a.rows['cw'][0].winfo_reqheight(),before*1.5)
+            self.assertFalse(a.viewport.update_dpi(a))
 
 class CliTests(unittest.TestCase):
     def setUp(self):
