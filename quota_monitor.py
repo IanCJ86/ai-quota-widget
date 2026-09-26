@@ -18,6 +18,7 @@ import urllib.parse
 import urllib.error
 from datetime import datetime, date, timezone, timedelta
 from html import unescape
+from html.parser import HTMLParser
 from monitor_runtime import (Scheduler, SingleInstance, atomic_json, dpapi_protect,
                              dpapi_unprotect, validate_result)
 
@@ -521,23 +522,34 @@ def _fetch_public_text(url, accept):
         return raw
 
 
-def _int_match(pattern, text):
-    match = re.search(pattern, text, flags=re.IGNORECASE)
-    if not match:
-        return None
-    try:
-        return int(match.group(1))
-    except Exception:
-        return None
+class _RadarParser(HTMLParser):
+    """Attribute order/quote style must not break the public page adapter."""
+    def __init__(self):
+        super().__init__()
+        self.values = {}
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        name = attrs.get("data-testid")
+        if name not in ("probability-ring-24h", "probability-ring-48h"):
+            return
+        try:
+            value = int(attrs.get("data-target-value"))
+        except (TypeError, ValueError):
+            return
+        if 0 <= value <= 100:
+            self.values[name] = value
 
 
 def fetch_main_radar():
     html = _fetch_public_text(CODEX_RADAR_URL, "text/html").decode("utf-8", errors="replace")
+    parser = _RadarParser()
+    parser.feed(html)
+    if not parser.values:
+        raise ValueError("missing radar probabilities")
     return {
-        "cr_main24": _int_match(
-            r'data-testid="probability-ring-24h"[^>]*data-target-value="(\d+)"', html),
-        "cr_main48": _int_match(
-            r'data-testid="probability-ring-48h"[^>]*data-target-value="(\d+)"', html),
+        "cr_main24": parser.values.get("probability-ring-24h"),
+        "cr_main48": parser.values.get("probability-ring-48h"),
         "cr_main_updated": datetime.now(timezone.utc).isoformat(),
         "cr_main_mode": "model",
     }
@@ -758,13 +770,24 @@ def local_harness_tokens(day=None, root=None):
     return totals(root or DSH_SESSIONS, day, cache)
 
 
+# Offline calendar: State Council's 2026 public holiday schedule. Weekends stay
+# off-peak even on make-up working days: the provider explicitly says Mon-Fri.
+# https://www.beijing.gov.cn/fuwu/bmfw/sy/jrts/202511/t20251104_4258838.html
+DEEPSEEK_HOLIDAYS = {
+    2026: frozenset(date(2026, month, day)
+                    for month, first, last in ((1, 1, 3), (2, 15, 23), (4, 4, 6),
+                                               (5, 1, 5), (6, 19, 21),
+                                               (9, 25, 27), (10, 1, 7))
+                    for day in range(first, last + 1)),
+}
+
+
 def deepseek_peak_label(when=None):
     """梁文峰 during DeepSeek's double-price windows, 梁文谷 otherwise.
 
-    Peak is Beijing time Monday-Friday 09:00-12:00 and 14:00-18:00; weekends and
-    every other hour are billed at half price.  Chinese public holidays are not
-    special-cased (no holiday calendar ships with the widget), so a holiday
-    weekday still reports 梁文峰 even though it is billed off-peak.
+    Peak is Beijing Mon-Fri 09:00-12:00 and 14:00-18:00, excluding holidays.
+    Outside known calendar years, potential peak hours have no label rather
+    than inventing a holiday policy; known off-peak hours remain unambiguous.
     """
     if when is None:
         when = datetime.now(timezone.utc)
@@ -774,6 +797,11 @@ def deepseek_peak_label(when=None):
     minutes = local.hour * 60 + local.minute
     peak = local.weekday() < 5 and (9 * 60 <= minutes < 12 * 60
                                     or 14 * 60 <= minutes < 18 * 60)
+    if peak:
+        holidays = DEEPSEEK_HOLIDAYS.get(local.year)
+        if holidays is None:
+            return ""
+        peak = local.date() not in holidays
     return DEEPSEEK_PEAK if peak else DEEPSEEK_OFFPEAK
 
 
@@ -929,12 +957,9 @@ class App:
         self.tray = None
         self._cards = []
         self._name_labels = []
-        self._bg_frames = []
-        self._card_frames = []      # headers/spacers inside cards (theme colours)
 
         sp1 = tk.Frame(self.root, bg=BG, height=6)
         sp1.grid(row=0, column=0)
-        self._bg_frames.append(sp1)
         self.rows = {}  # key -> (pct_label, reset_label)
         self.row_labels = {}
         self.section_titles = {}
@@ -962,7 +987,6 @@ class App:
 
         bar = tk.Frame(self.root, bg=BG)
         bar.grid(row=8, column=0, sticky="ew", padx=(19, 12), pady=(3, 2))
-        self._bg_frames.append(bar)
         self.status = tk.Label(bar, text="初始化…", fg=FG_DIM, bg=BG,
                                font=FONT_STATUS, anchor="w")
         self.status.pack(side="left")
@@ -984,7 +1008,6 @@ class App:
         # evenly padded.
         sp2 = tk.Frame(self.root, bg=BG, height=3)
         sp2.grid(row=9, column=0)
-        self._bg_frames.append(sp2)
         self.root.grid_columnconfigure(0, weight=1)
 
         for wgt in self.root.winfo_children():
@@ -1461,16 +1484,7 @@ class App:
             CFG["theme"] = name
             _save_config(CFG)
         t = THEMES[name]
-        self.root.configure(bg=t["BG"])
-        for fr in self._bg_frames:
-            fr.configure(bg=t["BG"])
-        for divider in self._dividers:
-            divider.configure(bg=t["BORDER"])
-        for card in self._cards:
-            card.configure(bg=t["BG_CARD"],
-                           highlightbackground=t["BORDER"])
-        for fr in self._card_frames:
-            fr.configure(bg=t["BG_CARD"])
+        self._paint_backgrounds(t)
         for lbl in self._name_labels:
             lbl.configure(fg=t["FG_DIM"], bg=t["BG_CARD"])
         for pl, rl in self.rows.values():
@@ -1487,6 +1501,27 @@ class App:
             b.configure(fg=t["FG_DIM"], bg=t["BG"])
         self._render()  # pct 颜色按当前主题重算
 
+    def _paint_backgrounds(self, palette):
+        """Inherit the containing card/root surface, including new nested widgets.
+
+        Only separators and card borders need explicit roles. Dialogs and menus
+        own their styling; do not mutate their widgets during a theme switch.
+        """
+        def visit(widget, background):
+            if isinstance(widget, (tk.Toplevel, tk.Menu)):
+                return
+            if widget in self._cards:
+                background = palette["BG_CARD"]
+                widget.configure(highlightbackground=palette["BORDER"])
+            if widget in self._dividers:
+                widget.configure(bg=palette["BORDER"])
+                return
+            if widget is self.root or isinstance(widget, (tk.Frame, tk.Label)):
+                widget.configure(bg=background)
+            for child in widget.winfo_children():
+                visit(child, background)
+        visit(self.root, palette["BG"])
+
     def _section(self, row, title, color, lines):
         f = tk.Frame(self.root, bg=BG_CARD,
                      highlightbackground="#33334a", highlightthickness=1)
@@ -1502,10 +1537,8 @@ class App:
         # its height in the grid, so the header cannot influence the columns.
         spacer = tk.Frame(f, bg=BG_CARD, height=self._head_height)
         spacer.grid(row=0, column=0, columnspan=3, pady=(3, 0))
-        self._card_frames.append(spacer)
         head = tk.Frame(f, bg=BG_CARD)
         head.place(x=7, y=3, relwidth=1, width=-10, height=self._head_height)
-        self._card_frames.append(head)
         title_lbl = tk.Label(head, text=title, fg=color, bg=BG_CARD,
                              font=FONT_TITLE, anchor="w")
         title_lbl.pack(side="left")

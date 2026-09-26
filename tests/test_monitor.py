@@ -1017,14 +1017,36 @@ class UITests(unittest.TestCase):
         for theme in ("dark", "light", "glass"):
             a._set_theme(theme)
             expected = monitor.THEMES[theme]["BG_CARD"]
-            for frame in a._card_frames:
-                self.assertEqual(frame.cget("bg"), expected,
-                                 "%s theme left a card frame unpainted" % theme)
+            def check_children(parent):
+                for child in parent.winfo_children():
+                    if isinstance(child, (tkinter.Frame, tkinter.Label)):
+                        self.assertEqual(child.cget("bg"), expected)
+                    check_children(child)
+            for card in a._cards:
+                check_children(card)
             for lbl in list(a.section_titles.values()) + list(a.section_renews.values()):
                 self.assertEqual(lbl.cget("bg"), expected,
                                  "%s theme left a header label unpainted" % theme)
             for card in a._cards:
                 self.assertEqual(card.cget("bg"), expected)
+
+    def test_unregistered_nested_widgets_inherit_theme_without_new_lists(self):
+        a = self.app
+        frame = tkinter.Frame(a._cards[0], bg="red")
+        nested = tkinter.Frame(frame, bg="blue")
+        label = tkinter.Label(nested, text="test only", bg="green")
+        outside = tkinter.Frame(a.root, bg="red")
+        try:
+            for theme in ("light", "dark", "glass"):
+                a._set_theme(theme)
+                for widget in (frame, nested, label):
+                    self.assertEqual(widget.cget("bg"), monitor.THEMES[theme]["BG_CARD"])
+                self.assertEqual(outside.cget("bg"), monitor.THEMES[theme]["BG"])
+                for divider in a._dividers:
+                    self.assertEqual(divider.cget("bg"), monitor.THEMES[theme]["BORDER"])
+        finally:
+            frame.destroy()
+            outside.destroy()
 
     def test_renewal_date_sits_at_the_notes_column(self):
         """The renewal date shares the title's row but must line up with the

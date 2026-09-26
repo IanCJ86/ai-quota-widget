@@ -78,7 +78,7 @@ python quota_monitor.py
 - 雷达数据来自 `codexreset.org` 的第三方公开页面，不含任何个人凭证
 - GLM 数据来自 `open.bigmodel.cn/api/monitor/usage/quota/limit`（国际版 `api.z.ai` 同路径），用配置的 apiKey 鉴权
 - DeepSeek 数据来自官方 `api.deepseek.com/user/balance`（Bearer Key）；官方没有用量/额度接口（实测 `/user/usage`、`/dashboard/billing/usage` 均为 404），所以只能显示余额。「今日消耗」是本机估算：以当天第一次读到的余额为起点，按之后每次余额的减少量累加，充值会自动抬高起点（不会出现负数），跨天归零；起点之前（当天 Widget 没运行时）的消耗统计不到
-- DeepSeek 的**计费时段**按官方规则判断：高峰 = 北京时间周一至周五 9:00–12:00 与 14:00–18:00，其余（含周末）为空闲、单价减半。**中国法定节假日没有内置日历**，所以节假日的白天会按高峰显示（实际按空闲计费）
+- DeepSeek 的**计费时段**按[官方规则](https://api-docs.deepseek.com/quick_start/pricing/)判断：高峰 = 北京时间周一至周五 9:00–12:00 与 14:00–18:00，排除中国节假日；其余（含周末）为空闲。内置[2026年官方放假安排](https://www.beijing.gov.cn/fuwu/bmfw/sy/jrts/202511/t20251104_4258838.html)，不额外联网；调休周末仍为空闲。未覆盖的年份在可能高峰时段留空，不猜测假日；需随新年度官方安排更新日历。标签仅供参考，实际计费以服务商为准。
 - 「今日」行的 token 数来自**本机 DeepSeek Harness 的会话记录**（`~/.dsh/sessions`），只覆盖本机 Harness，不代表账户全部消耗；需要 Python 3.14 标准库或旧版 Python 的 `backports.zstd`（安装器自动处理）。不可用时留空。缓存读取量通常远大于新 token，`total` 会把它们算进去，所以数字可能很大而金额很小。
 - CLI 凭证只从本机读取，仅用于对应官方服务的认证，不发送给雷达网站，不打印或写入诊断文件
 
