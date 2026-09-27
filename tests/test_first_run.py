@@ -69,8 +69,9 @@ class FirstRunTests(unittest.TestCase):
         a.tray_controller.image = Mock()
         a.data['cw_pct']=75
         a._update_tray()
-        self.assertEqual(a.tray_controller.icon.title, 'AI 额度监控 · 点击打开')
-        a.tray_controller.image.assert_called_once_with(None)
+        self.assertIn('DeepSeek 今日估算（非账单） --', a.tray_controller.icon.title)
+        self.assertNotIn('Codex', a.tray_controller.icon.title)
+        a.tray_controller.image.assert_called_once_with(None, True, amount=True)
 
     def test_setup_can_be_skipped_and_reopened_without_network_wait(self):
         a = self.app

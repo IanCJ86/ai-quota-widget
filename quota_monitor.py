@@ -91,7 +91,7 @@ DEEPSEEK_KEY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "de
 DEEPSEEK_KEY_ENV = "AI_QUOTA_WIDGET_DEEPSEEK_API_KEY"
 DEEPSEEK_ENV = "DEEPSEEK_API_KEY"             # name used by the official CLI/SDK
 DEEPSEEK_BALANCE_URL = "https://api.deepseek.com/user/balance"
-# Local balance history, because the API has no usage endpoint (see deepseek_spend).
+# API-key balance history; platform-web billing needs separate login authorization.
 DEEPSEEK_SPEND_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                    "deepseek-spend.json")
 DATA_DIR = os.environ.get('AI_QUOTA_WIDGET_DATA_DIR') or (
@@ -768,8 +768,8 @@ def deepseek_spend(balance, today=None, scope=None):
 
 
 def _deepseek_spend(balance, today=None, scope=None):
-    """Estimate today's spend from balance changes, since the API has no usage
-    endpoint. The first reading of a day becomes the baseline; a top-up raises
+    """Estimate today's spend from the API-key balance endpoint.
+    The first reading of a day becomes the baseline; a top-up raises
     the baseline instead of producing negative spend. Returns the amount spent
     so far today (0.0 when nothing has been observed yet)."""
     if isinstance(balance, bool) or not isinstance(balance, (int, float)) or not math.isfinite(balance) or balance < 0:
@@ -849,8 +849,9 @@ TRAY_CHOICES = {
     "kimi": [("k5_pct", "Kimi 每5小时"), ("kw_pct", "Kimi 每周")],
     "codex": [("c5_pct", "Codex 每5小时"), ("cw_pct", "Codex 每周")],
     "glm": [("g5_pct", "GLM 每5小时"), ("gw_pct", "GLM 每周")],
+    "deepseek": [("ds_spend", "DeepSeek 今日估算金额（四舍五入）")],
 }
-TRAY_DEFAULT = {"kimi": "kw_pct", "codex": "cw_pct", "glm": "gw_pct"}
+TRAY_DEFAULT = {"kimi": "kw_pct", "codex": "cw_pct", "glm": "gw_pct", "deepseek": "ds_spend"}
 
 def clamp_position(x, y, w, h, screen_w, screen_h):
     """Where to put the window given a remembered position, or None.
@@ -1001,6 +1002,7 @@ class App:
         self._ui_error = None
         self._last_render_minute = None
         self.tray_controller = TrayIcon(self._commands)
+        self._last_tray_state = None
         self.history = QueryHistory(os.path.join(os.path.dirname(DEBUG_FILE), 'query-history.json'))
         self.scheduler = Scheduler(os.path.abspath(__file__), self._on_result, REFRESH_SECONDS,
                                    on_event=self.history.record)
@@ -1138,8 +1140,6 @@ class App:
         self._fit()                      # size it up before it becomes visible
         self.root.deiconify()
         self._redraw()                   # fresh surface, never a stale one
-        if self.theme == "glass":        # acrylic needs the window mapped
-            self._acrylic_on = self._apply_acrylic(True)
         self.refresh_async()
         self._write_debug()  # startup evidence also exists when no source is configured
         self.root.after(100, self._poll)
@@ -1294,7 +1294,7 @@ class App:
         self.tray_menu.delete(0, "end")
         choices = self._visible_tray_choices()
         if not choices:
-            self.tray_menu.add_command(label="（未显示百分比账户）", state="disabled")
+            self.tray_menu.add_command(label="（未显示可用账户）", state="disabled")
             return
         for metric, label in choices:
             self.tray_menu.add_radiobutton(label=label, value=metric,
@@ -1335,16 +1335,22 @@ class App:
             return
         metric = CFG.get("tray_metric", "cw_pct")
         value = self.data.get(metric)
-        source = "codex" if metric.startswith("c") else "kimi" if metric.startswith("k") else "glm"
-        stale = self._transport_stale(source) or self._window_expired(metric.split("_")[0])
+        amount = metric == 'ds_spend'
+        source = 'deepseek' if amount else "codex" if metric.startswith("c") else "kimi" if metric.startswith("k") else "glm"
+        stale = self._transport_stale(source) or (not amount and self._window_expired(metric.split("_")[0]))
+        if amount and (self.data.get('ds_spend_day') != date.today().isoformat()
+                       or self.data.get('ds_spend_error') or not finite(value) or value < 0):
+            value, stale = None, True
         key = (metric, value, stale)
         if key != self.tray_controller.last_value:
-            self.tray_controller.icon.icon = self.tray_controller.image(value, stale)
+            self.tray_controller.icon.icon = self.tray_controller.image(value, stale, amount=amount)
             self.tray_controller.last_value = key
-        shown = "--" if value is None else f"{int(value)}%"
+        shown = "--" if value is None else f"{value:.2f} {self.data.get('ds_currency','')}" if amount else f"{int(value)}%"
         stamp = self._success_at.get(source)
         when = datetime.fromtimestamp(stamp).strftime("%m-%d %H:%M") if stamp else "尚无成功数据"
-        title = f"{source.title()} {'每周' if 'w_' in metric else '5小时'} {shown} | {'旧数据' if stale else '更新'} {when}"
+        period = '今日估算（非账单）' if amount else '每周' if 'w_' in metric else '5小时'
+        provider = 'DeepSeek' if amount else source.title()
+        title = f"{provider} {period} {shown} | {'旧数据' if stale else '更新'} {when}"
         if self.tray_controller.icon.title != title:
             self.tray_controller.icon.title = title
 
@@ -1423,15 +1429,16 @@ class App:
         # A colour key makes every background pixel mouse-transparent on
         # Windows, including the spaces between footer buttons. Never use it.
         self.root.attributes("-transparentcolor", "")
-        if name == "glass":
-            self._acrylic_on = self._apply_acrylic(True)
-        elif leaving_glass:
+        if name == "glass" or leaving_glass:
             try:
                 self.root.attributes("-transparentcolor", "")
             except Exception:
                 pass
             self._apply_acrylic(False)
             self._acrylic_on = False
+        # Native acrylic + Tk/GDI + layered alpha can wash colored glyphs out
+        # on some Windows compositors. Keep the glass palette/alpha but never
+        # enable this second compositor. No color-key / click-through fallback.
         self.theme = name
         if hasattr(self, "_theme_var"):
             self._theme_var.set(name)
@@ -1743,6 +1750,7 @@ class App:
                 "history_write_failed": self.history.failed,
                 "active": [name for name, state in self.scheduler.states.items() if state["worker"]],
                 "tray": {"available": bool(self.tray_controller.icon and self.tray_controller.icon.visible),
+                         "state": self.tray_controller.state,
                          "title": self.tray_controller.icon.title if self.tray_controller.icon else None}})
         except Exception:
             pass
@@ -1771,6 +1779,10 @@ class App:
             if self.tray_controller.thread and not self.tray_controller.thread.is_alive() and not self.tray_controller.failed:
                 self.tray_controller.failed = True
                 self.root.deiconify()
+            tray_state = self.tray_controller.state
+            if tray_state != self._last_tray_state:
+                self._last_tray_state = tray_state
+                self._write_debug()
             active_before = tuple(n for n,s in self.scheduler.states.items() if s['worker'] is not None)
             self.scheduler.tick()
             active_after = tuple(n for n,s in self.scheduler.states.items() if s['worker'] is not None)

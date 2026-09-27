@@ -80,7 +80,7 @@ def validate_config(raw, defaults):
         return result, ['config: expected object']
     enums = {'theme': ('dark','light','steam','fuel','ink','glass'), 'glm_region': ('cn','intl'),
              'deepseek_token_metric': ('total','fresh','off'), 'radar_window': (24,48),
-             'tray_metric': ('cw_pct','c5_pct','kw_pct','k5_pct','gw_pct','g5_pct')}
+             'tray_metric': ('cw_pct','c5_pct','kw_pct','k5_pct','gw_pct','g5_pct','ds_spend')}
     for key, value in raw.items():
         valid = True
         if key in enums:
