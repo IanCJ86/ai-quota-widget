@@ -1,5 +1,6 @@
 """Shared, side-effect-free status/config contracts for GUI and headless tools."""
 import math
+import re
 import time
 from datetime import datetime
 
@@ -23,6 +24,28 @@ def error_label(error):
     if not isinstance(error, str):
         return '查询失败'
     return ERROR_LABELS.get(error, '服务暂不可用' if str(error).startswith('HTTP5') else '查询失败')
+
+
+def safe_error(error):
+    """Only category codes can enter shareable diagnostics, never exception text."""
+    if isinstance(error, str) and (error in ERROR_LABELS or re.fullmatch(r'HTTP[1-5][0-9]{2}', error)):
+        return error
+    return 'QueryFailed' if error else ''
+
+
+def refresh_notice(active, errors, stale=(), expired=(), unverified=()):
+    """A bounded footer explanation without replacing dates or business data."""
+    if errors:
+        labels = {error_label(safe_error(e)) for e in errors.values()}
+        label = next(iter(labels)) if len(labels) == 1 else '部分失败'
+        return f'{label}:{len(errors)}' + ('·重试中' if set(active) & set(errors) else '')
+    if active:
+        return f'刷新中:{len(active)}'
+    if expired:
+        return f'窗口已过期:{len(expired)}'
+    if unverified:
+        return f'缓存待核验:{len(unverified)}'
+    return f'数据过旧:{len(stale)}' if stale else ''
 
 def finite(value):
     try:

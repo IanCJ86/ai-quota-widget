@@ -169,6 +169,25 @@ def doctor(m):
                      f'最后错误={error_label(recent_errors.get(name)) or "无记录"}')
     lines.append('雷达：codexreset.org，第三方预测，非OpenAI官方；本次未联网核验。')
     lines.append('今日金额为本机余额差额估算，token仅统计本机Harness，均非官方账单。')
+    from monitor_runtime import QueryHistory
+    history = QueryHistory(Path(m.DEBUG_FILE).with_name('query-history.json'))
+    if history.failed or debug.get('history_write_failed'):
+        lines.append('查询历史记录不可用或保存失败；不影响账户查询。')
+    if history.events:
+        lines.append('最近查询事件（保留最近200条；下列为末12条，历史失败不代表当前仍失败）：')
+        for event in history.events[-12:]:
+            try:
+                when = datetime.fromtimestamp(event['at']).strftime('%m-%d %H:%M:%S')
+            except (ValueError, OverflowError, OSError):
+                when = '时间不可用'
+            if event['event'] == 'result':
+                detail = '成功' if event['ok'] else error_label(event['error'])
+                detail += f"; 耗时={event.get('duration_seconds',0)}s; 下次查询={event.get('retry_in_seconds',0)}s后"
+            elif event['event'] == 'start':
+                detail = f"开始第{event.get('attempt',1)}次; 调度延迟={event.get('late_by_seconds',0)}s"
+            else:
+                detail = f"主循环间隔={event.get('gap_seconds',0)}s（不单凭此判断休眠或卡顿）"
+            lines.append(f"{when} {event['source']}: {detail}")
     if debug.get('startup_error') or debug.get('ui_error'):
         lines.append('最近界面/启动异常：' + error_label(debug.get('startup_error') or debug.get('ui_error')))
     fatal = bool(missing) or not all(deps[k] for k in ('tkinter','Pillow','pystray'))

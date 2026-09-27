@@ -22,7 +22,7 @@ with tempfile.TemporaryDirectory(prefix='quota-release-build-') as temporary:
     subprocess.run(['git','archive','--format=zip','--output='+str(archive),commit],cwd=root,check=True)
     with zipfile.ZipFile(archive) as z:
         # Git tree only; forbid accidentally committed runtime/credential files.
-        assert not any(n.endswith(('.dpapi','last-good.json','deepseek-spend.json','debug.txt')) for n in z.namelist())
+        assert not any(n.endswith(('.dpapi','last-good.json','deepseek-spend.json','debug.txt','query-history.json')) for n in z.namelist())
         cfg=json.loads(z.read('config.json'))
         assert not cfg.get('deepseek_api_key') and not cfg.get('glm_api_key')
         z.extractall(source/'tree')

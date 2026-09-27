@@ -95,7 +95,7 @@ class GuiReleaseTests(unittest.TestCase):
         self.assertIn('旧',a.rows['cr_credit'][0].cget('text'))
     def test_initial_failure_is_not_infinite_loading(self):
         self.app._on_result('kimi',{'ok':False,'error':'HTTP401'},{})
-        self.assertIn('失败',self.app.status.cget('text'))
+        self.assertIn('需重新认证',self.app.status.cget('text'))
         self.assertEqual(self.app.rows['k5'][1].cget('text'),'需重新认证')
     def test_empty_visibility_is_explicit(self):
         a=self.app

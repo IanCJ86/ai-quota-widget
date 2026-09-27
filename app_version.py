@@ -1,3 +1,3 @@
 """Single source for application identity (not data/cache schema versions)."""
-APP_VERSION = "1.4.2rc1"
+APP_VERSION = "1.4.2rc2"
 USER_AGENT = f"ai-quota-widget/{APP_VERSION}"

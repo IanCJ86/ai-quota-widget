@@ -21,7 +21,7 @@ from html import unescape
 from html.parser import HTMLParser
 from app_version import APP_VERSION, USER_AGENT
 from quota_state import (source_status, window_expired, error_label, finite,
-                         validate_config, credit_status)
+                         validate_config, credit_status, refresh_notice)
 
 # CLI dispatch precedes GUI imports and config/credential access.
 if __name__ == '__main__' and sys.argv[1:] and sys.argv[1] != '--query':
@@ -40,7 +40,7 @@ if sys.argv[1:] == ["--version"]:
     raise SystemExit(0)
 
 from monitor_runtime import (Scheduler, SingleInstance, atomic_json, dpapi_protect,
-                             dpapi_unprotect, validate_result)
+                             dpapi_unprotect, validate_result, QueryHistory)
 
 QUERY_MODE = len(sys.argv) == 3 and sys.argv[1] == "--query"
 HEADLESS_MODE = QUERY_MODE or any(arg in sys.argv for arg in
@@ -1001,7 +1001,9 @@ class App:
         self._ui_error = None
         self._last_render_minute = None
         self.tray_controller = TrayIcon(self._commands)
-        self.scheduler = Scheduler(os.path.abspath(__file__), self._on_result, REFRESH_SECONDS)
+        self.history = QueryHistory(os.path.join(os.path.dirname(DEBUG_FILE), 'query-history.json'))
+        self.scheduler = Scheduler(os.path.abspath(__file__), self._on_result, REFRESH_SECONDS,
+                                   on_event=self.history.record)
         self._load_cache()
         self._drag = None
         self.theme = "dark"
@@ -1573,10 +1575,7 @@ class App:
         self.scheduler.configure(self._enabled_sources())
         self.scheduler.refresh()
         self.scheduler.tick()
-        if self._enabled_sources():
-            self.status.config(text="刷新中…（保留上次数据）")
-        else:
-            self._render()
+        self._render()
         self._fit()
         self._write_debug()
 
@@ -1741,6 +1740,7 @@ class App:
                 "success_at": {name: datetime.fromtimestamp(ts).isoformat(timespec="seconds")
                                for name, ts in self._success_at.items()},
                 "queries": self._diagnostics, "status_text": self.status.cget("text"),
+                "history_write_failed": self.history.failed,
                 "active": [name for name, state in self.scheduler.states.items() if state["worker"]],
                 "tray": {"available": bool(self.tray_controller.icon and self.tray_controller.icon.visible),
                          "title": self.tray_controller.icon.title if self.tray_controller.icon else None}})
@@ -1771,7 +1771,13 @@ class App:
             if self.tray_controller.thread and not self.tray_controller.thread.is_alive() and not self.tray_controller.failed:
                 self.tray_controller.failed = True
                 self.root.deiconify()
+            active_before = tuple(n for n,s in self.scheduler.states.items() if s['worker'] is not None)
             self.scheduler.tick()
+            active_after = tuple(n for n,s in self.scheduler.states.items() if s['worker'] is not None)
+            if active_before != active_after:
+                self._render()
+                self._fit()
+                self._write_debug()
             if self.viewport.update_dpi(self):
                 self._fit()
             minute = int(time.time() // 60)
@@ -1946,7 +1952,7 @@ class App:
                          token_note,
                          warn=False, whole_width=whole_width)
         self._render_radar()
-        enabled = [s for s in self._enabled_sources() if s != "tokens"]
+        enabled = self._enabled_sources()
         for source, keys in {"kimi": ("k5", "kw"),
                              "codex": ("c5", "cw", "cr_credit"),
                              "glm": ("g5", "gw"), "main": ("cr_main",),
@@ -1987,22 +1993,23 @@ class App:
         loaded = any(self._success_at.get(name) for name in enabled)
         if not enabled:
             parts.append('右键 → 快速设置')
-        elif not loaded and self.errors:
-            parts.append('查询失败·右键诊断')
-        elif not loaded:
-            # First load: listing every source as 待更新 made the status line
-            # long enough to widen the whole window, which then shrank again
-            # once the data arrived. Say one short thing instead.
-            parts.append("加载中…")
         else:
             if account_times and all(account_times):
                 parts.append("刷新时间 "
                              + datetime.fromtimestamp(min(account_times)).strftime("%H:%M"))
-            if stale:
-                # Naming every stale source made this line the widest thing in
-                # the window (it shrank again once the names cleared). The rows
-                # themselves are greyed and labelled, so a count is enough.
-                parts.append("待更新:%d 项" % len(stale))
+            elif not account_times and loaded:
+                parts.append('刷新时间 ' + datetime.fromtimestamp(
+                    min(self._success_at[n] for n in enabled if self._success_at.get(n))).strftime('%H:%M'))
+            active = [n for n,s in self.scheduler.states.items() if s['worker'] is not None]
+            enabled_all = set(self._enabled_sources())
+            errors = {n:e for n,e in self.errors.items() if n in enabled_all}
+            notice = refresh_notice(active, errors, stale,
+                                    [n for n in stale if self._data_expired(n)],
+                                    [n for n in stale if n not in self._verified and self._success_at.get(n)])
+            if notice:
+                parts.append(notice)
+            elif not loaded:
+                parts.append('等待查询')
             if self.tray_controller.failed:
                 parts.append("托盘不可用")
         if not parts:
@@ -2011,6 +2018,8 @@ class App:
             parts.append('配置异常')
         if self._ui_error == 'CacheWriteFailed' or CONFIG_SAVE_FAILED:
             parts.append('保存失败')
+        if self.history.failed:
+            parts.append('记录失败')
         self.status.config(text="  ".join(parts),
                            fg=THEMES[self.theme]["DANGER"] if stale else THEMES[self.theme]["FG_DIM"])
         self.theme_painter.update()

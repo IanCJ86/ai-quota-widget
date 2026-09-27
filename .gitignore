@@ -1,6 +1,7 @@
 # runtime debug output
 debug.txt
 last-good.json
+query-history.json
 glm-key.dpapi
 deepseek-key.dpapi
 deepseek-spend.json

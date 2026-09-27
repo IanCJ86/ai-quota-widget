@@ -9,7 +9,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from quota_state import finite, timestamp
+from quota_state import finite, timestamp, safe_error, SOURCES
 
 
 def atomic_json(path, value):
@@ -25,6 +25,59 @@ def atomic_json(path, value):
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
+
+
+class QueryHistory:
+    """Bounded event-only history; never retain payloads, paths or exception text."""
+    LIMIT = 200
+    MAX_BYTES = 128 * 1024
+
+    def __init__(self, path):
+        self.path = Path(path)
+        self.failed = False
+        self.events = []
+        try:
+            with self.path.open('rb') as stream:
+                raw = stream.read(self.MAX_BYTES + 1)
+            if len(raw) > self.MAX_BYTES:
+                raise ValueError('oversized history')
+            rows = json.loads(raw)
+            if not isinstance(rows, list):
+                raise ValueError('invalid history')
+            self.events = [clean for row in rows[-self.LIMIT:]
+                           if (clean := self.sanitize(row)) is not None]
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError, TypeError):
+            self.failed = True
+
+    @staticmethod
+    def sanitize(row):
+        if not isinstance(row, dict) or row.get('event') not in ('start','result','loop_gap'):
+            return None
+        if row.get('source') not in (*SOURCES, 'system') or not timestamp(row.get('at')):
+            return None
+        clean = {k: row[k] for k in ('at','source','event')}
+        clean['at'] = timestamp(clean['at'])
+        if row['event'] == 'result':
+            clean['ok'] = row.get('ok') is True
+            clean['error'] = '' if clean['ok'] else (safe_error(row.get('error')) or 'QueryFailed')
+        for key in ('attempt','duration_seconds','retry_in_seconds','late_by_seconds','gap_seconds'):
+            value = row.get(key)
+            if finite(value) and 0 <= value <= 365*86400:
+                clean[key] = round(value, 2)
+        return clean
+
+    def record(self, row):
+        clean = self.sanitize(row)
+        if clean is None:
+            return
+        self.events = (self.events + [clean])[-self.LIMIT:]
+        try:
+            atomic_json(self.path, self.events)
+            self.failed = False
+        except (OSError, ValueError):
+            self.failed = True  # querying must continue even if diagnostics cannot save
 
 
 class _DataBlob(ctypes.Structure):
@@ -284,12 +337,20 @@ class QueryProcess:
 class Scheduler:
     """At most two workers; each attempt has a hard deadline; one schedule/source."""
     def __init__(self, script, on_result, interval=900, factory=QueryProcess,
-                 monotonic=time.monotonic, wall=time.time):
+                 monotonic=time.monotonic, wall=time.time, on_event=None):
         self.script, self.on_result, self.interval = script, on_result, interval
         self.factory, self.monotonic, self.wall = factory, monotonic, wall
         self.states = {}
         self.closed = False
         self.last_mono, self.last_wall = monotonic(), wall()
+        self.on_event = on_event
+
+    def _event(self, event, source, **fields):
+        if self.on_event:
+            try:
+                self.on_event(dict(event=event, source=source, at=self.wall(), **fields))
+            except Exception:
+                pass  # diagnostic callbacks cannot stop the refresh scheduler
 
     def configure(self, names):
         for name in list(self.states):
@@ -341,15 +402,20 @@ class Scheduler:
             # Exhausted rounds back off five minutes; auth errors wait normal interval.
             state.update(attempt=0, due=now + (300 if payload.get("retryable", True) else self.interval))
         state["error"] = None if success else payload.get("error", "QueryFailed")
-        self.on_result(name, payload, dict(
+        diagnostics = dict(
             duration_seconds=round(now - state.get("started", now), 2),
             retry_in_seconds=round(state["due"] - now),
-            attempt=state.get("last_attempt", 0)))
+            attempt=state.get("last_attempt", 0))
+        self._event('result', name, ok=success, error=state['error'], **diagnostics)
+        self.on_result(name, payload, diagnostics)
 
     def tick(self):
         if self.closed:
             return
         now, wall = self.monotonic(), self.wall()
+        gap = max(now - self.last_mono, wall - self.last_wall)
+        if gap > 30:
+            self._event('loop_gap', 'system', gap_seconds=gap)
         # Windows monotonic clocks can exclude suspend time. Detect that separately.
         suspended = max(0, (wall - self.last_wall) - (now - self.last_mono))
         self.last_mono, self.last_wall = now, wall
@@ -380,7 +446,9 @@ class Scheduler:
             if state["worker"] is not None or state["due"] > now:
                 continue
             state["attempt"] += 1
+            late = max(0, now - state['due']) if state['due'] else 0
             state.update(started=now, last_attempt=state["attempt"])
+            self._event('start', name, attempt=state['attempt'], late_by_seconds=late)
             try:
                 state["worker"] = self.factory(self.script, name)
                 capacity -= 1

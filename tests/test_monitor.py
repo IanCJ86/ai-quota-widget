@@ -755,7 +755,7 @@ class UITests(unittest.TestCase):
         a._on_result("codex", {"ok": True, "data": {"cw_pct": 75, "c_window_expired": True}}, {})
         self.assertTrue(a._is_stale("codex"))
         self.assertEqual(a.rows["cw"][1].cget("text"), "窗口已过期")
-        self.assertIn("待更新", a.status.cget("text"))
+        self.assertIn("窗口已过期", a.status.cget("text"))
         a._on_result("codex", {"ok": True, "data": {"cw_pct": 75, "c_window_expired": False}}, {})
         self.assertFalse(a._is_stale("codex"))
     def test_glm_menu_exposes_secure_key_commands(self):
@@ -1340,11 +1340,11 @@ class EventLoopTests(unittest.TestCase):
             root = real_tk()
             root.withdraw()
             return root
-        def scheduler(script, callback, interval):
+        def scheduler(script, callback, interval, **kwargs):
             def record(*args):
                 events.append(args)
                 callback(*args)
-            return runtime.Scheduler(str(ROOT / "tests" / "query_fixture.py"), record, interval=.3)
+            return runtime.Scheduler(str(ROOT / "tests" / "query_fixture.py"), record, interval=.3, **kwargs)
         # Only Codex is enabled: the source set must not depend on whichever
         # API keys this machine happens to have (env vars are read live).
         cfg = dict(monitor.DEFAULT_CONFIG, show_kimi=False, show_glm=False,
