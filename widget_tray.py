@@ -1,5 +1,14 @@
 """Thread-owned Windows tray. Tk is only reached through a command queue."""
 import threading
+from decimal import Decimal, ROUND_HALF_UP
+from quota_state import finite
+
+
+def rounded_amount(value):
+    """Money uses ordinary half-up rounding, not Python's ties-to-even round."""
+    if not finite(value) or value < 0:
+        return None
+    return int(Decimal(str(value)).to_integral_value(rounding=ROUND_HALF_UP))
 
 try:
     import pystray
@@ -19,6 +28,16 @@ class TrayIcon:
     @property
     def available(self):
         return bool(self.icon and self.icon.visible and self.thread and self.thread.is_alive())
+
+    @property
+    def state(self):
+        if self.failed:
+            return 'failed'
+        if self.available:
+            return 'ready'
+        if self.thread and self.thread.is_alive():
+            return 'starting'
+        return 'not_started'
 
     def start(self):
         if pystray is None:
@@ -48,18 +67,22 @@ class TrayIcon:
             self.icon.stop()
 
     @staticmethod
-    def image(value, stale=False):
-        """Create a transparent tray icon showing the selected percentage."""
+    def image(value, stale=False, amount=False):
+        """Transparent number; spending is not a remaining-percent warning."""
         image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
         draw = ImageDraw.Draw(image)
-        pct = int(value) if value is not None else None
+        pct = rounded_amount(value) if amount else int(value) if finite(value) else None
         color = (131, 212, 171, 255) if pct is None or pct > 30 else (
             (208, 128, 32, 255) if pct > 15 else (208, 64, 64, 255))
+        if amount:
+            color = (77, 107, 254, 255)  # DeepSeek blue, readable on light and dark taskbars
         if stale:
             color = (155, 155, 165, 255)
         text = "--" if pct is None else str(pct)
+        if amount and pct is not None and pct > 999:
+            text = '999+'  # exact amount remains available in the tooltip
         try:
-            size = 46 if pct is not None and len(text) <= 2 else 34
+            size = 46 if pct is not None and len(text) <= 2 else 34 if len(text) <= 3 else 26
             font = ImageFont.truetype(r"C:\Windows\Fonts\calibrib.ttf", size)
         except Exception:
             font = ImageFont.load_default()
