@@ -1032,12 +1032,12 @@ class App:
         self._divider2.grid(row=4, column=0, sticky="ew", padx=10, pady=1)
         self._section(5, "Codex", CODEX_GREEN,
                       [("c5", "每5小时"), ("cw", "每周"),
-                       ("cr_credit", "重置券"), ("cr_main", "雷达")])
+                       ("cr_credit", "重置券"), ("cr_main", "Tibo雷达")])
         self._divider3 = tk.Frame(self.content, bg="#3a3a4e", height=1)
         self._divider3.grid(row=6, column=0, sticky="ew", padx=10, pady=1)
         # DeepSeek is pay-as-you-go, so this card shows a money balance.
         self._section(7, "DeepSeek", DEEPSEEK_BLUE,
-                      [("ds", "余额"), ("ds_spend", "今日估算")])
+                      [("ds", "账号余额"), ("ds_spend", "今日估算")])
         self._dividers = [self._divider, self._divider2, self._divider3]
 
         bar = tk.Frame(self.root, bg=BG)
@@ -1100,14 +1100,14 @@ class App:
         self.menu.add_checkbutton(label="Codex 每5小时窗口", variable=self.show_codex_5h,
                                 command=self._apply_visibility)
         self.show_radar = tk.BooleanVar(value=self._st.get("show_radar", True))
-        self.menu.add_checkbutton(label="重置雷达（第三方站点）", variable=self.show_radar,
+        self.menu.add_checkbutton(label="Tibo雷达（第三方站点）", variable=self.show_radar,
                                 command=self._apply_visibility)
         self._radar_var = tk.StringVar(value=str(self._st.get("radar_window", 24)))
         rw = tk.Menu(self.menu, tearoff=0)
         for label, val in (("24小时内", "24"), ("48小时内", "48")):
             rw.add_radiobutton(label=label, variable=self._radar_var, value=val,
                                command=lambda v=val: self._set_radar_window(int(v)))
-        self.menu.add_cascade(label="雷达窗口", menu=rw)
+        self.menu.add_cascade(label="Tibo雷达窗口", menu=rw)
         self._tray_var = tk.StringVar(value=CFG.get("tray_metric", "cw_pct"))
         self.tray_menu = tk.Menu(self.menu, tearoff=0)
         self.menu.add_cascade(label="托盘显示", menu=self.tray_menu)

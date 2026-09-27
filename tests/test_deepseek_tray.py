@@ -51,6 +51,10 @@ class MoneyIconTests(unittest.TestCase):
 
 
 class DshOnlyTests(unittest.TestCase):
+    def test_public_labels(self):
+        self.assertEqual(self.app.row_labels['cr_main'][0].cget('text'), 'Tibo雷达')
+        self.assertEqual(self.app.row_labels['ds'][0].cget('text'), '账号余额')
+
     def setUp(self):
         self.fixture=fixtures.UITests();self.fixture.setUp();self.app=self.fixture.app
         for source in ('kimi','codex','glm'):
