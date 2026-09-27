@@ -64,11 +64,11 @@ uvx --from .\ai_quota_widget-<版本>-py3-none-any.whl quota_monitor --install -
 | `deepseek_low_balance` | 余额告警阈值，`0` 关闭 |
 | `tray_metric` / `window_alpha` / `lock_position` | 托盘指标、透明度、拖动锁定，建议用菜单调整 |
 
-下一版开发中：`tray_metric=ds_spend`显示今日估算金额，四舍五入至整数，不带币种或百分号；超过999显示`999+`，悬停查看精确金额和币种。只显示DeepSeek时自动选用此项；缺少Key/当日基线、跨天未刷新或估算失败显示`--`，不伪造0。
+v1.4.3起：`tray_metric=ds_spend`显示今日估算金额，四舍五入至整数，不带币种或百分号；超过999显示`999+`，悬停查看精确金额和币种。只显示DeepSeek时自动选用此项；缺少Key/当日基线、跨天未刷新或估算失败显示`--`，不伪造0。
 
 余额差额不是完整账单：当天已经采样、关闭后再打开且没有充值等干扰时，可补算这段余额下降；首次采样之前的消费、跨天关闭期间的每日分摊、充值与消费相互抵消不能可靠还原。本机token扫描与此独立，已有Harness日志可补读当天记录。公开API Key的余额接口不等同网页登录后的平台账单接口。
 
-下一版毛玻璃保留半透明底色及原配色，停用可能导致Tk文字洗白的Windows原生acrylic叠加，因而不再提供该原生背景模糊效果。托盘诊断区分`starting`和`ready`，注册中不代表故障。若用旧版Windows PowerShell读取UTF-8诊断文件，使用`Get-Content -Encoding UTF8`；日常推荐右键复制脱敏诊断。
+v1.4.3毛玻璃保留半透明底色及原配色，停用可能导致Tk文字洗白的Windows原生acrylic叠加，因而不再提供该原生背景模糊效果。托盘诊断区分`starting`和`ready`，注册中不代表故障。若用旧版Windows PowerShell读取UTF-8诊断文件，使用`Get-Content -Encoding UTF8`；日常推荐右键复制脱敏诊断。
 
 默认 Harness 日志目录为 `~/.dsh/sessions`。v1.4.2rc1 起可在右键设置中选择日志目录（`harness_sessions_dir`），本机统计不再要求 DeepSeek API Key。token 只覆盖本机日志，缓存读取也计入 `total`，因此大 token 数不等于高支出。DeepSeek 金额估算只覆盖首次余额采样之后观察到的变化；未运行时段、充值与消费抵消等无法完整还原。计费时段标签仅供参考，以服务商账单为准。
 

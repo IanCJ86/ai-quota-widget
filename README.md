@@ -54,7 +54,7 @@ $installer = Join-Path $env:TEMP 'ai-quota-quick-install.ps1'; Invoke-WebRequest
 - 点击 **✕** 隐藏到托盘，点击托盘图标恢复；真正退出请用右键菜单。
 - 可选 Codex 重置雷达来自 [codexreset.org](https://codexreset.org)，是第三方预测，不是官方承诺，也不是你的个人重置通知。
 
-**读数说明：** DeepSeek“今日估算”来自工具观察到的余额变化，不是账单；`tok` 只统计本机 Harness。Codex 数据可能是本机快照，存在滞后。
+**读数说明：** DeepSeek“今日估算”来自余额变化，不是官方账单，也不需要额外网页登录授权。当天已有采样时，关闭后再打开可补算余额下降；首次采样前、跨天及充值抵消的消费不能完整还原。`tok` 只统计本机 Harness。Codex 数据可能是本机快照，存在滞后。
 
 ## 六套主题
 
