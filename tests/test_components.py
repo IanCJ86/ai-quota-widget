@@ -92,7 +92,7 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual(set(files), {p.name for p in ROOT.glob('*.py')})
 
     def test_version_format_and_rpc_identity(self):
-        self.assertRegex(app_version.APP_VERSION, r'^\d+\.\d+\.\d+(?:-dev)?$')
+        self.assertRegex(app_version.APP_VERSION, r'^\d+\.\d+\.\d+(?:rc\d+|-dev)?$')
         self.assertEqual(app_version.USER_AGENT, 'ai-quota-widget/' + app_version.APP_VERSION)
         tree = ast.parse((ROOT / 'quota_monitor.py').read_text(encoding='utf-8'))
         # RPC is a local process, not HTTP: it must use the same identity source.

@@ -36,13 +36,13 @@ class KimiAdapterTests(unittest.TestCase):
         self.addCleanup(http_patch.stop)
 
     def test_usage_windows_and_optional_membership(self):
-        self.http.return_value = response({"usage": {"used": 25, "limit": 100, "resetTime": "week"},
+        self.http.return_value = response({"usage": {"used": 25, "limit": 100, "resetTime": "2030-01-08T00:00:00Z"},
             "limits": [{"window": {"duration": 60}, "detail": {"used": 99, "limit": 100}},
                        {"window": {"duration": 300}, "detail": {"remaining": 40, "limit": 80,
-                                                                  "resetTime": "five"}}]})
+                                                                  "resetTime": "2030-01-01T05:00:00Z"}}]})
         result = validate_result("kimi", monitor.fetch_kimi())
         self.assertEqual((result["kw_pct"], result["k5_pct"]), (75, 50))
-        self.assertEqual((result["kw_reset"], result["k5_reset"]), ("week", "five"))
+        self.assertEqual((result["kw_reset"], result["k5_reset"]), (1894060800, 1893474000))
         self.assertEqual(result["k_plan"], "")
         self.assertEqual(self.http.call_args.args[0].get_header("Authorization"), "Bearer fake-old")
         self.assertEqual(self.http.call_args.args[0].get_header("User-agent"), monitor.USER_AGENT)

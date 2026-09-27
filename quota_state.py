@@ -1,6 +1,8 @@
 """Shared, side-effect-free status/config contracts for GUI and headless tools."""
 import math
+import re
 import time
+from datetime import datetime
 
 SOURCES = ('kimi', 'codex', 'glm', 'deepseek', 'main', 'tokens')
 ACCOUNT_SOURCES = SOURCES[:4]
@@ -12,6 +14,8 @@ ERROR_LABELS = {
     'StartFailed': '查询进程启动失败', 'WorkerFailed': '查询进程异常',
     'no_key': '未配置Key', 'no_credentials': '未登录', 'no_runtime': '未安装运行时',
     'no_cache': '暂无数据', 'PermissionError': '本机权限不足',
+    'UsageSchemaError': '日志格式不兼容', 'UsageReadError': '日志损坏或无法读取',
+    'UsageBudgetError': '日志扫描超出限额', 'SpendWriteFailed': '估算记录保存失败',
 }
 
 def error_label(error):
@@ -21,6 +25,28 @@ def error_label(error):
         return '查询失败'
     return ERROR_LABELS.get(error, '服务暂不可用' if str(error).startswith('HTTP5') else '查询失败')
 
+
+def safe_error(error):
+    """Only category codes can enter shareable diagnostics, never exception text."""
+    if isinstance(error, str) and (error in ERROR_LABELS or re.fullmatch(r'HTTP[1-5][0-9]{2}', error)):
+        return error
+    return 'QueryFailed' if error else ''
+
+
+def refresh_notice(active, errors, stale=(), expired=(), unverified=()):
+    """A bounded footer explanation without replacing dates or business data."""
+    if errors:
+        labels = {error_label(safe_error(e)) for e in errors.values()}
+        label = next(iter(labels)) if len(labels) == 1 else '部分失败'
+        return f'{label}:{len(errors)}' + ('·重试中' if set(active) & set(errors) else '')
+    if active:
+        return f'刷新中:{len(active)}'
+    if expired:
+        return f'窗口已过期:{len(expired)}'
+    if unverified:
+        return f'缓存待核验:{len(unverified)}'
+    return f'数据过旧:{len(stale)}' if stale else ''
+
 def finite(value):
     try:
         return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
@@ -28,8 +54,17 @@ def finite(value):
         return False
 
 def window_expired(data, prefix, now=None):
-    value = data.get(prefix + '_reset')
+    value = timestamp(data.get(prefix + '_reset'))
     return finite(value) and value <= (time.time() if now is None else now)
+
+
+def timestamp(value):
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace('Z', '+00:00')).timestamp()
+        except (ValueError, OverflowError, OSError):
+            return None
+    return value if finite(value) and 0 < value < 253402300800 else None
 
 def source_status(data, stamp=0, verified=False, error=None, now=None, interval=900):
     now = time.time() if now is None else now

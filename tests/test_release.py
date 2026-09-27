@@ -95,7 +95,7 @@ class GuiReleaseTests(unittest.TestCase):
         self.assertIn('旧',a.rows['cr_credit'][0].cget('text'))
     def test_initial_failure_is_not_infinite_loading(self):
         self.app._on_result('kimi',{'ok':False,'error':'HTTP401'},{})
-        self.assertIn('失败',self.app.status.cget('text'))
+        self.assertIn('需重新认证',self.app.status.cget('text'))
         self.assertEqual(self.app.rows['k5'][1].cget('text'),'需重新认证')
     def test_empty_visibility_is_explicit(self):
         a=self.app
@@ -146,6 +146,9 @@ class CliTests(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.flags={k:False for k in state.ACCOUNT_SOURCES}
         self.patches=[patch.object(cli,'configured',return_value=self.flags),
+            patch.object(monitor,'CFG',dict(monitor.DEFAULT_CONFIG,show_radar=False)),
+            patch.object(monitor,'DSH_SESSIONS',str(Path(self.temp.name)/'sessions')),
+            patch.object(monitor,'source_identity',return_value=None),
             patch.object(monitor,'CACHE_FILE',str(Path(self.temp.name)/'cache.json')),
             patch.object(monitor,'DEBUG_FILE',str(Path(self.temp.name)/'debug.json')),
             patch.object(monitor,'CONFIG_ISSUES',[])]
@@ -163,7 +166,7 @@ class CliTests(unittest.TestCase):
     def test_doctor_missing_dependency(self):
         self.flags['codex']=True
         with patch.object(cli,'module_available',return_value=False): _,code=cli.doctor(monitor)
-        self.assertEqual(code,1)
+        self.assertEqual(code,2)
     def test_json_cache_zero_and_unverified(self):
         self.flags['codex']=True
         Path(monitor.CACHE_FILE).write_text(json.dumps({'sources':{'codex':{'success_at':time.time(),'data':{'cw_pct':0,'secret':'FAKE-SECRET'}}}}))

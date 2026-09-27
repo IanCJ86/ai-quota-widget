@@ -9,13 +9,13 @@ import sys
 import time
 from datetime import datetime
 from app_version import APP_VERSION
-from quota_state import SOURCES, ACCOUNT_SOURCES, source_status, window_expired, error_label, finite, credit_status
+from quota_state import SOURCES, ACCOUNT_SOURCES, source_status, window_expired, error_label, finite, credit_status, timestamp
 
 PUBLIC_FIELDS = {
     'kimi': ('k5_pct','kw_pct','k5_reset','kw_reset'),
     'codex': ('c5_pct','cw_pct','c5_reset','cw_reset','cr_credit_count','cr_credit_expiry','cr_credit_expiries','c_window_expired'),
     'glm': ('g5_pct','gw_pct','g5_reset','gw_reset'),
-    'deepseek': ('ds_balance','ds_spend','ds_spend_day','ds_currency','ds_available'),
+    'deepseek': ('ds_balance','ds_spend','ds_spend_day','ds_currency','ds_available','ds_spend_error'),
     'main': ('cr_main24','cr_main48'),
     'tokens': ('ds_tokens_total','ds_tokens_fresh','ds_tokens_day'),
 }
@@ -24,6 +24,8 @@ def safe_data(name, data):
     output = {}
     for key in PUBLIC_FIELDS[name]:
         value = data.get(key)
+        if key.endswith('_reset'):
+            value = timestamp(value)
         if value is None or finite(value) or isinstance(value, bool):
             output[key] = value
         elif key.endswith('_day') and isinstance(value, str):
@@ -32,6 +34,8 @@ def safe_data(name, data):
             except ValueError:
                 pass
         elif key == 'ds_currency' and value in ('CNY','USD'):
+            output[key] = value
+        elif key == 'ds_spend_error' and value == 'SpendWriteFailed':
             output[key] = value
         elif key == 'cr_credit_expiries' and isinstance(value, list) and all(finite(x) for x in value):
             output[key] = value
@@ -52,9 +56,10 @@ def read_json(path):
 
 def collect(m, fresh=False, factory=None):
     from monitor_runtime import QueryProcess, validate_result
-    flags = configured(m)
-    flags['main'] = bool(m.CFG.get('show_radar')) and flags['codex']
-    flags['tokens'] = flags['deepseek'] and m.CFG.get('deepseek_token_metric','total') != 'off' and os.path.isdir(m.DSH_SESSIONS)
+    flags = m.available_sources()
+    for source in ACCOUNT_SOURCES:
+        flags[source] = flags[source] and m.CFG.get('show_'+source, False)
+    flags['tokens'] = flags['tokens'] and m.CFG.get('show_deepseek', False)
     cache = read_json(m.CACHE_FILE).get('sources', {})
     if not isinstance(cache, dict):
         cache = {}
@@ -67,11 +72,14 @@ def collect(m, fresh=False, factory=None):
         record = cache.get(name, {})
         record = record if isinstance(record, dict) else {}
         data = record.get('data', {})
+        identity = m.source_identity(name)
+        if identity is not None and identity != record.get('identity'):
+            data = {}
         stamp = record.get('success_at', 0)
         if not finite(stamp) or not 0 < stamp <= now+60:
             data, stamp = {}, 0
         try:
-            validate_result(name, data)
+            data = validate_result(name, data)
             data = safe_data(name, data)
         except (ValueError, TypeError, KeyError):
             data, stamp = {}, 0
@@ -86,9 +94,12 @@ def collect(m, fresh=False, factory=None):
                         raise TimeoutError()
                     time.sleep(.05)
                 result = worker.result()
+                if identity != m.source_identity(name):
+                    data, stamp = {}, 0
+                    raise ValueError('credential context changed')
                 if result.get('ok'):
-                    validate_result(name, result['data'])
-                    data, stamp, verified = safe_data(name, result['data']), time.time(), True
+                    clean = validate_result(name, result['data'])
+                    data, stamp, verified = safe_data(name, clean), time.time(), True
                 else:
                     error = error_label(result.get('error'))
             except Exception as exc:
@@ -103,6 +114,8 @@ def collect(m, fresh=False, factory=None):
             status.update(stale=True, state='window_expired', reason='窗口已过期')
         if name == 'deepseek' and data.get('ds_spend_day') != datetime.now().date().isoformat():
             data.pop('ds_spend', None)
+        if data.get('ds_spend_error'):
+            error = error_label(data['ds_spend_error'])
         if name == 'tokens' and data.get('ds_tokens_day') != datetime.now().date().isoformat():
             data.pop('ds_tokens_total', None)
             data.pop('ds_tokens_fresh', None)
@@ -117,7 +130,7 @@ def collect(m, fresh=False, factory=None):
         sources[name] = dict(ok=bool(data) and not error, stale=status['stale'], state=status['state'],
             error=error, last_success=datetime.fromtimestamp(stamp).astimezone().isoformat() if stamp else None,
             expired_windows=expired, data=data)
-    active = [v for k,v in sources.items() if k in ACCOUNT_SOURCES and v['state'] != 'not_configured']
+    active = [v for k,v in sources.items() if k != 'main' and v['state'] != 'not_configured']
     useful = any(v['data'] for v in active)
     code = 2 if not useful else 1 if errors or m.CONFIG_ISSUES or any(v['stale'] for v in active) else 0
     return dict(schema=1,app_version=APP_VERSION,generated_at=datetime.now().astimezone().isoformat(),
@@ -156,13 +169,39 @@ def doctor(m):
                      f'最后错误={error_label(recent_errors.get(name)) or "无记录"}')
     lines.append('雷达：codexreset.org，第三方预测，非OpenAI官方；本次未联网核验。')
     lines.append('今日金额为本机余额差额估算，token仅统计本机Harness，均非官方账单。')
+    from monitor_runtime import QueryHistory
+    history = QueryHistory(Path(m.DEBUG_FILE).with_name('query-history.json'))
+    if history.failed or debug.get('history_write_failed'):
+        lines.append('查询历史记录不可用或保存失败；不影响账户查询。')
+    if history.events:
+        lines.append('最近查询事件（保留最近200条；下列为末12条，历史失败不代表当前仍失败）：')
+        for event in history.events[-12:]:
+            try:
+                when = datetime.fromtimestamp(event['at']).strftime('%m-%d %H:%M:%S')
+            except (ValueError, OverflowError, OSError):
+                when = '时间不可用'
+            if event['event'] == 'result':
+                detail = '成功' if event['ok'] else error_label(event['error'])
+                detail += f"; 耗时={event.get('duration_seconds',0)}s; 下次查询={event.get('retry_in_seconds',0)}s后"
+            elif event['event'] == 'start':
+                detail = f"开始第{event.get('attempt',1)}次; 调度延迟={event.get('late_by_seconds',0)}s"
+            else:
+                detail = f"主循环间隔={event.get('gap_seconds',0)}s（不单凭此判断休眠或卡顿）"
+            lines.append(f"{when} {event['source']}: {detail}")
     if debug.get('startup_error') or debug.get('ui_error'):
         lines.append('最近界面/启动异常：' + error_label(debug.get('startup_error') or debug.get('ui_error')))
+    fatal = bool(missing) or not all(deps[k] for k in ('tkinter','Pillow','pystray'))
     if not any(flags.values()):
         lines.append('未检测到已登录的AI CLI或API Key：请登录Kimi/Codex，或配置GLM/DeepSeek Key。')
         code = 1  # configuration pending, not a broken installation
     else:
         code = 1 if missing or not all(deps.values()) or m.CONFIG_ISSUES or recent_errors or debug.get('startup_error') or debug.get('ui_error') else 0
+    if fatal:
+        lines.append('必要运行环境损坏，请重新安装成品包。')
+        code = 2
+    elif not deps['zstd']:
+        lines.append('本机 token 统计组件缺失；不影响独立余额查询。')
+        code = 1
     return '\n'.join(lines), code
 
 def summary(snapshot):
@@ -212,7 +251,11 @@ def main(argv=None):
         return 0
     if args.launch_check:
         if getattr(sys, 'frozen', False):
-            import tkinter, PIL, pystray
+            try:
+                import tkinter, PIL, pystray
+            except (ImportError, OSError):
+                print('必要运行环境损坏，请重新解压安装完整成品包。')
+                return 2
             return 0
         import subprocess
         check = subprocess.run([sys.executable,'-c','import tkinter,PIL,pystray'], capture_output=True)

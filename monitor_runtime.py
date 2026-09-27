@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from quota_state import finite, timestamp, safe_error, SOURCES
 
 
 def atomic_json(path, value):
@@ -24,6 +25,59 @@ def atomic_json(path, value):
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
+
+
+class QueryHistory:
+    """Bounded event-only history; never retain payloads, paths or exception text."""
+    LIMIT = 200
+    MAX_BYTES = 128 * 1024
+
+    def __init__(self, path):
+        self.path = Path(path)
+        self.failed = False
+        self.events = []
+        try:
+            with self.path.open('rb') as stream:
+                raw = stream.read(self.MAX_BYTES + 1)
+            if len(raw) > self.MAX_BYTES:
+                raise ValueError('oversized history')
+            rows = json.loads(raw)
+            if not isinstance(rows, list):
+                raise ValueError('invalid history')
+            self.events = [clean for row in rows[-self.LIMIT:]
+                           if (clean := self.sanitize(row)) is not None]
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError, TypeError):
+            self.failed = True
+
+    @staticmethod
+    def sanitize(row):
+        if not isinstance(row, dict) or row.get('event') not in ('start','result','loop_gap'):
+            return None
+        if row.get('source') not in (*SOURCES, 'system') or not timestamp(row.get('at')):
+            return None
+        clean = {k: row[k] for k in ('at','source','event')}
+        clean['at'] = timestamp(clean['at'])
+        if row['event'] == 'result':
+            clean['ok'] = row.get('ok') is True
+            clean['error'] = '' if clean['ok'] else (safe_error(row.get('error')) or 'QueryFailed')
+        for key in ('attempt','duration_seconds','retry_in_seconds','late_by_seconds','gap_seconds'):
+            value = row.get(key)
+            if finite(value) and 0 <= value <= 365*86400:
+                clean[key] = round(value, 2)
+        return clean
+
+    def record(self, row):
+        clean = self.sanitize(row)
+        if clean is None:
+            return
+        self.events = (self.events + [clean])[-self.LIMIT:]
+        try:
+            atomic_json(self.path, self.events)
+            self.failed = False
+        except (OSError, ValueError):
+            self.failed = True  # querying must continue even if diagnostics cannot save
 
 
 class _DataBlob(ctypes.Structure):
@@ -169,8 +223,52 @@ REQUIRED_KEYS = {"deepseek": ("ds_balance",), "tokens": ("ds_tokens_total", "ds_
 
 
 def validate_result(name, data):
-    if not isinstance(data, dict):
+    if name not in PERCENT_KEYS or not isinstance(data, dict):
         raise ValueError("invalid response")
+    fields = {
+        'kimi': ('k5_pct','kw_pct','k5_reset','kw_reset','k_plan'),
+        'codex': ('c5_pct','cw_pct','c5_reset','cw_reset','c_plan','c_window_expired',
+                  'cr_credit_count','cr_credit_expiry','cr_credit_expiries'),
+        'glm': ('g5_pct','gw_pct','g5_reset','gw_reset','g_plan'),
+        'deepseek': ('ds_balance','ds_spend','ds_spend_day','ds_granted','ds_topped_up',
+                     'ds_currency','ds_available','ds_plan','ds_spend_error'),
+        'main': ('cr_main24','cr_main48'),
+        'tokens': ('ds_tokens_total','ds_tokens_fresh','ds_tokens_day'),
+    }[name]
+    data = {k: v for k, v in data.items() if k in fields}
+    from datetime import date
+    for key, value in list(data.items()):
+        if value is None:
+            continue
+        if key.endswith('_reset') or key == 'cr_credit_expiry':
+            parsed = timestamp(value)
+            if parsed is None:
+                raise ValueError('invalid timestamp')
+            data[key] = parsed
+        elif key == 'cr_credit_expiries':
+            if not isinstance(value, list) or len(value) > 10000 or any(timestamp(v) is None for v in value):
+                raise ValueError('invalid expiries')
+            data[key] = [timestamp(v) for v in value]
+        elif key.endswith('_day'):
+            if not isinstance(value, str) or date.fromisoformat(value).isoformat() != value:
+                raise ValueError('invalid date')
+        elif key in ('c_window_expired','ds_available'):
+            if not isinstance(value, bool):
+                raise ValueError('invalid flag')
+        elif key.endswith('_plan'):
+            if not isinstance(value, str) or len(value) > 100:
+                raise ValueError('invalid plan')
+        elif key == 'ds_currency':
+            if value not in ('CNY','USD'):
+                raise ValueError('invalid currency')
+        elif key == 'ds_spend_error':
+            if value not in ('SpendWriteFailed',):
+                raise ValueError('invalid status')
+        elif not finite(value) or not 0 <= value <= 1e18:
+            raise ValueError('invalid number')
+        elif key.startswith('ds_tokens_') or key == 'cr_credit_count':
+            if type(value) is not int:
+                raise ValueError('invalid count')
     values = [data.get(key) for key in PERCENT_KEYS[name]]
     for value in values:
         if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))
@@ -178,7 +276,7 @@ def validate_result(name, data):
             raise ValueError("invalid percentage")
     for key in REQUIRED_KEYS.get(name, ()):
         value = data.get(key)
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+        if not finite(value) or value < 0:
             raise ValueError("invalid amount")
     if name == "tokens":
         from datetime import date
@@ -239,12 +337,20 @@ class QueryProcess:
 class Scheduler:
     """At most two workers; each attempt has a hard deadline; one schedule/source."""
     def __init__(self, script, on_result, interval=900, factory=QueryProcess,
-                 monotonic=time.monotonic, wall=time.time):
+                 monotonic=time.monotonic, wall=time.time, on_event=None):
         self.script, self.on_result, self.interval = script, on_result, interval
         self.factory, self.monotonic, self.wall = factory, monotonic, wall
         self.states = {}
         self.closed = False
         self.last_mono, self.last_wall = monotonic(), wall()
+        self.on_event = on_event
+
+    def _event(self, event, source, **fields):
+        if self.on_event:
+            try:
+                self.on_event(dict(event=event, source=source, at=self.wall(), **fields))
+            except Exception:
+                pass  # diagnostic callbacks cannot stop the refresh scheduler
 
     def configure(self, names):
         for name in list(self.states):
@@ -272,15 +378,16 @@ class Scheduler:
             worker.close()
         if payload.get("ok"):
             try:
-                validate_result(name, payload.get("data"))
+                payload = dict(payload, data=validate_result(name, payload.get("data")))
             except (ValueError, TypeError):
                 payload = dict(ok=False, error="InvalidResponse", retryable=True)
         success = bool(payload.get("ok"))
         if success:
             state.update(attempt=0, due=now + self.interval)
-            if name == "codex":
+            if name in ('codex','kimi','glm'):
                 wall = self.wall()
-                resets = [payload["data"].get(k) for k in ("c5_reset", "cw_reset")]
+                prefix = {'codex':'c','kimi':'k','glm':'g'}[name]
+                resets = [payload["data"].get(prefix+k) for k in ('5_reset', 'w_reset')]
                 future = [v - wall + 1 for v in resets
                           if isinstance(v, (int, float)) and math.isfinite(v) and v > wall]
                 if future:
@@ -295,15 +402,20 @@ class Scheduler:
             # Exhausted rounds back off five minutes; auth errors wait normal interval.
             state.update(attempt=0, due=now + (300 if payload.get("retryable", True) else self.interval))
         state["error"] = None if success else payload.get("error", "QueryFailed")
-        self.on_result(name, payload, dict(
+        diagnostics = dict(
             duration_seconds=round(now - state.get("started", now), 2),
             retry_in_seconds=round(state["due"] - now),
-            attempt=state.get("last_attempt", 0)))
+            attempt=state.get("last_attempt", 0))
+        self._event('result', name, ok=success, error=state['error'], **diagnostics)
+        self.on_result(name, payload, diagnostics)
 
     def tick(self):
         if self.closed:
             return
         now, wall = self.monotonic(), self.wall()
+        gap = max(now - self.last_mono, wall - self.last_wall)
+        if gap > 30:
+            self._event('loop_gap', 'system', gap_seconds=gap)
         # Windows monotonic clocks can exclude suspend time. Detect that separately.
         suspended = max(0, (wall - self.last_wall) - (now - self.last_mono))
         self.last_mono, self.last_wall = now, wall
@@ -334,7 +446,9 @@ class Scheduler:
             if state["worker"] is not None or state["due"] > now:
                 continue
             state["attempt"] += 1
+            late = max(0, now - state['due']) if state['due'] else 0
             state.update(started=now, last_attempt=state["attempt"])
+            self._event('start', name, attempt=state['attempt'], late_by_seconds=late)
             try:
                 state["worker"] = self.factory(self.script, name)
                 capacity -= 1

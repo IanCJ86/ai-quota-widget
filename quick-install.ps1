@@ -1,24 +1,25 @@
 ﻿# One-command entrypoint. Fetch only official release assets; no Python/npm/pip.
 [CmdletBinding()]
 param([string]$Version = 'latest', [string]$ExistingDataDir = '', [string]$Destination = '',
-      [switch]$NoLaunch, [switch]$NoShortcut)
+      [switch]$NoLaunch, [switch]$NoShortcut, [switch]$AllowPrerelease)
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 $previousProgress = $ProgressPreference
 $temporary = $null
 try {
-    if ($Version -ne 'latest' -and $Version -notmatch '^v?\d+\.\d+\.\d+$') { throw '版本号格式不正确。' }
+    if ($Version -ne 'latest' -and $Version -notmatch '^v?\d+\.\d+\.\d+(?:rc\d+)?$') { throw '版本号格式不正确。' }
+    if ($AllowPrerelease -and $Version -eq 'latest') { throw '测试版必须明确指定版本号。' }
     if (-not [Environment]::Is64BitOperatingSystem) { throw '此成品包需要 64 位 Windows。' }
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $ProgressPreference = 'SilentlyContinue' # PS5's per-chunk progress can slow large downloads drastically
     $temporary = Join-Path ([IO.Path]::GetTempPath()) ('quota-download-'+[Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $temporary | Out-Null
-    Write-Host '[1/3] 获取正式版本信息…'
+    Write-Host '[1/3] 获取版本信息…'
     $api = 'https://api.github.com/repos/IanCJ86/ai-quota-widget/releases/'
     $api += $(if ($Version -eq 'latest') { 'latest' } else { 'tags/v'+$Version.TrimStart('v') })
     $release = Invoke-RestMethod -Uri $api -Headers @{'User-Agent'='ai-quota-widget-installer'} -TimeoutSec 30
-    if ($release.draft -or $release.prerelease) { throw '目标不是正式发布版。' }
-    $asset = @($release.assets | Where-Object { $_.name -match '^ai-quota-widget-v\d+\.\d+\.\d+-windows-x64\.zip$' })
+    if ($release.draft -or ($release.prerelease -and -not $AllowPrerelease)) { throw '目标不是正式发布版；测试版需明确指定版本并允许预发布。' }
+    $asset = @($release.assets | Where-Object { $_.name -eq ('ai-quota-widget-'+$release.tag_name+'-windows-x64.zip') })
     $sum = @($release.assets | Where-Object { $_.name -eq 'SHA256SUMS.txt' })
     if ($asset.Count -ne 1 -or $sum.Count -ne 1) { throw '该版本没有完整的 Windows 成品包，请打开正式 Release 页面。' }
     foreach ($url in @($asset[0].browser_download_url,$sum[0].browser_download_url)) {

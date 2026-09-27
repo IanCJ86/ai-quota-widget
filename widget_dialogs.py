@@ -119,9 +119,16 @@ class WidgetDialogs:
         result = {}
 
         def ok(event=None):
-            result["v"] = value.get().strip()
+            secret = value.get().strip()
+            if not secret:
+                error.configure(text='请输入 Key，或点击取消。')
+                entry.focus_set()
+                return
+            result["v"] = secret
             win.destroy()
 
+        error = tk.Label(win, text='', bg=self.palette['BG_CARD'], fg=self.palette['FG_TEXT'])
+        error.grid(row=4, column=0, columnspan=2, padx=12)
         tk.Button(win, text="保存", command=ok, width=6).grid(row=3, column=0, pady=(0, 10))
         tk.Button(win, text="取消", command=win.destroy, width=6).grid(
             row=3, column=1, pady=(0, 10))

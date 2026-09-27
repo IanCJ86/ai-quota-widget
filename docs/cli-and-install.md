@@ -30,8 +30,10 @@
 - `--doctor`：离线诊断，仅列版本、依赖可发现状态、文件齐全程度、凭据是否存在、缓存状态和安全错误类别。存在凭据不等于联网认证成功；存在模块不等于GUI已验证。也可右键“复制脱敏诊断”。
 - `--json` / `--once`：默认读缓存，不刷新、不写缓存、不启动GUI或定时任务；`--fresh` 才直接查询一次每个已配置来源。会读取本机已登录凭据，只有对应官方请求使用它们。DeepSeek鲜查会更新本地金额估算基线，token鲜查会更新统计缓存。
 - `--data-dir "数据目录"`：读取指定目录的配置、加密Key和缓存。成品默认 `%LOCALAPPDATA%\AIQuotaWidget`；不要把程序目录或工具临时目录的空缓存当作桌面丢数据。
-- 返回码：0=本命令检查/查询成功，1=待配置或部分失败/缓存待核验/旧数据，2=查询无可用数据或安装错误。doctor无凭据为1，不是环境失败。`--help/--version` 为0。以诊断文字及JSON来源状态为准。
+- 返回码：0=本命令检查/查询成功，1=待配置或部分失败/缓存待核验/旧数据，2=查询无可用数据或安装错误。doctor无凭据且环境健康为1，必要运行模块或Tk/Pillow/pystray缺失为2；仅可选zstd统计组件缺失为1，不影响独立余额查询。`--help/--version` 为0。以诊断文字及JSON来源状态为准。
 - 输出不包含Key、Cookie、凭据路径、账户ID或日志原文；`--json/--once` **包含个人额度/余额**，不应当作公开脱敏报告。公开反馈用doctor。
+
+v1.4.2rc2 起，底部区分刷新中、连接失败、需重新认证、缓存待核验与数据过旧，不再统一显示“待更新”。数据目录内 `query-history.json` 保留最近200条查询事件；成功不会抹掉之前的失败，doctor列出末12条。只记录来源、时间、错误类别、耗时和重试安排，不含额度、余额、密钥或日志原文。主循环间隔记录只能证明存在时间间隔，不能单独认定断网、休眠或卡死；历史失败也不代表当前仍失败。记录保存失败会提示，但不阻断查询。
 
 ## wheel / uvx
 
@@ -62,7 +64,7 @@ uvx --from .\ai_quota_widget-<版本>-py3-none-any.whl quota_monitor --install -
 | `deepseek_low_balance` | 余额告警阈值，`0` 关闭 |
 | `tray_metric` / `window_alpha` / `lock_position` | 托盘指标、透明度、拖动锁定，建议用菜单调整 |
 
-默认 Harness 日志目录为 `~/.dsh/sessions`。token 只覆盖本机日志，缓存读取也计入 `total`，因此大 token 数不等于高支出。DeepSeek 金额估算只覆盖首次余额采样之后观察到的变化；未运行时段、充值与消费抵消等无法完整还原。计费时段标签仅供参考，以服务商账单为准。
+默认 Harness 日志目录为 `~/.dsh/sessions`。v1.4.2rc1 起可在右键设置中选择日志目录（`harness_sessions_dir`），本机统计不再要求 DeepSeek API Key。token 只覆盖本机日志，缓存读取也计入 `total`，因此大 token 数不等于高支出。DeepSeek 金额估算只覆盖首次余额采样之后观察到的变化；未运行时段、充值与消费抵消等无法完整还原。计费时段标签仅供参考，以服务商账单为准。
 
 菜单保存的 GLM / DeepSeek Key 使用 Windows DPAPI，只能由本机对应 Windows 用户解密；不要跨电脑复制加密文件。环境变量支持 `AI_QUOTA_WIDGET_GLM_API_KEY`、`AI_QUOTA_WIDGET_DEEPSEEK_API_KEY` / `DEEPSEEK_API_KEY`。正式 v1.4.1 环境变量优先；v1.4.2rc1 改为菜单保存的 Key 优先。旧配置中的明文 Key 仅作兼容，不建议新增；清除软件保存的 Key 不会删除环境变量。
 

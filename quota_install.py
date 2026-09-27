@@ -116,7 +116,7 @@ def _install(destination=None, skip_deps=False):
             pythonw = python
         launcher = ('@echo off\r\nchcp 65001 >nul\r\n'
                     f'"{python}" "%~dp0quota_monitor.py" --launch-check\r\n'
-                    'if errorlevel 1 (pause & exit /b 2)\r\n'
+                    'if errorlevel 1 exit /b 2\r\n'
                     f'start "" "{pythonw}" "%~dp0quota_monitor.py"\r\n')
         # UTF-8 after chcp supports names outside the current Windows ANSI page.
         (stage/'start.bat').write_bytes(launcher.encode('utf-8'))

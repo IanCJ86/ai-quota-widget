@@ -21,7 +21,7 @@ from html import unescape
 from html.parser import HTMLParser
 from app_version import APP_VERSION, USER_AGENT
 from quota_state import (source_status, window_expired, error_label, finite,
-                         validate_config, credit_status)
+                         validate_config, credit_status, refresh_notice)
 
 # CLI dispatch precedes GUI imports and config/credential access.
 if __name__ == '__main__' and sys.argv[1:] and sys.argv[1] != '--query':
@@ -40,7 +40,7 @@ if sys.argv[1:] == ["--version"]:
     raise SystemExit(0)
 
 from monitor_runtime import (Scheduler, SingleInstance, atomic_json, dpapi_protect,
-                             dpapi_unprotect, validate_result)
+                             dpapi_unprotect, validate_result, QueryHistory)
 
 QUERY_MODE = len(sys.argv) == 3 and sys.argv[1] == "--query"
 HEADLESS_MODE = QUERY_MODE or any(arg in sys.argv for arg in
@@ -137,6 +137,8 @@ DEFAULT_CONFIG = {
     "glm_region": "cn",           # "cn" -> open.bigmodel.cn, "intl" -> api.z.ai
     # ---- DeepSeek (pay-as-you-go balance) ----
     "deepseek_api_key": "",       # legacy plaintext field, same rules as glm_api_key
+    "deepseek_token_metric": "total",
+    "harness_sessions_dir": "",
     # Money cannot be a percentage: warn below this amount and alarm below a
     # quarter of it. Set to 0 to switch the colour warning off.
     "deepseek_low_balance": 20.0,
@@ -582,22 +584,48 @@ def _read_protected_key(path):
 
 
 def provider_key(path, env_names, field):
-    """Resolve an API key: environment, then encrypted file, then legacy config.
+    """Resolve an API key: explicit local override, environment, legacy config.
 
     config.json is plaintext on disk, so the settings menu writes keys through
     Windows DPAPI and drops the plaintext copy; the legacy field keeps working
     for existing installs.
     """
+    stored = _read_protected_key(path)
+    if stored:
+        return stored
     for name in env_names:
         # An explicitly empty process variable must mask a registry value too
         # (isolated runs / deliberate credential removal), not resurrect it.
         value = (os.environ[name] if name in os.environ else _windows_env(name) or "").strip()
         if value:
             return value
-    stored = _read_protected_key(path)
-    if stored:
-        return stored
     return (CFG.get(field) or "").strip()
+
+
+def harness_sessions_dir():
+    return os.path.abspath(os.path.expanduser(CFG.get('harness_sessions_dir') or DSH_SESSIONS))
+
+
+def source_identity(name):
+    # Opaque cache namespace, never a key or credential in logs.
+    if name == 'deepseek':
+        context = deepseek_api_key()
+    elif name == 'glm':
+        context = glm_api_key() + '\0' + CFG.get('glm_region', 'cn')
+    elif name == 'tokens':
+        context = harness_sessions_dir()
+    else:
+        return None
+    return hashlib.sha256(context.encode('utf-8')).hexdigest()
+
+
+def available_sources():
+    from quota_cli import configured
+    flags = dict(configured(sys.modules[__name__]))
+    flags['main'] = bool(CFG.get('show_radar')) and bool(CFG.get('show_codex'))
+    flags['tokens'] = (CFG.get('deepseek_token_metric') != 'off'
+                       and os.path.isdir(harness_sessions_dir()))
+    return flags
 
 
 def save_provider_key(path, field, key):
@@ -724,6 +752,22 @@ def fetch_glm():
 # ---------------- DeepSeek (pay-as-you-go balance) ----------------
 
 def deepseek_spend(balance, today=None, scope=None):
+    # GUI and explicit --fresh CLI may run together. Serialize read/modify/write.
+    import msvcrt
+    with open(DEEPSEEK_SPEND_FILE + '.lock', 'a+b') as lock:
+        if lock.tell() == 0:
+            lock.write(b'0')
+            lock.flush()
+        lock.seek(0)
+        msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+        try:
+            return _deepseek_spend(balance, today, scope)
+        finally:
+            lock.seek(0)
+            msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+
+
+def _deepseek_spend(balance, today=None, scope=None):
     """Estimate today's spend from balance changes, since the API has no usage
     endpoint. The first reading of a day becomes the baseline; a top-up raises
     the baseline instead of producing negative spend. Returns the amount spent
@@ -735,11 +779,13 @@ def deepseek_spend(balance, today=None, scope=None):
     try:
         with open(DEEPSEEK_SPEND_FILE, encoding="utf-8") as stream:
             state = json.load(stream)
-    except Exception:
+    except FileNotFoundError:
         state = {}
     if not isinstance(state, dict):
-        state = {}
+        raise ValueError('invalid spend history')
     opened = state.get("open")
+    if state and (not finite(opened) or opened < 0 or not finite(state.get('last')) or state['last'] < 0):
+        raise ValueError('invalid spend history')
     if (state.get("day") != today or (scope is not None and state.get('scope') != scope) or isinstance(opened, bool)
             or not isinstance(opened, (int, float)) or not math.isfinite(opened)):
         state = {"version": 2, "day": today, "open": balance, "last": balance,
@@ -752,19 +798,16 @@ def deepseek_spend(balance, today=None, scope=None):
                 state["open"] = round(state["open"] - delta, 8)  # top-up
             state["last"] = balance
     state["updated"] = datetime.now().isoformat(timespec="seconds")
-    try:
-        atomic_json(DEEPSEEK_SPEND_FILE, state)
-    except OSError:
-        pass
+    atomic_json(DEEPSEEK_SPEND_FILE, state)
     return round(max(0.0, state["open"] - balance), 8)
 
 
-def local_harness_tokens(day=None, root=None):
+def local_harness_tokens(day=None, root=None, strict=False):
     """Independent optional worker: bounded streaming, metadata-only cache."""
     from harness_stats import totals
     cache = None if root is not None else os.path.join(os.path.dirname(CONFIG_FILE),
                                                        "harness-totals.json")
-    return totals(root or DSH_SESSIONS, day, cache)
+    return totals(root or harness_sessions_dir(), day, cache, strict=strict)
 
 
 # Offline calendar: State Council's 2026 public holiday schedule. Weekends stay
@@ -882,14 +925,18 @@ def fetch_deepseek():
     }
     validate_result("deepseek", result)
     scope = hashlib.sha256((key + '\0' + result['ds_currency']).encode()).hexdigest()
-    result["ds_spend"] = deepseek_spend(balance, scope=scope)
+    try:
+        result["ds_spend"] = deepseek_spend(balance, scope=scope)
+    except (OSError, ValueError, TypeError, OverflowError):
+        result['ds_spend'] = None
+        result['ds_spend_error'] = 'SpendWriteFailed'
     result["ds_spend_day"] = date.today().isoformat()
     return result
 
 
 def fetch_tokens():
     day = date.today()
-    tokens = local_harness_tokens(day)
+    tokens = local_harness_tokens(day, strict=True)
     if tokens is None:
         raise FileNotFoundError("local usage unavailable")
     return {"ds_tokens_total": tokens["total"], "ds_tokens_fresh": tokens["fresh"],
@@ -942,6 +989,7 @@ class App:
         self.root.configure(bg=BG)
         self.topmost = tk.BooleanVar(value=True)
         self.data = {}
+        self._source_identities = {name: source_identity(name) for name in ('glm','deepseek','tokens')}
         self.errors = {}
         self.last_ok = None
         self.instance = instance
@@ -953,7 +1001,9 @@ class App:
         self._ui_error = None
         self._last_render_minute = None
         self.tray_controller = TrayIcon(self._commands)
-        self.scheduler = Scheduler(os.path.abspath(__file__), self._on_result, REFRESH_SECONDS)
+        self.history = QueryHistory(os.path.join(os.path.dirname(DEBUG_FILE), 'query-history.json'))
+        self.scheduler = Scheduler(os.path.abspath(__file__), self._on_result, REFRESH_SECONDS,
+                                   on_event=self.history.record)
         self._load_cache()
         self._drag = None
         self.theme = "dark"
@@ -1350,7 +1400,7 @@ class App:
             CFG["show_radar"] = self.show_radar.get()
             _save_config(CFG)
         if hasattr(self, "scheduler"):
-            self.scheduler.configure(self._enabled_sources())
+            self._sync_credentials()
         if hasattr(self, "tray_menu"):
             self._fix_tray_metric(persist=persist)  # no startup config rewrite
         c5_visible = visible["codex"] and self.show_codex_5h.get()
@@ -1521,13 +1571,11 @@ class App:
     def refresh_async(self):
         if self._closed:
             return
+        self._sync_credentials()
         self.scheduler.configure(self._enabled_sources())
         self.scheduler.refresh()
         self.scheduler.tick()
-        if self._enabled_sources():
-            self.status.config(text="刷新中…（保留上次数据）")
-        else:
-            self._render()
+        self._render()
         self._fit()
         self._write_debug()
 
@@ -1537,26 +1585,45 @@ class App:
         A hidden card costs nothing: no worker process, no API call, no third
         party request.  The tray icon can only show a source that is queried, so
         it follows the visible cards too (see _fix_tray_metric)."""
+        flags = available_sources()
         names = []
-        if CFG.get("show_codex", True):
+        if CFG.get("show_codex", True) and flags['codex']:
             names.append("codex")
-        if CFG.get("show_kimi", True):
+        if CFG.get("show_kimi", True) and flags['kimi']:
             names.append("kimi")
         if CFG.get("show_codex", True) and CFG.get("show_radar", True):
             names.append("main")
-        if CFG.get("show_glm") and glm_api_key():
+        if CFG.get("show_glm") and flags['glm']:
             names.append("glm")
-        if CFG.get("show_deepseek", True) and deepseek_api_key():
-            names.append("deepseek")
-            if CFG.get("deepseek_token_metric", "total") != "off" and os.path.isdir(DSH_SESSIONS):
+        if CFG.get("show_deepseek", True):
+            if flags['deepseek']:
+                names.append('deepseek')
+            if flags['tokens']:
                 names.append("tokens")
         return names
+
+    def _sync_credentials(self):
+        for name in ('glm','deepseek','tokens'):
+            identity = source_identity(name)
+            if self._source_identities.get(name) == identity:
+                continue
+            self._source_identities[name] = identity
+            if hasattr(self, 'scheduler'):
+                self.scheduler.configure([n for n in self.scheduler.states if n != name])
+            self.data = {k:v for k,v in self.data.items() if not k.startswith(self._source_keys(name))}
+            self._success_at.pop(name, None)
+            self._verified.discard(name)
+            self.errors.pop(name, None)
+        if hasattr(self, 'scheduler'):
+            self.scheduler.configure(self._enabled_sources())
 
     # Sources whose payload can admit that the data describes an earlier
     # window: the query succeeds, but the number is not current.
     EXPIRED_KEY = {"codex": "c_window_expired"}
 
     def _data_expired(self, source):
+        if source in ('kimi','glm'):
+            return any(self._window_expired(k) for k in (('k5','kw') if source == 'kimi' else ('g5','gw')))
         if source == "codex":
             keys = ["cw"] + (["c5"] if self.show_codex_5h.get() else [])
             known = [self.data.get(k + "_reset") for k in keys]
@@ -1590,7 +1657,14 @@ class App:
                 cache = json.load(stream)
             for name, record in cache.get("sources", {}).items():
                 try:
-                    stamp = float(record["success_at"])
+                    if not isinstance(record, dict):
+                        continue
+                    identity = source_identity(name)
+                    if identity is not None and record.get('identity') != identity:
+                        continue
+                    stamp = record['success_at']
+                    if not finite(stamp):
+                        continue
                     if not 0 < stamp <= time.time() + 60:
                         continue
                     data = validate_result(name, record["data"])
@@ -1614,14 +1688,23 @@ class App:
                 "tokens": ("ds_tokens_",)}[name]
 
     def _save_cache(self):
-        sources = {name: {"success_at": stamp,
+        sources = {name: {"success_at": stamp, "identity": self._source_identities.get(name),
                          "data": {key: value for key, value in self.data.items()
                                   if key.startswith(self._source_keys(name))}}
                    for name, stamp in self._success_at.items()}
         atomic_json(CACHE_FILE, {"version": 1, "sources": sources})
 
     def _on_result(self, name, payload, diagnostics):
+        if name in self._source_identities and self._source_identities[name] != source_identity(name):
+            # External env/file changes may happen while a worker is running.
+            # Never stamp an old response with the newly selected account ID.
+            self._sync_credentials()
+            self._render()
+            self._fit()
+            self._write_debug()
+            return
         if payload.get("ok"):
+            self.data = {k:v for k,v in self.data.items() if not k.startswith(self._source_keys(name))}
             self.data.update(payload["data"])
             self._success_at[name] = time.time()
             self._verified.add(name)
@@ -1657,6 +1740,7 @@ class App:
                 "success_at": {name: datetime.fromtimestamp(ts).isoformat(timespec="seconds")
                                for name, ts in self._success_at.items()},
                 "queries": self._diagnostics, "status_text": self.status.cget("text"),
+                "history_write_failed": self.history.failed,
                 "active": [name for name, state in self.scheduler.states.items() if state["worker"]],
                 "tray": {"available": bool(self.tray_controller.icon and self.tray_controller.icon.visible),
                          "title": self.tray_controller.icon.title if self.tray_controller.icon else None}})
@@ -1687,12 +1771,19 @@ class App:
             if self.tray_controller.thread and not self.tray_controller.thread.is_alive() and not self.tray_controller.failed:
                 self.tray_controller.failed = True
                 self.root.deiconify()
+            active_before = tuple(n for n,s in self.scheduler.states.items() if s['worker'] is not None)
             self.scheduler.tick()
+            active_after = tuple(n for n,s in self.scheduler.states.items() if s['worker'] is not None)
+            if active_before != active_after:
+                self._render()
+                self._fit()
+                self._write_debug()
             if self.viewport.update_dpi(self):
                 self._fit()
             minute = int(time.time() // 60)
             if minute != self._last_render_minute:
                 self._last_render_minute = minute
+                self._sync_credentials()
                 if self.root.state() != "withdrawn":
                     self._render()
                     self._fit()
@@ -1730,7 +1821,7 @@ class App:
         pl, rl = self.rows[key]
         if amount is None:
             pl.config(text="--")
-            rl.config(text="")
+            rl.config(text=note)
             return
         symbols = {"CNY": "¥", "USD": "$"}
         symbol = symbols.get(currency, currency + " " if currency else "")
@@ -1854,18 +1945,23 @@ class App:
         if self._transport_stale("tokens"):
             tokens = None
         token_text = _fmt_tokens(tokens) if metric != "off" else None
+        token_note = (token_text + ' tok') if token_text is not None else ''
+        if not token_note and metric != 'off' and self.errors.get('tokens'):
+            token_note = error_label(self.errors['tokens'])
         self._set_amount("ds_spend", d.get("ds_spend"), d.get("ds_currency") or "",
-                         (token_text + " tok") if token_text is not None else "",
+                         token_note,
                          warn=False, whole_width=whole_width)
         self._render_radar()
-        enabled = [s for s in self._enabled_sources() if s != "tokens"]
+        enabled = self._enabled_sources()
         for source, keys in {"kimi": ("k5", "kw"),
                              "codex": ("c5", "cw", "cr_credit"),
                              "glm": ("g5", "gw"), "main": ("cr_main",),
                              "deepseek": ("ds", "ds_spend")}.items():
-            if source == "codex" and source in enabled and not self._transport_stale(source):
-                for key in ("c5", "cw"):
-                    if self._window_expired(key) or (not any(d.get(k + "_reset") for k in ("c5", "cw"))
+            if source in ('codex','kimi','glm') and source in enabled and not self._transport_stale(source):
+                for key in keys:
+                    if key == 'cr_credit':
+                        continue
+                    if self._window_expired(key) or (source == 'codex' and not any(d.get(k + "_reset") for k in ("c5", "cw"))
                                                     and d.get("c_window_expired")):
                         self.rows[key][1].config(text="窗口已过期")
                         self.rows[key][0].config(fg=THEMES[self.theme]["FG_DIM"])
@@ -1881,33 +1977,39 @@ class App:
                         note_label.config(text=text)
                     self.rows[key][0].config(fg=THEMES[self.theme]["FG_DIM"])
         stale = [name for name in enabled if self._is_stale(name)]
-        for source, keys in (('deepseek', ('ds','ds_spend')), ('glm', ('g5','gw'))):
+        for source, keys in (('deepseek', ('ds','ds_spend')), ('glm', ('g5','gw')), ('kimi', ('k5','kw')), ('codex', ('c5','cw'))):
             if CFG.get('show_'+source) and source not in enabled:
                 for key in keys:
                     self.rows[key][0].configure(text='--')
-                    self.rows[key][1].configure(text='未配置 Key')
+                    if key != 'ds_spend' or not token_note:
+                        self.rows[key][1].configure(text='未配置 Key' if source in ('glm','deepseek') else '未登录')
+        if d.get('ds_spend_error'):
+            self.rows['ds_spend'][0].configure(text='--')
+            if not token_text:
+                self.rows['ds_spend'][1].configure(text='估算不可用')
         parts = []
         account_times = [self._success_at.get(name) for name in enabled
                          if name in ("kimi", "codex", "glm", "deepseek")]
         loaded = any(self._success_at.get(name) for name in enabled)
         if not enabled:
             parts.append('右键 → 快速设置')
-        elif not loaded and self.errors:
-            parts.append('查询失败·右键诊断')
-        elif not loaded:
-            # First load: listing every source as 待更新 made the status line
-            # long enough to widen the whole window, which then shrank again
-            # once the data arrived. Say one short thing instead.
-            parts.append("加载中…")
         else:
             if account_times and all(account_times):
                 parts.append("刷新时间 "
                              + datetime.fromtimestamp(min(account_times)).strftime("%H:%M"))
-            if stale:
-                # Naming every stale source made this line the widest thing in
-                # the window (it shrank again once the names cleared). The rows
-                # themselves are greyed and labelled, so a count is enough.
-                parts.append("待更新:%d 项" % len(stale))
+            elif not account_times and loaded:
+                parts.append('刷新时间 ' + datetime.fromtimestamp(
+                    min(self._success_at[n] for n in enabled if self._success_at.get(n))).strftime('%H:%M'))
+            active = [n for n,s in self.scheduler.states.items() if s['worker'] is not None]
+            enabled_all = set(self._enabled_sources())
+            errors = {n:e for n,e in self.errors.items() if n in enabled_all}
+            notice = refresh_notice(active, errors, stale,
+                                    [n for n in stale if self._data_expired(n)],
+                                    [n for n in stale if n not in self._verified and self._success_at.get(n)])
+            if notice:
+                parts.append(notice)
+            elif not loaded:
+                parts.append('等待查询')
             if self.tray_controller.failed:
                 parts.append("托盘不可用")
         if not parts:
@@ -1916,6 +2018,8 @@ class App:
             parts.append('配置异常')
         if self._ui_error == 'CacheWriteFailed' or CONFIG_SAVE_FAILED:
             parts.append('保存失败')
+        if self.history.failed:
+            parts.append('记录失败')
         self.status.config(text="  ".join(parts),
                            fg=THEMES[self.theme]["DANGER"] if stale else THEMES[self.theme]["FG_DIM"])
         self.theme_painter.update()

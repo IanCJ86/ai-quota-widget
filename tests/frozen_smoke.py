@@ -158,7 +158,9 @@ def smoke(bundle):
         run(migration)
         for filename in ('config.json','deepseek-key.dpapi'):
             assert (old/filename).read_bytes()==(root/'local/AIQuotaWidget'/filename).read_bytes()
-        run(migration,(1,))  # existing personal data must never be replaced
+        run(migration)  # identical completed migration is safe to retry
+        (root/'local/AIQuotaWidget/config.json').write_bytes(b'{"theme":"ink"}')
+        run(migration,(1,))  # newer personal data must never be replaced
         print(json.dumps(dict(version=version,offline_install_seconds=round(install_seconds,2),
             no_python_path=True,worker_pipe=True,chinese_setup=True,startup_debug=True,
             skip_setup=True,second_launch=True,config_preserved=True,migration=True,conflict_rejected=True)))

@@ -71,7 +71,21 @@ class SettingsController:
                       command=lambda: self._save_key_secure("deepseek"))
         m.add_command(label="清除已保存的 Key",
                       command=lambda: self._clear_key("deepseek"))
+        m.add_command(label="选择 Harness 日志目录…", command=self._choose_logs)
+        m.add_command(label="恢复默认日志目录", command=lambda: self._set_logs(''))
         return m
+
+    def _choose_logs(self):
+        from tkinter import filedialog
+        import os
+        path = filedialog.askdirectory(parent=self.app.root, title='选择 Harness sessions 目录', mustexist=True)
+        if path and os.path.isdir(path) and os.access(path, os.R_OK):
+            self._set_logs(path)
+
+    def _set_logs(self, path):
+        self.config['harness_sessions_dir'] = path
+        self.save_config(self.config)
+        self.app.refresh_async()
 
     def _set_plan(self, kind, name):
         getattr(self, f"_plan_var_{kind}").set(name)
@@ -119,21 +133,27 @@ class SettingsController:
         key = self.dialogs._ask_secret(title, title + "：")
         if not key:
             return
-        if save(key):
+        saved = save(key)
+        self.app._sync_credentials()
+        if saved:
             self.dialogs._notice("已保存", "Key 已用当前 Windows 账户加密保存在本机，\n"
-                                   "config.json 里的明文已清除。")
+                                   "config.json 里的明文已清除。\n本机保存值优先于环境变量，连接尚待验证。")
         else:
             self.dialogs._notice("保存未完成", "加密保存或旧明文清理未完成，请检查文件写入权限。\n"
                                       "可能已生成加密副本；不能确认旧明文已清除。")
         self.app._apply_visibility()
+        self.app.refresh_async()
 
     def _clear_key(self, kind):
         _, _, clear = self.KEY_TOOLS[kind]
-        if clear():
-            self.dialogs._notice("已清除", "本机保存的 Key 已删除。")
+        cleared = clear()
+        self.app._sync_credentials()
+        if cleared:
+            self.dialogs._notice("已清除", "本机保存的 Key 已删除。\n如仍有环境变量，将使用环境变量；不会删除系统设置。")
         else:
             self.dialogs._notice("清除未完成", "部分本机文件未能清除，请检查文件写入权限。")
         self.app._apply_visibility()
+        self.app.refresh_async()
 
     def _set_glm_key_secure(self):
         self._save_key_secure("glm")
