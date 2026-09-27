@@ -32,8 +32,6 @@
 
 安装失败？先看[排错说明](docs/cli-and-install.md)。普通用户只选 `windows-x64.zip`；`windows-source.zip` 和 `.whl` 供开发者使用，`quick-install.ps1` 是可选快装脚本。
 
-参与新版测试？打开[全部 Releases](https://github.com/IanCJ86/ai-quota-widget/releases)，选择约定的预发布版本。正式版入口不会自动安装测试版；使用测试版快装脚本时须同时指定 `-Version v具体版本 -AllowPrerelease`。
-
 想让 AI 帮你安装？复制这段：
 
 > 请用中文帮我安装 https://github.com/IanCJ86/ai-quota-widget 最新正式 Release 的 windows-x64 成品包，校验同版 SHA256SUMS.txt 后执行包内 setup.ps1。不要装 Python 或修改源码。保留已有配置，打开软件即可；缺少 Key 由我在快速设置里填写，可以跳过。

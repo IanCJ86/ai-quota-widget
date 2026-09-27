@@ -21,6 +21,8 @@
 
 ## 开发或排错
 
+对外只发布正式版；内部候选留在本地或受限渠道，不公开发布rc下载包，不在README引导普通用户试用候选。新用户安装验收同样走正式Latest路径。
+
 明确要求开发时可修改源码、测试和发布。源码环境/CLI 详见 [技术说明](docs/cli-and-install.md)；需要安装排错时读 [排错技能](skills/ai-quota-widget-troubleshoot/SKILL.md)。报告版本、实际执行步骤、成功和未验证项；不要把文件时间戳精确当成操作起止计时。
 
 AI 开发提交与 PR 保留执行者标记 `AI-Agent: Codex` 或 `AI-Agent: DeepSeek Harness`，不改全局 Git 身份，不冒领对方工作。
