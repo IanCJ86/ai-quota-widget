@@ -734,6 +734,43 @@ class UITests(unittest.TestCase):
         a.root.deiconify()
         a._minimize_to_tray()
         self.assertNotEqual(a.root.state(), "withdrawn")
+    def test_tray_restore_has_its_own_fast_timer_and_no_query_or_disk_work(self):
+        a = self.app
+        a.root.withdraw()
+        a._commands.put('show')
+        with patch.object(a.scheduler, 'tick') as tick, patch.object(a, '_write_debug') as debug, \
+             patch.object(a, '_update_tray') as tray, patch.object(a.root, 'after') as after:
+            a._poll_commands()
+        self.assertNotEqual(a.root.state(), 'withdrawn')
+        after.assert_called_once_with(75, a._poll_commands)
+        tick.assert_not_called()
+        debug.assert_not_called()
+        tray.assert_not_called()
+
+    def test_ui_command_error_does_not_cancel_fast_timer(self):
+        a = self.app
+        a._commands.put('show')
+        with patch.object(a.root, 'deiconify', side_effect=RuntimeError('test')), \
+             patch.object(a.root, 'after') as after:
+            a._poll_commands()
+        after.assert_called_once_with(75, a._poll_commands)
+        self.assertEqual(a._ui_error, 'RuntimeError')
+
+    def test_tray_restores_before_idle_query_tick_with_real_tk_loop(self):
+        a = self.app
+        # Deliberately remove the maintenance timer; only the UI timer may restore.
+        for timer in a.root.tk.eval('after info').split():
+            a.root.after_cancel(timer)
+        a.root.withdraw()
+        a.root.after(75, a._poll_commands)
+        a._commands.put('show')
+        start = time.monotonic()
+        while a.root.state() == 'withdrawn' and time.monotonic() - start < .8:
+            a.root.update()
+            time.sleep(.005)
+        self.assertNotEqual(a.root.state(), 'withdrawn')
+        self.assertLess(time.monotonic() - start, .8)
+
     def test_callback_failure_keeps_timer_alive(self):
         a = self.app
         with patch.object(a.scheduler, "tick", side_effect=RuntimeError("test")), patch.object(a.root, "after") as after:

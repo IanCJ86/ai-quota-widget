@@ -20,6 +20,7 @@ from datetime import datetime, date, timezone, timedelta
 from html import unescape
 from html.parser import HTMLParser
 from app_version import APP_VERSION, USER_AGENT
+from quota_paths import data_locations, resolve_data_dir, migrate_data
 from quota_state import (source_status, window_expired, error_label, finite,
                          validate_config, credit_status, refresh_notice)
 
@@ -94,11 +95,7 @@ DEEPSEEK_BALANCE_URL = "https://api.deepseek.com/user/balance"
 # API-key balance history; platform-web billing needs separate login authorization.
 DEEPSEEK_SPEND_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                    "deepseek-spend.json")
-DATA_DIR = os.environ.get('AI_QUOTA_WIDGET_DATA_DIR') or (
-    os.path.join(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')), 'AIQuotaWidget')
-    if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__)))
-if 'site-packages' in DATA_DIR and not os.environ.get('AI_QUOTA_WIDGET_DATA_DIR'):
-    DATA_DIR = os.path.join(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')), 'AIQuotaWidget')
+DATA_DIR = resolve_data_dir(os.path.dirname(os.path.abspath(__file__)))
 DEBUG_FILE, CONFIG_FILE, SETTINGS_FILE, CACHE_FILE, GLM_KEY_FILE, DEEPSEEK_KEY_FILE, DEEPSEEK_SPEND_FILE = (
     os.path.join(DATA_DIR, name) for name in ('debug.txt','config.json','settings.json','last-good.json',
                                            'glm-key.dpapi','deepseek-key.dpapi','deepseek-spend.json'))
@@ -182,6 +179,20 @@ def _save_config(cfg):
 
 
 CFG = _load_config()
+
+
+def prepare_shared_data():
+    """GUI owner only: publish shared state before constructing any controllers."""
+    global DATA_DIR, DEBUG_FILE, CONFIG_FILE, SETTINGS_FILE, CACHE_FILE
+    global GLM_KEY_FILE, DEEPSEEK_KEY_FILE, DEEPSEEK_SPEND_FILE
+    target, legacy = data_locations(os.path.dirname(os.path.abspath(__file__)))
+    migrate_data(target, legacy)
+    DATA_DIR = str(target)
+    DEBUG_FILE, CONFIG_FILE, SETTINGS_FILE, CACHE_FILE, GLM_KEY_FILE, DEEPSEEK_KEY_FILE, DEEPSEEK_SPEND_FILE = (
+        os.path.join(DATA_DIR, name) for name in ('debug.txt', 'config.json', 'settings.json',
+        'last-good.json', 'glm-key.dpapi', 'deepseek-key.dpapi', 'deepseek-spend.json'))
+    CFG.clear()
+    CFG.update(_load_config())
 
 # silent subprocess: no console window flash
 _NO_WINDOW = {}
@@ -1143,6 +1154,7 @@ class App:
         self.refresh_async()
         self._write_debug()  # startup evidence also exists when no source is configured
         self.root.after(100, self._poll)
+        self.root.after(75, self._poll_commands)
         if self._first_run:
             self.root.after(200, self._setup_sources)
 
@@ -1755,8 +1767,12 @@ class App:
         except Exception:
             pass
 
-    def _poll(self):
-        """Single GUI-thread timer; no worker ever calls Tk, and errors cannot cancel it."""
+    def _poll_commands(self):
+        """Cheap UI-only pump: tray restore never waits for the idle query timer.
+
+        No file reads, images or network work while idle. Tk stays on its owner
+        thread; tray callbacks only enqueue commands.
+        """
         try:
             while not self._commands.empty():
                 command = self._commands.get_nowait()
@@ -1768,7 +1784,7 @@ class App:
                     self.root.lift()
                     self._redraw()
                 elif command == "refresh":
-                    self.refresh_async()
+                    self.root.after_idle(self.refresh_async)
                 elif command == "tray_failed":
                     self.tray_controller.failed = True
                     self.root.deiconify()
@@ -1776,6 +1792,15 @@ class App:
                 self.root.deiconify()
                 self.root.lift()
                 self._redraw()
+        except Exception as ex:
+            self._ui_error = type(ex).__name__
+        finally:
+            if not self._closed:
+                self.root.after(75, self._poll_commands)
+
+    def _poll(self):
+        """Query/maintenance timer, separate from latency-sensitive UI commands."""
+        try:
             if self.tray_controller.thread and not self.tray_controller.thread.is_alive() and not self.tray_controller.failed:
                 self.tray_controller.failed = True
                 self.root.deiconify()
@@ -2073,11 +2098,11 @@ if __name__ == "__main__":
     if QUERY_MODE:
         query_worker(sys.argv[2])
     else:
-        os.makedirs(DATA_DIR, exist_ok=True)
         instance = SingleInstance("IanQuotaMonitor-v2")
         app = None
         try:
             if not instance.existing:
+                prepare_shared_data()
                 app = App(instance)
                 app.run()
         except Exception as exc:

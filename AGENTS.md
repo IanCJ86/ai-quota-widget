@@ -14,7 +14,7 @@
 
 ## 升级、数据与凭据
 
-- 成品版的账户配置、加密 Key 和历史在 `%LOCALAPPDATA%\AIQuotaWidget`，程序在 `%LOCALAPPDATA%\Programs\AIQuotaWidget\v版本号`；升级不覆盖个人数据，旧版本保留用于回退。
+- v1.4.5起，成品版的账户配置、加密 Key 和历史在 `%USERPROFILE%\.ai-quota-widget`，避免Agent所在MSIX应用与桌面看到不同AppData副本。首次启动迁移旧目录并保留原文件；共享目录已有数据时不覆盖。默认程序目录为 `%USERPROFILE%\.ai-quota-widget-app\v版本号`，也避开AppData重定向，旧安装保留。
 - 从源码版迁移时，用户已指明的旧安装目录可传 `setup.ps1 -ExistingDataDir "旧目录"`。仅本机同一 Windows 用户迁移；不把 DPAPI 文件复制到另一台电脑当作已恢复。目标有同名数据时拒绝覆盖，先核对。
 - 不读取/输出密钥值来证明“已配置”，不用关闭系统防护来解决安装问题。查询仍需向各家官方服务认证；雷达是第三方预测，不带凭据。
 - 用户没有要求开机自启就不新增自启。旧源码安装路径保持可用，但不是普通用户推荐入口。
