@@ -771,6 +771,51 @@ class UITests(unittest.TestCase):
         self.assertNotEqual(a.root.state(), 'withdrawn')
         self.assertLess(time.monotonic() - start, .8)
 
+    def test_radar_trends_compare_windows_independently_and_survive_equal_values(self):
+        a = self.app
+        a._on_result('main', {'ok': True, 'data': {'cr_main24': 30, 'cr_main48': 80}}, {})
+        self.assertEqual(a._radar_trends, {})
+        a._on_result('main', {'ok': True, 'data': {'cr_main24': 40, 'cr_main48': 70}}, {})
+        for theme in monitor.THEMES:
+            a._set_theme(theme)
+            for window, token in ((24, 'RADAR_UP'), (48, 'RADAR_DOWN')):
+                monitor.CFG['radar_window'] = window
+                a._render()
+                self.assertEqual(a.rows['cr_main'][0].cget('fg'), monitor.THEMES[theme][token])
+        a._on_result('main', {'ok': True, 'data': {'cr_main24': 40, 'cr_main48': 70}}, {})
+        self.assertEqual(a._radar_trends, {'cr_main24': 1, 'cr_main48': -1})
+        a._on_result('main', {'ok': True, 'data': {'cr_main24': 0, 'cr_main48': 100}}, {})
+        self.assertEqual(a._radar_trends, {'cr_main24': -1, 'cr_main48': 1})
+
+    def test_failed_radar_query_does_not_replace_baseline_and_is_shown_stale(self):
+        a = self.app
+        a._on_result('main', {'ok': True, 'data': {'cr_main24': 30}}, {})
+        a._on_result('main', {'ok': True, 'data': {'cr_main24': 40}}, {})
+        a._on_result('main', {'ok': False, 'error': 'URLError'}, {})
+        self.assertEqual(a.data['cr_main24'], 40)
+        self.assertEqual(a._radar_trends['cr_main24'], 1)
+        self.assertEqual(a.rows['cr_main'][0].cget('fg'), monitor.THEMES[a.theme]['FG_DIM'])
+        a._on_result('main', {'ok': True, 'data': {'cr_main24': 35}}, {})
+        self.assertEqual(a._radar_trends['cr_main24'], -1)
+
+    def test_radar_trend_cache_preserves_last_direction_across_restart(self):
+        a = self.app
+        a._on_result('main', {'ok': True, 'data': {'cr_main24': 30}}, {})
+        a._on_result('main', {'ok': True, 'data': {'cr_main24': 40}}, {})
+        a.data, a._radar_trends = {}, {}
+        a._load_cache()
+        self.assertEqual(a._radar_trends, {'cr_main24': 1})
+        a._on_result('main', {'ok': True, 'data': {'cr_main24': 40}}, {})
+        self.assertEqual(a._radar_trends, {'cr_main24': 1})
+
+    def test_missing_radar_window_is_not_compared_with_another_window(self):
+        a = self.app
+        a._on_result('main', {'ok': True, 'data': {'cr_main24': 30, 'cr_main48': 60}}, {})
+        a._on_result('main', {'ok': True, 'data': {'cr_main24': None, 'cr_main48': 65}}, {})
+        self.assertNotIn('cr_main24', a._radar_trends)
+        a._on_result('main', {'ok': True, 'data': {'cr_main24': 10, 'cr_main48': 65}}, {})
+        self.assertNotIn('cr_main24', a._radar_trends)
+
     def test_callback_failure_keeps_timer_alive(self):
         a = self.app
         with patch.object(a.scheduler, "tick", side_effect=RuntimeError("test")), patch.object(a.root, "after") as after:
