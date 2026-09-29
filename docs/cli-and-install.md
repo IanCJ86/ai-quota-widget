@@ -6,7 +6,7 @@
 
 下载最新正式Release的 `ai-quota-widget-v<版本>-windows-x64.zip`，完整解压后双击 `install.cmd`，也可直接运行 `quota-widget.exe`。成品包自带 Python/Tk/依赖，**不需要自行安装环境**，面向 Windows 10/11 x64。首次使用中文快速设置，已有登录自动识别；无凭据可以跳过，之后右键设置。
 
-安装器校验全部文件，安装到 `%LOCALAPPDATA%\Programs\AIQuotaWidget\v<版本>`，创建桌面/开始菜单快捷方式；不默认开机自启。个人数据在 `%LOCALAPPDATA%\AIQuotaWidget`，升级保留，旧程序版本可回退。已知源码旧版可使用 `setup.ps1 -ExistingDataDir "旧目录"` 迁移；同名数据冲突会拒绝，不跨机器迁移DPAPI。成品版命令直接使用 `quota-cli.exe --doctor/--version/--once/--json`。
+安装器校验全部文件，安装到 `%LOCALAPPDATA%\Programs\AIQuotaWidget\v<版本>`，创建桌面/开始菜单快捷方式；不默认开机自启。v1.4.5起个人数据在 `%USERPROFILE%\.ai-quota-widget`，避免Agent与桌面读取不同的AppData副本。首次启动复制旧目录数据并保留原文件，已有共享数据不覆盖；回退旧版前退出新版，旧版仍读取旧目录，不会自动同步新设置。已知源码旧版可使用 `setup.ps1 -ExistingDataDir "旧目录"` 迁移；同名数据冲突会拒绝，不跨机器迁移DPAPI。成品版命令直接使用 `quota-cli.exe --doctor/--version/--once/--json`。
 
 `quick-install.ps1` 从官方 GitHub 正式 Release 下载成品包并核对SHA256，然后调用同一个离线安装器。网络不通会报错，不切到不明镜像。
 
@@ -29,7 +29,7 @@
 
 - `--doctor`：离线诊断，仅列版本、依赖可发现状态、文件齐全程度、凭据是否存在、缓存状态和安全错误类别。存在凭据不等于联网认证成功；存在模块不等于GUI已验证。也可右键“复制脱敏诊断”。
 - `--json` / `--once`：默认读缓存，不刷新、不写缓存、不启动GUI或定时任务；`--fresh` 才直接查询一次每个已配置来源。会读取本机已登录凭据，只有对应官方请求使用它们。DeepSeek鲜查会更新本地金额估算基线，token鲜查会更新统计缓存。
-- `--data-dir "数据目录"`：读取指定目录的配置、加密Key和缓存。成品默认 `%LOCALAPPDATA%\AIQuotaWidget`；不要把程序目录或工具临时目录的空缓存当作桌面丢数据。
+- `--data-dir "数据目录"`：读取指定目录的配置、加密Key和缓存。成品默认 `%USERPROFILE%\.ai-quota-widget`；首次GUI迁移前，诊断只读兼容旧目录并提示，不自动写入。不要把程序目录或Agent旧私有副本的缓存当作当前数据。
 - 返回码：0=本命令检查/查询成功，1=待配置或部分失败/缓存待核验/旧数据，2=查询无可用数据或安装错误。doctor无凭据且环境健康为1，必要运行模块或Tk/Pillow/pystray缺失为2；仅可选zstd统计组件缺失为1，不影响独立余额查询。`--help/--version` 为0。以诊断文字及JSON来源状态为准。
 - 输出不包含Key、Cookie、凭据路径、账户ID或日志原文；`--json/--once` **包含个人额度/余额**，不应当作公开脱敏报告。公开反馈用doctor。
 
@@ -50,7 +50,7 @@ uvx --from .\ai_quota_widget-<版本>-py3-none-any.whl quota_monitor --install -
 
 ## 手动配置与读数
 
-日常使用右键菜单即可。手动修改时，成品配置位于 `%LOCALAPPDATA%\AIQuotaWidget\config.json`，源码安装版在其安装目录；修改后重启。常用字段：
+日常使用右键菜单即可。手动修改时，成品配置位于 `%USERPROFILE%\.ai-quota-widget\config.json`，源码安装版在其安装目录；修改后重启。常用字段：
 
 | 字段 | 用途 |
 | --- | --- |
@@ -103,6 +103,6 @@ GUI 测试与截图使用隔离桌面及演示数据，不读取个人账户。�
 
 雷达为第三方预测；Codex来源是本机CLI快照，并非官方实时承诺。token仅为本机Harness当日记录。正式发布不等于用户已验收，更不等于所有显示器/网络/杀毒软件组合已验证。
 
-卸载：右键退出，移除本工具程序目录和快捷方式；成品版个人数据在 `%LOCALAPPDATA%\AIQuotaWidget`，单独保留或删除，源码版数据在其安装目录。不要删除CLI本身的凭据目录。
+卸载：右键退出，移除本工具程序目录和快捷方式；成品版个人数据在 `%USERPROFILE%\.ai-quota-widget`，单独保留或删除。升级前的 `%LOCALAPPDATA%\AIQuotaWidget` 原文件也保留，源码版数据在其安装目录。不要删除CLI本身的凭据目录。
 
 AI-Agent: Codex

@@ -110,7 +110,7 @@ try {
     }
     # Migration only when explicitly given a known old install by the user/agent.
     if ($ExistingDataDir) {
-        $data = Join-Path $env:LOCALAPPDATA 'AIQuotaWidget'
+        $data = Join-Path $env:USERPROFILE '.ai-quota-widget'
         Invoke-DataMigration $ExistingDataDir $data
     }
     Write-Host '[3/4] 创建快捷方式'
@@ -154,7 +154,7 @@ try {
     exit 1
 } finally {
     if ($migrationStage -and (Test-Path -LiteralPath $migrationStage)) {
-        $expectedParent = [IO.Path]::GetFullPath($env:LOCALAPPDATA).TrimEnd('\')+'\'
+        $expectedParent = [IO.Path]::GetFullPath($env:USERPROFILE).TrimEnd('\')+'\'
         $resolvedMigration = [IO.Path]::GetFullPath($migrationStage)
         if ($resolvedMigration.StartsWith($expectedParent+'.aiquota-migrate-',[StringComparison]::OrdinalIgnoreCase)) {
             $entries = @((Get-Item -LiteralPath $migrationStage -Force)) + @(Get-ChildItem -LiteralPath $migrationStage -Recurse -Force)

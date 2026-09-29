@@ -162,6 +162,11 @@ def doctor(m):
              '配置：' + ('异常，请检查config.json字段类型/文件格式' if m.CONFIG_ISSUES else '可读/使用默认值'),
              '本机实例：' + ('运行中' if running() else '未运行'),
              '此报告离线，不测试网络、不显示密钥、路径、账号或余额。']
+    from quota_paths import data_locations
+    target, legacy = data_locations(Path(m.__file__).parent)
+    if legacy:
+        lines.append('数据位置：共享用户目录' if Path(m.DATA_DIR) == target else
+                     '数据位置：旧版目录；首次启动新版窗口时迁移，诊断本身不改数据。')
     for name in ACCOUNT_SOURCES:
         state = snapshot['sources'][name]
         label = '凭据存在' if flags[name] else '未配置（可跳过）'

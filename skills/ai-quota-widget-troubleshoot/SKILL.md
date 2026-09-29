@@ -9,7 +9,7 @@ description: 排查已安装的 AI Quota Widget 额度监控悬浮窗，处理�
 
 ## 版本、环境和时间
 
-默认中文。先区分安装类型：**成品版直接运行同目录 `quota-cli.exe --doctor`**，个人状态在 `%LOCALAPPDATA%\AIQuotaWidget`；不需要 Python，不要用全局解释器诊断它。doctor 返回1且提示“未配置”是待配置，不是安装失败。
+默认中文。先区分安装类型：**成品版直接运行同目录 `quota-cli.exe --doctor`**，v1.4.5起个人状态在 `%USERPROFILE%\.ai-quota-widget`；不需要 Python，不要用全局解释器诊断它。doctor 返回1且提示“未配置”是待配置，不是安装失败。旧AppData可能存在MSIX私有副本，不能仅凭旧配置判断当前界面；匹配日志pid与运行进程。共享目录已有数据时不拿旧副本覆盖。
 
 以下仅用于源码版：从安装目录start.bat获取绑定的Python，避免全局解释器造成依赖误报：
 
