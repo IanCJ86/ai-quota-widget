@@ -1001,6 +1001,7 @@ class App:
         self.root.configure(bg=BG)
         self.topmost = tk.BooleanVar(value=True)
         self.data = {}
+        self._radar_trends = {}
         self._source_identities = {name: source_identity(name) for name in ('glm','deepseek','tokens')}
         self.errors = {}
         self.last_ok = None
@@ -1692,6 +1693,11 @@ class App:
                         data.pop("ds_spend", None)  # legacy cache has no trustworthy day
                     self.data.update(data)
                     self._success_at[name] = stamp
+                    if name == 'main':
+                        trends = record.get('trends', {})
+                        self._radar_trends = {key: value for key, value in trends.items()
+                            if key in ('cr_main24', 'cr_main48') and type(value) is int
+                            and value in (-1, 1) and finite(data.get(key))} if isinstance(trends, dict) else {}
                 except (KeyError, TypeError, ValueError):
                     continue
         except (OSError, ValueError, AttributeError):
@@ -1711,6 +1717,8 @@ class App:
                          "data": {key: value for key, value in self.data.items()
                                   if key.startswith(self._source_keys(name))}}
                    for name, stamp in self._success_at.items()}
+        if 'main' in sources:
+            sources['main']['trends'] = dict(self._radar_trends)
         atomic_json(CACHE_FILE, {"version": 1, "sources": sources})
 
     def _on_result(self, name, payload, diagnostics):
@@ -1723,6 +1731,16 @@ class App:
             self._write_debug()
             return
         if payload.get("ok"):
+            if name == 'main':
+                trends = getattr(self, '_radar_trends', {}).copy()
+                for key in ('cr_main24', 'cr_main48'):
+                    old, new = self.data.get(key), payload['data'].get(key)
+                    if finite(old) and finite(new):
+                        if new != old:
+                            trends[key] = 1 if new > old else -1
+                    else:
+                        trends.pop(key, None)
+                self._radar_trends = trends
             self.data = {k:v for k,v in self.data.items() if not k.startswith(self._source_keys(name))}
             self.data.update(payload["data"])
             self._success_at[name] = time.time()
@@ -1894,10 +1912,13 @@ class App:
         """Show the selected public reset-radar window."""
         win = CFG.get("radar_window", 24)
 
-        main_pct = self.data.get("cr_main48" if win == 48 else "cr_main24")
+        key = "cr_main48" if win == 48 else "cr_main24"
+        main_pct = self.data.get(key)
         self._set_row("cr_main", main_pct, f"{win}h概率")
         if main_pct is not None:
-            color = THEMES[self.theme]["WARNING"] if main_pct >= 80 else THEMES[self.theme]["FG_DIM"]
+            direction = getattr(self, '_radar_trends', {}).get(key, 0)
+            color = THEMES[self.theme]['RADAR_UP' if direction > 0 else 'RADAR_DOWN'] if direction else (
+                THEMES[self.theme]["WARNING"] if main_pct >= 80 else THEMES[self.theme]["FG_DIM"])
             self.rows["cr_main"][0].config(fg=color)
 
     def _render(self):

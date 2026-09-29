@@ -25,6 +25,10 @@ THEMES = {
                       ("#9cc6ff", "#d0b5ff", "#97dbbf", "#a7b8ff"), "#f4ba66", "#ff9191", border_width=1),
 }
 THEME_CHOICES = tuple((palette["LABEL"], key) for key, palette in THEMES.items())
+# Soft red/green on dark cards; darker equivalents retain contrast on light cards.
+for key, palette in THEMES.items():
+    palette['RADAR_UP'] = '#b54d58' if key in ('light', 'ink') else '#ffaaaa'
+    palette['RADAR_DOWN'] = '#387d5c' if key in ('light', 'ink') else '#a1d9b4'
 BG = "#1e1e2e"
 BG_CARD = "#262638"
 FG_DIM = "#7a7a90"
