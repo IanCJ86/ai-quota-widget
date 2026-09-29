@@ -6,7 +6,7 @@
 
 下载最新正式Release的 `ai-quota-widget-v<版本>-windows-x64.zip`，完整解压后双击 `install.cmd`，也可直接运行 `quota-widget.exe`。成品包自带 Python/Tk/依赖，**不需要自行安装环境**，面向 Windows 10/11 x64。首次使用中文快速设置，已有登录自动识别；无凭据可以跳过，之后右键设置。
 
-安装器校验全部文件，安装到 `%LOCALAPPDATA%\Programs\AIQuotaWidget\v<版本>`，创建桌面/开始菜单快捷方式；不默认开机自启。v1.4.5起个人数据在 `%USERPROFILE%\.ai-quota-widget`，避免Agent与桌面读取不同的AppData副本。首次启动复制旧目录数据并保留原文件，已有共享数据不覆盖；回退旧版前退出新版，旧版仍读取旧目录，不会自动同步新设置。已知源码旧版可使用 `setup.ps1 -ExistingDataDir "旧目录"` 迁移；同名数据冲突会拒绝，不跨机器迁移DPAPI。成品版命令直接使用 `quota-cli.exe --doctor/--version/--once/--json`。
+安装器校验全部文件，默认安装到 `%USERPROFILE%\.ai-quota-widget-app\v<版本>`，创建桌面/开始菜单快捷方式；不默认开机自启。v1.4.5起个人数据在 `%USERPROFILE%\.ai-quota-widget`，程序与数据都避开AppData重定向。首次启动复制旧目录数据并保留原文件，已有共享数据不覆盖；回退旧版前退出新版，旧版仍读取旧目录，不会自动同步新设置。已知源码旧版可使用 `setup.ps1 -ExistingDataDir "旧目录"` 迁移；同名数据冲突会拒绝，不跨机器迁移DPAPI。成品版命令直接使用 `quota-cli.exe --doctor/--version/--once/--json`。
 
 `quick-install.ps1` 从官方 GitHub 正式 Release 下载成品包并核对SHA256，然后调用同一个离线安装器。网络不通会报错，不切到不明镜像。
 

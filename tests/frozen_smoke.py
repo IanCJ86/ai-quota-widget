@@ -85,6 +85,10 @@ def smoke(bundle):
         install_seconds=time.monotonic()-started
         installed=destination/('v'+version)
         assert (installed/'quota-widget.exe').is_file()
+        # Default install must be visible outside an agent's AppData virtualization.
+        run([str(powershell),'-NoProfile','-ExecutionPolicy','Bypass','-File',str(bundle/'setup.ps1'),
+             '-NoLaunch','-NoShortcut'])
+        assert (root/'.ai-quota-widget-app'/('v'+version)/'quota-widget.exe').is_file()
         # Empty first run must produce diagnostics and open Chinese setup.
         startup=subprocess.STARTUPINFO()
         startup.lpDesktop='WinSta0\\'+name.value

@@ -1,7 +1,7 @@
 ﻿# Offline, per-user install of the prebuilt app. Never runs pip or installs Python.
 [CmdletBinding()]
 param(
-    [string]$Destination = (Join-Path $env:LOCALAPPDATA 'Programs\AIQuotaWidget'),
+    [string]$Destination = (Join-Path $env:USERPROFILE '.ai-quota-widget-app'),
     [string]$ExistingDataDir = '',
     [switch]$NoLaunch,
     [switch]$NoShortcut
