@@ -4,10 +4,12 @@ Call with a committed-tree export as cwd, using the pinned build interpreter.
 """
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 import zipfile
 
 root = Path(__file__).resolve().parents[1]
@@ -16,10 +18,29 @@ from app_version import APP_VERSION
 
 
 def build(output):
-    subprocess.run([sys.executable,'-m','PyInstaller','--noconfirm','--clean',
-                    '--distpath',str(output/'frozen'),'--workpath',str(output/'work'),
-                    str(root/'packaging/windows.spec')],check=True,cwd=root)
+    # Python's Tcl 9 can live in zipfs. PyInstaller 6.22 expects real library
+    # directories; unpack build-time resources, never require Python on clients.
+    env = dict(os.environ)
+    with tempfile.TemporaryDirectory(prefix='quota-tk-build-') as temp:
+        for library, variable in (('tcl', 'TCL_LIBRARY'), ('tk', 'TK_LIBRARY')):
+            import _tkinter
+            version = _tkinter.TCL_VERSION if library == 'tcl' else _tkinter.TK_VERSION
+            archives = list((Path(sys.base_prefix)/'tcl').glob(f'lib{library}{version}*.zip'))
+            if len(archives) > 1:
+                raise RuntimeError('Ambiguous Tcl/Tk build libraries')
+            if archives:
+                with zipfile.ZipFile(archives[0]) as zipped:
+                    zipped.extractall(temp)
+                env[variable] = str(Path(temp)/(library+'_library'))
+        subprocess.run([sys.executable,'-m','PyInstaller','--noconfirm','--clean',
+                        '--distpath',str(output/'frozen'),'--workpath',str(output/'work'),
+                        str(root/'packaging/windows.spec')],check=True,cwd=root,env=env)
     app = output/'frozen/AIQuotaWidget'
+    for resource in ('_tcl_data/init.tcl', '_tk_data/tk.tcl'):
+        if not (app/'_internal'/resource).is_file():
+            raise RuntimeError('Standalone Tcl/Tk resource missing: '+resource)
+    subprocess.run([str(app/'quota-cli.exe'), '--launch-check'], check=True,
+                   creationflags=subprocess.CREATE_NO_WINDOW)
     shutil.copy2(root/'LICENSE', app/'LICENSE')
     # Windows PowerShell 5 needs a BOM for Chinese script literals.
     for name in ('setup.ps1','install.cmd'):
