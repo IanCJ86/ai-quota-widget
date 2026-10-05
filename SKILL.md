@@ -9,7 +9,7 @@ description: 在 Windows 安装、升级或配置 AI Quota Widget 额度监控�
 
 ## 安装
 
-- 官方仓库：https://github.com/IanCJ86/ai-quota-widget 。优先正式 Release 的 `windows-x64.zip`，SHA256 与同版 `SHA256SUMS.txt` 核对，完整解压后执行包内 `setup.ps1`。软件自带运行时，不装 Python/npm/pip。用户也可双击 `install.cmd` 或直接打开 `quota-widget.exe`。
+- 官方仓库：https://github.com/IanCJ86/ai-quota-widget 。Agent 优先正式 Release 的 `windows-x64.zip`，SHA256 与同版 `SHA256SUMS.txt` 核对，完整解压后执行包内 `setup.ps1`。软件自带运行时，不装 Python/npm/pip。用户可直接下载 `Setup.exe` 双击安装，也可双击 ZIP 中的 `install.cmd` 或 `quota-widget.exe`。已安装用户可右键检查并更新正式版。
 - 用户已说用 DeepSeek 等某一家就沿用，不再重复问。软件首次打开会识别已存在的登录/凭据；中文快速设置选择卡片，GLM/DeepSeek Key 在本机掩码框填写，可稍后设置。不要在聊天索取或回显 Key。
 - 套餐名、续订日期、自启不是安装前置条件。不强制四家全配，不为无凭据账户等接口或反复 sleep。
 - 原程序正在运行时正常退出再升级；不批量结束 Python/其他 AI 进程。v1.4.5起个人数据在 `%USERPROFILE%\.ai-quota-widget`，首次启动从旧AppData目录迁移并保留原文件，已有共享数据不覆盖。不要把Agent的旧AppData私有副本当成当前配置。
