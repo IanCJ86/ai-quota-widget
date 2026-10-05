@@ -11,6 +11,23 @@ from test_monitor import UITests
 faulthandler.enable()
 faulthandler.dump_traceback_later(12,exit=True)
 fixture=UITests();fixture.setUp();app=fixture.app
+# Prove the native channel itself: remove ONLY the scheduled command fallback.
+# Shared CI machines cannot promise a 300ms hard real-time wall-clock bound,
+# especially while a cold native popup/first layout runs its nested loop.
+cancelled=0
+for timer in app.root.tk.call('after', 'info'):
+    script, kind=app.root.tk.call('after', 'info', timer)
+    if '_poll_commands' in str(script):
+        app.root.after_cancel(timer)
+        cancelled+=1
+assert cancelled==1
+drain=app._poll_commands
+native_wakes=[]
+def native_drain(reschedule=True):
+    assert reschedule is False, 'fallback must not drain this fixture'
+    native_wakes.append(1)
+    return drain(reschedule=False)
+app._poll_commands=native_drain
 owner=threading.get_ident()
 seen=[];delays=[];issued=deque()
 original=app._commands.get_nowait
@@ -57,7 +74,9 @@ try:
     assert app._closed
     assert len(seen)==50
     assert seen and all(x==owner for x in seen)
-    print(json.dumps(dict(commands=len(seen),max_delay=max(delays),main_thread_only=True)))
+    assert native_wakes
+    print(json.dumps(dict(commands=len(seen),max_delay=max(delays),main_thread_only=True,
+                         fallback_disabled=True,native_wakes=len(native_wakes))))
 finally:
     fixture.tearDown()
     faulthandler.cancel_dump_traceback_later()

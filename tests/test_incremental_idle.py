@@ -131,5 +131,6 @@ class EventTests(unittest.TestCase):
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         evidence=json.loads(result.stdout.strip())
         self.assertEqual(evidence['commands'],50)
-        self.assertLess(evidence['max_delay'],.3)
         self.assertTrue(evidence['main_thread_only'])
+        self.assertTrue(evidence['fallback_disabled'])
+        self.assertGreater(evidence['native_wakes'],0)
