@@ -1,6 +1,9 @@
 param([Parameter(Mandatory=$true)][string]$Bundle, [Parameter(Mandatory=$true)][string]$Output,
       [string]$Compiler = $env:AI_QUOTA_ISCC)
 $ErrorActionPreference = 'Stop'
+if ($PSVersionTable.PSVersion.Major -le 5) {
+    $env:PSModulePath = (Join-Path $PSHOME 'Modules') + ';' + $env:PSModulePath
+}
 $outputRoot = [IO.Path]::GetFullPath($Output)
 New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null
 if (-not $Compiler) {

@@ -7,6 +7,10 @@ param(
     [switch]$NoShortcut
 )
 $ErrorActionPreference = 'Stop'
+if ($PSVersionTable.PSVersion.Major -le 5) {
+    # Agents/CI may pass PS7-only PSModulePath to Windows PowerShell 5.
+    $env:PSModulePath = (Join-Path $PSHOME 'Modules') + ';' + $env:PSModulePath
+}
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 $watch = [Diagnostics.Stopwatch]::StartNew()
 $source = $PSScriptRoot
