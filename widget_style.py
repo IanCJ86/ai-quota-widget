@@ -12,17 +12,17 @@ def _palette(label, bg, card, text, muted, border, accent, brands,
 # Stable config IDs: old dark/light preferences become the two lunar skins.
 THEMES = {
     "dark": _palette("月之暗面", "#11151c", "#1b222c", "#f1f4f8", "#b1bccb", "#303b49", "#c6ddff",
-                     ("#9cc6ff", "#d0b5ff", "#97dbbf", "#a7b8ff"), "#f4ba66", "#ff9191"),
+                     ("#9cc6ff", "#d0b5ff", "#d8dfea", "#a7b8ff"), "#f4ba66", "#ff9191"),
     "light": _palette("月之亮面", "#eff3f8", "#ffffff", "#152438", "#536277", "#d6dee9", "#234f86",
-                      ("#285785", "#6c4586", "#1e674e", "#354e98"), "#875100", "#ac2634"),
+                      ("#285785", "#6c4586", "#34435a", "#354e98"), "#875100", "#ac2634"),
     "steam": _palette("蒸汽算力机", "#211b16", "#322920", "#ffe8b6", "#cfb894", "#a8844f", "#e5b768",
                       ("#f3d595", "#f3d595", "#f3d595", "#f3d595"), "#ffc16b", "#ff9c8e", "ridge", 2),
     "fuel": _palette("Token 加油站", "#101f28", "#1a303b", "#f5f8e9", "#b7c9d1", "#38515c", "#e1f278",
-                     ("#c6e8fb", "#c6e8fb", "#e1f278", "#c6e8fb"), "#ffd178", "#ffa398", border_width=1),
+                     ("#c6e8fb", "#c6e8fb", "#f0d6a2", "#c6e8fb"), "#ffd178", "#ffa398", border_width=1),
     "ink": _palette("电子墨水账本", "#e9e4d9", "#f6f2e8", "#272a26", "#55594f", "#b7b6aa", "#353e32",
-                    ("#353e32", "#353e32", "#353e32", "#353e32"), "#79520c", "#9a3030"),
+                    ("#353e32", "#353e32", "#373b44", "#353e32"), "#79520c", "#9a3030"),
     "glass": _palette("毛玻璃", "#2b2b3d", "#2b2b3d", "#f2f2f8", "#b8b8cc", "#55556e", "#b4cfff",
-                      ("#9cc6ff", "#d0b5ff", "#97dbbf", "#a7b8ff"), "#f4ba66", "#ff9191", border_width=1),
+                      ("#9cc6ff", "#d0b5ff", "#d8dfea", "#a7b8ff"), "#f4ba66", "#ff9191", border_width=1),
 }
 THEME_CHOICES = tuple((palette["LABEL"], key) for key, palette in THEMES.items())
 # Soft red/green on dark cards; darker equivalents retain contrast on light cards.
@@ -34,9 +34,9 @@ BG_CARD = "#262638"
 FG_DIM = "#7a7a90"
 FG_TEXT = "#e8e8f4"
 KIMI_BLUE = "#5b9dff"
-CODEX_GREEN = "#4ecf8a"
+CODEX_NEUTRAL = "#d8dfea"
 KIMI_BLUE_SOFT = "#8db4e8"
-CODEX_GREEN_SOFT = "#83d4ab"
+CODEX_NEUTRAL_SOFT = "#d8dfea"
 GLM_PURPLE = "#b48cff"
 GLM_PURPLE_SOFT = "#c9b3f2"
 DEEPSEEK_BLUE = "#4d6bfe"

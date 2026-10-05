@@ -1,7 +1,58 @@
 """Thread-owned Windows tray. Tk is only reached through a command queue."""
 import threading
+import queue
 from decimal import Decimal, ROUND_HALF_UP
 from quota_state import finite
+
+
+class CommandInbox(queue.SimpleQueue):
+    """Post to a private, withdrawn Tk message window; no worker calls Tcl.
+
+    Its WM_CLOSE protocol is a command signal, NOT the visible widget's close
+    operation. Tk dispatches the Python callback on its owner thread, including
+    unthreaded Windows Tcl builds. A slow timer still covers a failed message.
+    """
+    def __init__(self):
+        super().__init__()
+        self.closed = threading.Event()
+        self.window = None
+        self.hwnd = None
+        self.post = None
+
+    def put(self, value, block=True, timeout=None):
+        if self.closed.is_set():
+            return
+        super().put(value)
+        hwnd, post = self.hwnd, self.post
+        if hwnd and post:
+            try:
+                post(hwnd, 0x10, 0, 0)  # asynchronous, never SendMessage
+            except Exception:
+                pass  # command remains queued for the low-frequency fallback
+
+    def attach(self, root, callback):
+        """Main thread only; the internal window never maps onto the desktop."""
+        try:
+            import tkinter as tk
+            import ctypes
+            from ctypes import wintypes
+            channel = tk.Toplevel(root)
+            channel.withdraw()
+            channel.title('AIQuotaWidgetCommandChannel')
+            channel.protocol('WM_DELETE_WINDOW', callback)
+            channel.update_idletasks()
+            self.window = channel
+            self.hwnd = int(channel.wm_frame(), 16)
+            post = ctypes.windll.user32.PostMessageW
+            post.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+            post.restype = wintypes.BOOL
+            self.post = post
+        except Exception:
+            self.hwnd = self.post = None
+
+    def close(self):
+        self.closed.set()
+        self.hwnd = self.post = None
 
 
 def rounded_amount(value):

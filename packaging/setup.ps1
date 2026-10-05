@@ -4,7 +4,8 @@ param(
     [string]$Destination = (Join-Path $env:USERPROFILE '.ai-quota-widget-app'),
     [string]$ExistingDataDir = '',
     [switch]$NoLaunch,
-    [switch]$NoShortcut
+    [switch]$NoShortcut,
+    [switch]$NoRegistration
 )
 $ErrorActionPreference = 'Stop'
 if ($PSVersionTable.PSVersion.Major -le 5) {
@@ -18,6 +19,10 @@ $stage = $null
 $migrationStage = $null
 $installLock = $null
 $checkedPaths = @{}
+$registrationFiles=@{}
+$registryTouched=$false
+$registryBefore=$null
+$registryPath='Software\Microsoft\Windows\CurrentVersion\Uninstall\AIQuotaWidget'
 
 function Assert-NoLinks([string]$Path) {
     $cursor = [IO.Path]::GetFullPath($Path)
@@ -130,7 +135,7 @@ try {
     Assert-NoLinks (Join-Path $target 'bundle-manifest.json')
     Assert-NoLinks (Join-Path $target '.install-receipt.json')
     Copy-Item -LiteralPath (Join-Path $source 'bundle-manifest.json') -Destination (Join-Path $target 'bundle-manifest.json') -Force
-    @{product='AIQuotaWidget';version=$manifest.version;shortcuts=(-not $NoShortcut)} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $target '.install-receipt.json') -Encoding UTF8
+    @{product='AIQuotaWidget';version=$manifest.version;shortcuts=(-not $NoShortcut);registered=(-not $NoRegistration)} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $target '.install-receipt.json') -Encoding UTF8
     # Migration only when explicitly given a known old install by the user/agent.
     if ($ExistingDataDir) {
         $data = Join-Path $env:USERPROFILE '.ai-quota-widget'
@@ -170,9 +175,61 @@ try {
             }
         }
     }
+    # Shared root uninstaller, also used by ZIP/menu updates. Never track temp files.
+    $marker=Join-Path $root '.install-root.json'
+    $uninstaller=Join-Path $root 'uninstall.ps1'
+    Assert-NoLinks $marker
+    Assert-NoLinks $uninstaller
+    if(Test-Path -LiteralPath $marker){
+        $owner=Get-Content -LiteralPath $marker -Encoding UTF8 -Raw|ConvertFrom-Json
+        if($owner.product -ne 'AIQuotaWidget' -or $owner.root -ne $root -or $owner.schema -ne 1){throw '安装根目录回执冲突。'}
+    }elseif(Test-Path -LiteralPath $uninstaller){throw '已有非本程序的卸载文件，未覆盖。'}
+    if(-not $manifest.files.'uninstall.ps1'){throw '缺少卸载组件。'}
+    foreach($path in @($marker,$uninstaller)){
+        $registrationFiles[$path]=if(Test-Path -LiteralPath $path){[IO.File]::ReadAllBytes($path)}else{$null}
+    }
+    if(-not $NoRegistration){
+        $key=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($registryPath)
+        if($key){
+            try{
+                if($key.GetValue('InstallLocation') -ne $root){throw '已有另一个目录的安装，请先卸载或使用独立便携安装。'}
+                $registryBefore=@($key.GetValueNames()|ForEach-Object {[pscustomobject]@{Name=$_;Value=$key.GetValue($_);Kind=$key.GetValueKind($_)}})
+            }finally{$key.Dispose()}
+        }
+    }
+    Copy-Item -LiteralPath (Join-Path $source 'uninstall.ps1') -Destination $uninstaller -Force
+    @{schema=1;product='AIQuotaWidget';root=$root;registered=(-not $NoRegistration)}|ConvertTo-Json|Set-Content -LiteralPath $marker -Encoding UTF8
+    if(-not $NoRegistration){
+        $registryTouched=$true
+        $key=[Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($registryPath)
+        try{
+            $ps=Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+            $command='"'+$ps+'" -NoProfile -ExecutionPolicy Bypass -File "'+$uninstaller+'" -Destination "'+$root+'"'
+            $values=@{DisplayName='AI 额度监控';DisplayVersion=$manifest.version;Publisher='临界思潮';InstallLocation=$root;DisplayIcon=($exe+',0');UninstallString=$command;QuietUninstallString=($command+' -Silent');URLInfoAbout='https://github.com/IanCJ86/ai-quota-widget'}
+            foreach($name in $values.Keys){$key.SetValue($name,$values[$name],[Microsoft.Win32.RegistryValueKind]::String)}
+            foreach($name in @('NoModify','NoRepair')){$key.SetValue($name,1,[Microsoft.Win32.RegistryValueKind]::DWord)}
+        }finally{$key.Dispose()}
+    }
     Write-Host ('[4/4] 安装完成，用时 {0:N1} 秒。无需等待未配置账户的查询。' -f $watch.Elapsed.TotalSeconds)
     if (-not $NoLaunch) { Start-Process -FilePath $exe -WorkingDirectory $target -WindowStyle Hidden }
 } catch {
+    foreach($path in $registrationFiles.Keys){
+        if($null -ne $registrationFiles[$path]){[IO.File]::WriteAllBytes($path,$registrationFiles[$path])}
+        elseif(Test-Path -LiteralPath $path){Remove-Item -LiteralPath $path -Force}
+    }
+    if($registryTouched){
+        [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKey($registryPath,$false)
+        if($null -ne $registryBefore){
+            $key=[Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($registryPath)
+            try{foreach($value in $registryBefore){$key.SetValue($value.Name,$value.Value,$value.Kind)}}finally{$key.Dispose()}
+        }
+    }
+    foreach($link in $links){
+        if($link.Changed){
+            if($null -ne $link.Original){[IO.File]::WriteAllBytes($link.Path,$link.Original)}
+            elseif(Test-Path -LiteralPath $link.Path){Remove-Item -LiteralPath $link.Path -Force}
+        }
+    }
     Write-Host ('安装未完成：'+$_.Exception.Message) -ForegroundColor Red
     exit 1
 } finally {

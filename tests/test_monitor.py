@@ -742,7 +742,7 @@ class UITests(unittest.TestCase):
              patch.object(a, '_update_tray') as tray, patch.object(a.root, 'after') as after:
             a._poll_commands()
         self.assertNotEqual(a.root.state(), 'withdrawn')
-        after.assert_called_once_with(75, a._poll_commands)
+        after.assert_called_once_with(1000, a._poll_commands)
         tick.assert_not_called()
         debug.assert_not_called()
         tray.assert_not_called()
@@ -753,7 +753,7 @@ class UITests(unittest.TestCase):
         with patch.object(a.root, 'deiconify', side_effect=RuntimeError('test')), \
              patch.object(a.root, 'after') as after:
             a._poll_commands()
-        after.assert_called_once_with(75, a._poll_commands)
+        after.assert_called_once_with(1000, a._poll_commands)
         self.assertEqual(a._ui_error, 'RuntimeError')
 
     def test_tray_restores_before_idle_query_tick_with_real_tk_loop(self):

@@ -65,10 +65,9 @@ class Contracts(unittest.TestCase):
     def test_unknown_usage_is_not_zero(self):
         line=json.dumps({'time':time.time()*1000,'data':{'usage':{'renamedTotal':123}}}).encode()+b'\n'
         with tempfile.TemporaryDirectory() as folder:
-            (Path(folder)/'fake.jsonl.zstd').write_bytes(b'fake')
-            with patch.object(harness_stats,'open_log',return_value=io.BytesIO(line)):
-                with self.assertRaises(harness_stats.UsageSchemaError):
-                    harness_stats.totals(folder,strict=True)
+            (Path(folder)/'fake.jsonl.zstd').write_bytes(harness_stats._codec().compress(line))
+            with self.assertRaises(harness_stats.UsageSchemaError):
+                harness_stats.totals(folder,strict=True)
 
     def test_empty_logs_are_real_zero_and_budget_error_is_distinct(self):
         with tempfile.TemporaryDirectory() as folder:

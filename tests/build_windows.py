@@ -43,7 +43,7 @@ def build(output):
                    creationflags=subprocess.CREATE_NO_WINDOW)
     shutil.copy2(root/'LICENSE', app/'LICENSE')
     # Windows PowerShell 5 needs a BOM for Chinese script literals.
-    for name in ('setup.ps1','install.cmd'):
+    for name in ('setup.ps1','install.cmd','uninstall.ps1'):
         text = (root/'packaging'/name).read_text(encoding='utf-8-sig')
         (app/name).write_text(text,encoding='utf-8-sig' if name.endswith('.ps1') else 'utf-8')
     entries = {p.relative_to(app).as_posix():hashlib.sha256(p.read_bytes()).hexdigest()

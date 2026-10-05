@@ -53,6 +53,7 @@ begin
   end;
   if ExpandConstant('{param:NOLAUNCH|}') = '1' then Args := Args + ' -NoLaunch';
   if ExpandConstant('{param:NOSHORTCUT|}') = '1' then Args := Args + ' -NoShortcut';
+  if ExpandConstant('{param:NOREGISTRATION|}') = '1' then Args := Args + ' -NoRegistration';
   if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), Args,
       '', SW_HIDE, ewWaitUntilTerminated, ExitCode) then
     RaiseException('无法启动安装。个人配置和旧版已保留。');

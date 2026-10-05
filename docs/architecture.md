@@ -50,3 +50,9 @@ AI-Agent: Codex
 - `quota_update.py`：后台获取正式 Release，校验下载及逐文件清单；独立 CLI 确认接管就绪后 GUI 才退出，成功安装并启动才清理带安装回执的旧版本。失败恢复旧快捷方式和程序，用户数据不迁移、不重写。
 - `packaging/cli_entry.py` 与独立 PyInstaller Analysis：查询进程不携带/加载 Tk、Pillow、托盘代码。GUI 的离线依赖探测通过短暂 `--launch-check` 子进程完成，不显示窗口。
 - `packaging/installer.iss`：中文按用户安装向导，复用 ZIP 中同一个 `setup.ps1` 校验/提交过程。不提权、不增加自启；普通用户不安装编译器。构建端 Inno 7.1.0 下载具有固定 SHA256 与 Authenticode 检查。
+
+## v1.6 增量
+
+- `harness_stats.py`缓存完整帧且完整JSONL行的压缩偏移及计数；追加时先验证跳过前缀的SHA256，再只解码新增帧。不是只抽样头尾；压缩字节仍须读取校验。跨帧行、无换行EOF、改写、截断与扫描并发变化保守处理，不发布部分成功。
+- `CommandInbox`只向自己的隐藏消息窗口PostMessage；窗口WM_CLOSE协议是内部唤醒信号，不是主窗口关闭动作。Tk在主线程分发指令，兼容本机unthreaded Tcl；失败有1秒兜底，无额外常驻线程。卡片隐藏时不布局/检查DPI，恢复时先渲染最新数据。
+- 安装器在HKCU登记共享根目录卸载脚本，Setup/ZIP/菜单更新使用同一实现。注册与根回执冲突会拒绝覆盖；更新失败恢复卸载元数据。卸载不递归删除安装根目录，只处理产品版本回执确认的目录；配置默认保留。`-NoRegistration`供便携/隔离安装，不写系统应用入口。

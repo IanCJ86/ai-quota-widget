@@ -57,7 +57,7 @@ def smoke(old_bundle, new_bundle):
         new_version=json.loads((new_bundle/'bundle-manifest.json').read_text())['version']
         installed=root/'install'/('v'+old_version)
         shutil.copytree(old_bundle,installed)
-        (installed/'.install-receipt.json').write_text(json.dumps(dict(product='AIQuotaWidget',version=old_version,shortcuts=False)))
+        (installed/'.install-receipt.json').write_text(json.dumps(dict(product='AIQuotaWidget',version=old_version,shortcuts=False,registered=False)))
         env={k:v for k,v in os.environ.items() if k not in ('DEEPSEEK_API_KEY','GLM_API_KEY') and not k.startswith('AI_QUOTA_WIDGET_')}
         env.update(USERPROFILE=str(root),HOME=str(root),CODEX_HOME=str(root/'codex'),
                    AI_QUOTA_WIDGET_DATA_DIR=str(data))

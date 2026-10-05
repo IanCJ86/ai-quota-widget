@@ -33,7 +33,8 @@ with tempfile.TemporaryDirectory(prefix='quota-release-build-') as temporary:
     finalzip.write_bytes(archive.read_bytes())
     subprocess.run(['uv','build','--wheel','--out-dir',str(output),str(tree)],check=True)
     wheel=output/f'ai_quota_widget-{version}-py3-none-any.whl'
-    assets = [finalzip, wheel]
+    # Wheel is a build/test artifact, not a public install choice or checksum entry.
+    assets = [finalzip]
     if '--windows' in sys.argv:
         subprocess.run([sys.executable,str(tree/'tests/build_windows.py'),str(output)],check=True,cwd=tree)
         assets.append(output/f'ai-quota-widget-v{version}-windows-x64.zip')
