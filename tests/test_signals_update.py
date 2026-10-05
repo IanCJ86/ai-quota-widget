@@ -131,6 +131,7 @@ class UpdateTests(unittest.TestCase):
             old = root / ('v' + updates.APP_VERSION) / 'quota-widget.exe'
             old.parent.mkdir(parents=True)
             old.write_bytes(b'old')
+            (old.parent/'.install-receipt.json').write_text(json.dumps(dict(product='AIQuotaWidget',version=updates.APP_VERSION)))
             package = stage / 'package'; package.mkdir()
             for name in ('quota-widget.exe','quota-cli.exe','setup.ps1'):
                 (package/name).write_bytes(b'fixture')

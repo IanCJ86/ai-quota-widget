@@ -226,7 +226,7 @@ def trim_versions(root, keep):
         try:
             _reject_links(path)
             receipt = json.loads((path / '.install-receipt.json').read_text(encoding='utf-8-sig'))
-            if receipt != {'product': 'AIQuotaWidget', 'version': path.name[1:]}:
+            if receipt.get('product') != 'AIQuotaWidget' or receipt.get('version') != path.name[1:]:
                 continue
             # Check every descendant before any recursive deletion.
             for child in path.rglob('*'):
@@ -244,9 +244,16 @@ def apply_update(plan_path, parent):
     _reject_links(plan_path)
     plan = json.loads(plan_path.read_text(encoding='utf-8'))
     old = Path(plan['old']).resolve()
-    if old != Path(sys.executable).resolve().with_name('quota-widget.exe') or old.parent.name != 'v' + APP_VERSION:
+    if old != Path(sys.executable).resolve().with_name('quota-widget.exe'):
         raise ValueError('WrongUpdateOwner')
-    root = old.parent.parent
+    try:
+        receipt = json.loads((old.parent / '.install-receipt.json').read_text(encoding='utf-8-sig'))
+    except (OSError, ValueError):
+        receipt = {}
+    managed = (old.parent.name == 'v' + APP_VERSION and receipt.get('product') == 'AIQuotaWidget'
+               and receipt.get('version') == APP_VERSION)
+    root = old.parent.parent if managed else Path(os.environ['USERPROFILE']) / '.ai-quota-widget-app'
+    shortcuts_enabled = managed and receipt.get('shortcuts', True)
     _reject_links(root)
     package = stage / 'package'
     next_version = verify_bundle(package)
@@ -256,11 +263,14 @@ def apply_update(plan_path, parent):
     atomic_json(stage / 'owner.json', {'product': 'AIQuotaWidget', 'pid': os.getpid()})
     atomic_json(stage / 'ready.json', {'pid': os.getpid()})
     wait_parent(parent, old)
-    shortcuts = {path: path.read_bytes() if path.exists() else None for path in shortcut_paths()}
+    shortcuts = {path: path.read_bytes() if path.exists() else None for path in shortcut_paths()} if shortcuts_enabled else {}
     launched = None
     try:
-        result = subprocess.run(['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass',
-                                 '-File', str(package / 'setup.ps1'), '-Destination', str(root), '-NoLaunch'],
+        command = ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                   '-File', str(package / 'setup.ps1'), '-Destination', str(root), '-NoLaunch']
+        if not shortcuts_enabled:
+            command.append('-NoShortcut')
+        result = subprocess.run(command,
                                 timeout=120, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **NO_WINDOW)
         if result.returncode:
             raise RuntimeError('UpdateInstallFailed')

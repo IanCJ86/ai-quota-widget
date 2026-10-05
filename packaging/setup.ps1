@@ -130,7 +130,7 @@ try {
     Assert-NoLinks (Join-Path $target 'bundle-manifest.json')
     Assert-NoLinks (Join-Path $target '.install-receipt.json')
     Copy-Item -LiteralPath (Join-Path $source 'bundle-manifest.json') -Destination (Join-Path $target 'bundle-manifest.json') -Force
-    @{product='AIQuotaWidget';version=$manifest.version} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $target '.install-receipt.json') -Encoding UTF8
+    @{product='AIQuotaWidget';version=$manifest.version;shortcuts=(-not $NoShortcut)} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $target '.install-receipt.json') -Encoding UTF8
     # Migration only when explicitly given a known old install by the user/agent.
     if ($ExistingDataDir) {
         $data = Join-Path $env:USERPROFILE '.ai-quota-widget'
