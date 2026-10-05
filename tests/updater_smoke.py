@@ -87,12 +87,23 @@ def smoke(old_bundle, new_bundle):
             if helper and helper.poll() is None:helper.terminate();helper.wait(timeout=10)
             if old.poll() is None:old.terminate();old.wait(timeout=10)
             if new_pid:
-                # This PID came from our private state, and verify its executable.
-                import psutil
-                process=psutil.Process(new_pid)
                 expected=root/'install'/('v'+new_version)/'quota-widget.exe'
-                assert Path(process.exe()).resolve()==expected.resolve()
-                process.terminate();process.wait(timeout=10)
+                kernel=ctypes.WinDLL('kernel32',use_last_error=True)
+                kernel.OpenProcess.argtypes=[wintypes.DWORD,wintypes.BOOL,wintypes.DWORD]
+                kernel.OpenProcess.restype=wintypes.HANDLE
+                kernel.QueryFullProcessImageNameW.argtypes=[wintypes.HANDLE,wintypes.DWORD,wintypes.LPWSTR,ctypes.POINTER(wintypes.DWORD)]
+                kernel.TerminateProcess.argtypes=[wintypes.HANDLE,wintypes.UINT]
+                kernel.WaitForSingleObject.argtypes=[wintypes.HANDLE,wintypes.DWORD]
+                kernel.CloseHandle.argtypes=[wintypes.HANDLE]
+                handle=kernel.OpenProcess(0x100000|0x1000|1,False,new_pid)
+                assert handle
+                try:
+                    name=ctypes.create_unicode_buffer(32768);length=wintypes.DWORD(len(name))
+                    assert kernel.QueryFullProcessImageNameW(handle,0,name,ctypes.byref(length))
+                    assert Path(name.value).resolve()==expected.resolve()
+                    assert kernel.TerminateProcess(handle,0)
+                    assert kernel.WaitForSingleObject(handle,10000)==0
+                finally:kernel.CloseHandle(handle)
             if stage.exists():shutil.rmtree(stage)
 
 
