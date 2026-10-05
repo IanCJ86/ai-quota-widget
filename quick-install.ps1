@@ -1,7 +1,7 @@
 ﻿# One-command entrypoint. Fetch only official release assets; no Python/npm/pip.
 [CmdletBinding()]
 param([string]$Version = 'latest', [string]$ExistingDataDir = '', [string]$Destination = '',
-      [switch]$NoLaunch, [switch]$NoShortcut, [switch]$AllowPrerelease)
+      [switch]$NoLaunch, [switch]$NoShortcut, [switch]$NoRegistration, [switch]$AllowPrerelease)
 $ErrorActionPreference = 'Stop'
 if ($PSVersionTable.PSVersion.Major -le 5) {
     $env:PSModulePath = (Join-Path $PSHOME 'Modules') + ';' + $env:PSModulePath
@@ -40,6 +40,7 @@ try {
     $unpack = Join-Path $temporary 'package'
     Expand-Archive -LiteralPath $zip -DestinationPath $unpack
     $options = @{NoLaunch=$NoLaunch;NoShortcut=$NoShortcut}
+    if ($NoRegistration) { $options.NoRegistration=$true }
     if ($Destination) { $options.Destination = $Destination }
     if ($ExistingDataDir) { $options.ExistingDataDir = $ExistingDataDir }
     & (Join-Path $unpack 'setup.ps1') @options

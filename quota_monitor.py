@@ -31,7 +31,7 @@ if __name__ == '__main__' and sys.argv[1:] and sys.argv[1] != '--query':
     raise SystemExit(main())
 from widget_style import (
     TRANSP_KEY, THEMES, THEME_CHOICES, BG, BG_CARD, FG_DIM, FG_TEXT,
-    KIMI_BLUE, CODEX_GREEN, KIMI_BLUE_SOFT, CODEX_GREEN_SOFT,
+    KIMI_BLUE, CODEX_NEUTRAL, KIMI_BLUE_SOFT, CODEX_NEUTRAL_SOFT,
     GLM_PURPLE, GLM_PURPLE_SOFT, DEEPSEEK_BLUE, DEEPSEEK_SOFT,
     FONT_TITLE, FONT_TEXT, FONT_VALUE, FONT_STATUS, MONEY_PAD,
     TITLE_RESERVE_MAX, TITLE_GAP, TITLE_SLACK,
@@ -52,7 +52,7 @@ if not HEADLESS_MODE:
     from tkinter import font as tkfont
     from widget_settings import SettingsController
     from widget_windows import WindowEffects
-    from widget_tray import TrayIcon
+    from widget_tray import TrayIcon, CommandInbox
     from widget_themes import ThemePainter
     from widget_viewport import Viewport, work_area, clamp_rect
 
@@ -1012,7 +1012,8 @@ class App:
         self.last_ok = None
         self.instance = instance
         self._closed = False
-        self._commands = queue.SimpleQueue()
+        self._commands = CommandInbox()
+        self._commands.attach(self.root, lambda: self._poll_commands(reschedule=False))
         self._verified = set()
         self._success_at = {}
         self._diagnostics = {}
@@ -1047,7 +1048,7 @@ class App:
         self._section(3, "GLM", GLM_PURPLE, [("g5", "每5小时"), ("gw", "每周")])
         self._divider2 = tk.Frame(self.content, bg="#3a3a4e", height=1)
         self._divider2.grid(row=4, column=0, sticky="ew", padx=10, pady=1)
-        self._section(5, "Codex", CODEX_GREEN,
+        self._section(5, "Codex", CODEX_NEUTRAL,
                       [("c5", "每5小时"), ("cw", "每周"),
                        ("cr_credit", "重置券"), ("cr_main", "Tibo雷达")])
         self._divider3 = tk.Frame(self.content, bg="#3a3a4e", height=1)
@@ -1164,7 +1165,7 @@ class App:
         self.refresh_async()
         self._write_debug()  # startup evidence also exists when no source is configured
         self.root.after(100, self._poll)
-        self.root.after(75, self._poll_commands)
+        self.root.after(1000, self._poll_commands)
         if self._first_run:
             self.root.after(200, self._setup_sources)
 
@@ -1275,6 +1276,7 @@ class App:
         if self._closed:
             return
         self._closed = True
+        self._commands.close()
         self.scheduler.close()  # Reap only our Job Object trees, never other Codex tasks.
         # Nothing may run after destroy(): a callback that outlives its
         # interpreter only produces Tcl "invalid command name" noise.
@@ -1604,8 +1606,9 @@ class App:
         self.scheduler.configure(self._enabled_sources())
         self.scheduler.refresh()
         self.scheduler.tick()
-        self._render()
-        self._fit()
+        if self.root.state() != 'withdrawn':
+            self._render()
+            self._fit()
         self._write_debug()
 
     def _enabled_sources(self):
@@ -1739,8 +1742,9 @@ class App:
             # External env/file changes may happen while a worker is running.
             # Never stamp an old response with the newly selected account ID.
             self._sync_credentials()
-            self._render()
-            self._fit()
+            if self.root.state() != 'withdrawn':
+                self._render()
+                self._fit()
             self._write_debug()
             return
         if payload.get("ok"):
@@ -1772,8 +1776,9 @@ class App:
             self.errors[name] = payload.get("error", "QueryFailed")
         self._diagnostics[name] = diagnostics
         try:
-            self._render()
-            self._fit()
+            if self.root.state() != 'withdrawn':
+                self._render()
+                self._fit()
             self._update_tray()
             if self._ui_error not in ('CacheWriteFailed',):
                 self._ui_error = None
@@ -1801,7 +1806,7 @@ class App:
         except Exception:
             pass
 
-    def _poll_commands(self):
+    def _poll_commands(self, reschedule=True):
         """Cheap UI-only pump: tray restore never waits for the idle query timer.
 
         No file reads, images or network work while idle. Tk stays on its owner
@@ -1814,7 +1819,9 @@ class App:
                     self._quit()
                     return
                 if command == "show":
+                    self._render()
                     self.root.deiconify()
+                    self._fit()
                     self.root.lift()
                     self._redraw()
                 elif command == "refresh":
@@ -1823,14 +1830,16 @@ class App:
                     self.tray_controller.failed = True
                     self.root.deiconify()
             if self.instance and self.instance.requested():
+                self._render()
                 self.root.deiconify()
+                self._fit()
                 self.root.lift()
                 self._redraw()
         except Exception as ex:
             self._ui_error = type(ex).__name__
         finally:
-            if not self._closed:
-                self.root.after(75, self._poll_commands)
+            if reschedule and not self._closed:
+                self.root.after(1000, self._poll_commands)
 
     def _poll(self):
         """Query/maintenance timer, separate from latency-sensitive UI commands."""
@@ -1848,11 +1857,13 @@ class App:
             if self._closed:
                 return
             active_after = tuple(n for n,s in self.scheduler.states.items() if s['worker'] is not None)
+            visible = self.root.state() != 'withdrawn'
             if active_before != active_after:
-                self._render()
-                self._fit()
+                if visible:
+                    self._render()
+                    self._fit()
                 self._write_debug()
-            if self.viewport.update_dpi(self):
+            if visible and self.viewport.update_dpi(self):
                 self._fit()
             minute = int(time.time() // 60)
             if minute != self._last_render_minute:

@@ -236,6 +236,58 @@ def trim_versions(root, keep):
             continue
 
 
+REGISTRATION = r'Software\Microsoft\Windows\CurrentVersion\Uninstall\AIQuotaWidget'
+
+
+def registration_snapshot(root):
+    """Snapshot only this app's non-secret uninstall metadata for rollback."""
+    import winreg
+    root = Path(root)
+    files = {}
+    for name in ('uninstall.ps1', '.install-root.json'):
+        path = root / name
+        _reject_links(path)
+        if path.exists() and path.stat().st_size > 1024 * 1024:
+            raise ValueError('OversizedRegistrationMetadata')
+        files[name] = path.read_bytes() if path.exists() else None
+    values = None
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REGISTRATION) as key:
+            if Path(winreg.QueryValueEx(key, 'InstallLocation')[0]).resolve() != root.resolve():
+                return files, 'foreign'
+            values = []
+            for i in range(winreg.QueryInfoKey(key)[1]):
+                values.append(winreg.EnumValue(key, i))
+    except FileNotFoundError:
+        pass
+    return files, values
+
+
+def restore_registration(root, snapshot):
+    import winreg
+    files, values = snapshot
+    for name, content in files.items():
+        path = Path(root) / name
+        _reject_links(path)
+        if content is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_bytes(content)
+    if values == 'foreign':
+        return
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REGISTRATION) as key:
+            if Path(winreg.QueryValueEx(key, 'InstallLocation')[0]).resolve() != Path(root).resolve():
+                return
+        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, REGISTRATION)
+    except FileNotFoundError:
+        pass
+    if values is not None:
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, REGISTRATION) as key:
+            for name, value, kind in values:
+                winreg.SetValueEx(key, name, 0, kind, value)
+
+
 def apply_update(plan_path, parent):
     plan_path = Path(plan_path).resolve()
     stage = plan_path.parent
@@ -254,22 +306,27 @@ def apply_update(plan_path, parent):
                and receipt.get('version') == APP_VERSION)
     root = old.parent.parent if managed else Path(os.environ['USERPROFILE']) / '.ai-quota-widget-app'
     shortcuts_enabled = managed and receipt.get('shortcuts', True)
+    registration_enabled = managed and receipt.get('registered', True)
     _reject_links(root)
     package = stage / 'package'
     next_version = verify_bundle(package)
     if version(next_version) <= version(APP_VERSION):
         raise ValueError('NotAnUpgrade')
     new = root / ('v' + next_version) / 'quota-widget.exe'
+    # Any snapshot failure happens while the old GUI is STILL running.
+    shortcuts = {path: path.read_bytes() if path.exists() else None for path in shortcut_paths()} if shortcuts_enabled else {}
+    registration = registration_snapshot(root) if registration_enabled else None
     atomic_json(stage / 'owner.json', {'product': 'AIQuotaWidget', 'pid': os.getpid()})
     atomic_json(stage / 'ready.json', {'pid': os.getpid()})
     wait_parent(parent, old)
-    shortcuts = {path: path.read_bytes() if path.exists() else None for path in shortcut_paths()} if shortcuts_enabled else {}
     launched = None
     try:
         command = ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass',
                    '-File', str(package / 'setup.ps1'), '-Destination', str(root), '-NoLaunch']
         if not shortcuts_enabled:
             command.append('-NoShortcut')
+        if not registration_enabled:
+            command.append('-NoRegistration')
         result = subprocess.run(command,
                                 timeout=120, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **NO_WINDOW)
         if result.returncode:
@@ -305,6 +362,8 @@ def apply_update(plan_path, parent):
                 temp = path.with_suffix('.update-rollback.tmp')
                 temp.write_bytes(content)
                 os.replace(temp, path)
+        if registration is not None:
+            restore_registration(root, registration)
         subprocess.Popen([str(old)], cwd=old.parent, **NO_WINDOW)
         ctypes.windll.user32.MessageBoxW(None, '更新未完成，已恢复旧版。个人配置和 Key 未改动。', 'AI 额度监控', 0x10)
         return 1

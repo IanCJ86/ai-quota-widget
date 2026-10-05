@@ -23,6 +23,8 @@ jobs:
         run: ./tests/test_migration.ps1
       - shell: powershell
         run: ./tests/test_install.ps1 -PythonPath (Get-Command python.exe).Source
+      - shell: powershell
+        run: ./tests/test_uninstall.ps1
       - run: python -m pip wheel --no-deps . --wheel-dir dist
       - shell: powershell
         run: python tests/package_smoke.py (Get-ChildItem dist/*.whl | Select-Object -First 1).FullName

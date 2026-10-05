@@ -6,7 +6,7 @@ New-Item -ItemType Directory -Path $root | Out-Null
 try {
     $destination=Join-Path $root '安装目录 中文'
     $watch=[Diagnostics.Stopwatch]::StartNew()
-    $process=Start-Process -FilePath $installerPath -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/INSTALLROOT="'+$destination+'"'),'/NOLAUNCH=1','/NOSHORTCUT=1') -Wait -PassThru -WindowStyle Hidden
+    $process=Start-Process -FilePath $installerPath -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/INSTALLROOT="'+$destination+'"'),'/NOLAUNCH=1','/NOSHORTCUT=1','/NOREGISTRATION=1') -Wait -PassThru -WindowStyle Hidden
     if ($process.ExitCode -ne 0) { throw ('Setup.exe failed: '+$process.ExitCode) }
     $installed=@(Get-ChildItem -LiteralPath $destination -Directory)
     if ($installed.Count -ne 1) { throw 'No unique installed version' }

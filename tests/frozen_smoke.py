@@ -82,13 +82,13 @@ def smoke(bundle):
         destination=root/'安装 with spaces'
         started=time.monotonic()
         install_output=run([str(powershell),'-NoProfile','-ExecutionPolicy','Bypass','-File',str(bundle/'setup.ps1'),
-                           '-Destination',str(destination),'-NoLaunch','-NoShortcut'])
+                           '-Destination',str(destination),'-NoLaunch','-NoShortcut','-NoRegistration'])
         install_seconds=time.monotonic()-started
         installed=destination/('v'+version)
         assert (installed/'quota-widget.exe').is_file()
         # Default install must be visible outside an agent's AppData virtualization.
         run([str(powershell),'-NoProfile','-ExecutionPolicy','Bypass','-File',str(bundle/'setup.ps1'),
-             '-NoLaunch','-NoShortcut'])
+             '-NoLaunch','-NoShortcut','-NoRegistration'])
         assert (root/'.ai-quota-widget-app'/('v'+version)/'quota-widget.exe').is_file()
         # Empty first run must produce diagnostics and open Chinese setup.
         startup=subprocess.STARTUPINFO()
@@ -127,7 +127,7 @@ def smoke(bundle):
             assert snapshot['app_version']==version and snapshot['success_at']=={} and snapshot['active']==[]
             assert snapshot['ui_error'] is None, snapshot
             blocked = run([str(powershell),'-NoProfile','-ExecutionPolicy','Bypass','-File',str(bundle/'setup.ps1'),
-                           '-Destination',str(destination),'-NoLaunch','-NoShortcut'],(1,))
+                           '-Destination',str(destination),'-NoLaunch','-NoShortcut','-NoRegistration'],(1,))
             assert process.poll() is None, 'installer must not terminate a running widget'
             api.PostMessageW(setup,0x10,0,0)  # close setup = skip, without a forced key
             cfg=root/'data/config.json'
@@ -148,18 +148,18 @@ def smoke(bundle):
         # Idempotent offline install must preserve personal files byte for byte.
         before=hashlib.sha256(cfg.read_bytes()).hexdigest()
         run([str(powershell),'-NoProfile','-ExecutionPolicy','Bypass','-File',str(bundle/'setup.ps1'),
-             '-Destination',str(destination),'-NoLaunch','-NoShortcut'])
+             '-Destination',str(destination),'-NoLaunch','-NoShortcut','-NoRegistration'])
         assert hashlib.sha256(cfg.read_bytes()).hexdigest()==before
         license_file=installed/'LICENSE'
         license_file.write_bytes(b'fixture changed file')
         run([str(powershell),'-NoProfile','-ExecutionPolicy','Bypass','-File',str(bundle/'setup.ps1'),
-             '-Destination',str(destination),'-NoLaunch','-NoShortcut'],(1,))
+             '-Destination',str(destination),'-NoLaunch','-NoShortcut','-NoRegistration'],(1,))
         assert license_file.read_bytes()==b'fixture changed file', 'must not overwrite a conflicting existing version'
         old=root/'old source'; old.mkdir()
         (old/'config.json').write_bytes(b'{"theme":"steam"}')
         (old/'deepseek-key.dpapi').write_bytes(b'not-a-real-key-fixture')
         migration = [str(powershell),'-NoProfile','-ExecutionPolicy','Bypass','-File',str(bundle/'setup.ps1'),
-                     '-Destination',str(root/'migrated program'),'-ExistingDataDir',str(old),'-NoLaunch','-NoShortcut']
+                     '-Destination',str(root/'migrated program'),'-ExistingDataDir',str(old),'-NoLaunch','-NoShortcut','-NoRegistration']
         run(migration)
         for filename in ('config.json','deepseek-key.dpapi'):
             assert (old/filename).read_bytes()==(root/'.ai-quota-widget'/filename).read_bytes()

@@ -147,10 +147,13 @@ class UpdateTests(unittest.TestCase):
                 return Mock(returncode=0)
             with patch.object(updates.sys, 'executable', str(old.with_name('quota-cli.exe'))), \
                     patch.object(updates, 'wait_parent'), patch.object(updates, 'shortcut_paths', return_value=[shortcut]), \
+                    patch.object(updates, 'registration_snapshot', return_value=({'uninstall.ps1': b'old'}, [])) as snapshot, \
+                    patch.object(updates, 'restore_registration') as restore, \
                     patch.object(updates.subprocess, 'run', side_effect=installed), \
                     patch.object(updates.subprocess, 'Popen', side_effect=[new, restarted]) as launch, \
                     patch.object(updates.ctypes.windll.user32, 'MessageBoxW'), \
                     patch.object(updates.shutil, 'rmtree'):
                 self.assertEqual(updates.apply_update(plan, 123), 1)
                 self.assertEqual(shortcut.read_bytes(), b'old-link')
+                restore.assert_called_once_with(root, snapshot.return_value)
                 self.assertEqual(Path(launch.call_args.args[0][0]).resolve(), old.resolve())
