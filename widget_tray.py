@@ -38,6 +38,7 @@ class CommandInbox(queue.SimpleQueue):
             from ctypes import wintypes
             channel = tk.Toplevel(root)
             channel.withdraw()
+            channel.title('AIQuotaWidgetCommandChannel')
             channel.protocol('WM_DELETE_WINDOW', callback)
             channel.update_idletasks()
             self.window = channel

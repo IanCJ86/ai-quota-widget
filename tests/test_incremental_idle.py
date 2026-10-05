@@ -113,6 +113,7 @@ class IdleTests(unittest.TestCase):
         a._poll_commands()
         self.assertNotEqual(a.root.state(),'withdrawn')
         self.assertEqual(a._commands.window.state(),'withdrawn')
+        self.assertNotEqual(a._commands.window.title(), a.root.title())
 
     def test_brand_and_renewal_no_longer_consume_green_status(self):
         a=self.app

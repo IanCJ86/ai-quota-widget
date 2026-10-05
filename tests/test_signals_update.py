@@ -155,5 +155,5 @@ class UpdateTests(unittest.TestCase):
                     patch.object(updates.shutil, 'rmtree'):
                 self.assertEqual(updates.apply_update(plan, 123), 1)
                 self.assertEqual(shortcut.read_bytes(), b'old-link')
-                restore.assert_called_once_with(root, snapshot.return_value)
+                restore.assert_called_once_with(root.resolve(), snapshot.return_value)
                 self.assertEqual(Path(launch.call_args.args[0][0]).resolve(), old.resolve())
