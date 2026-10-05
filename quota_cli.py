@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import sys
 import time
+from functools import lru_cache
 from datetime import datetime
 from app_version import APP_VERSION
 from quota_state import SOURCES, ACCOUNT_SOURCES, source_status, window_expired, error_label, finite, credit_status, timestamp
@@ -137,9 +138,24 @@ def collect(m, fresh=False, factory=None):
                 source='fresh' if fresh else 'cache',sources=sources,errors=errors), code
 
 def module_available(name):
+    if getattr(sys, 'frozen', False) and Path(sys.executable).name.lower() == 'quota-cli.exe' and (
+            name in ('tkinter', 'PIL', 'pystray') or name.startswith('widget_') and name != 'widget_style'):
+        return gui_runtime_ok()
     try:
         return importlib.util.find_spec(name) is not None
     except (ValueError, ModuleNotFoundError):
+        return False
+
+
+@lru_cache(maxsize=1)
+def gui_runtime_ok():
+    import subprocess
+    try:
+        result = subprocess.run([str(Path(sys.executable).with_name('quota-widget.exe')), '--launch-check'],
+                                timeout=15, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                creationflags=0x08000000)
+        return result.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
         return False
 
 def doctor(m):
@@ -256,6 +272,8 @@ def main(argv=None):
         return 0
     if args.launch_check:
         if getattr(sys, 'frozen', False):
+            if Path(sys.executable).name.lower() == 'quota-cli.exe':
+                return 0 if gui_runtime_ok() else 2
             try:
                 import tkinter, PIL, pystray
             except (ImportError, OSError):

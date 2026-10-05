@@ -66,7 +66,8 @@ def smoke(bundle):
         cli = bundle/'quota-cli.exe'
         version=run([str(cli),'--version']).strip()
         report=run([str(cli),'--doctor'],(1,))
-        assert '16/16' in report and '未检测到' in report and ' 缺失' not in report, report
+        module_count = len((bundle/'_internal/runtime-files.txt').read_text(encoding='utf-8').splitlines())
+        assert f'{module_count}/{module_count}' in report and '未检测到' in report and ' 缺失' not in report, report
         run([str(cli),'--launch-check'])
         # Exercise the real frozen worker command, pipes, job object and payload.
         with patch.dict(os.environ,env,clear=True), patch.object(sys,'frozen',True,create=True), patch.object(sys,'executable',str(bundle/'quota-widget.exe')):

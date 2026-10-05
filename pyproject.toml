@@ -15,7 +15,7 @@ quota_monitor = "quota_cli:main"
 
 [tool.setuptools]
 packages = ["quota_assets", "quota_build"]
-py-modules = ["app_version", "quota_cli", "quota_install", "quota_state", "quota_paths", "quota_monitor", "monitor_runtime", "harness_stats", "widget_dialogs", "widget_settings", "widget_style", "widget_themes", "widget_tray", "widget_windows", "widget_viewport", "widget_onboarding"]
+py-modules = ["app_version", "quota_cli", "quota_install", "quota_state", "quota_signals", "quota_update", "quota_paths", "quota_monitor", "monitor_runtime", "harness_stats", "widget_dialogs", "widget_settings", "widget_style", "widget_themes", "widget_tray", "widget_windows", "widget_viewport", "widget_onboarding"]
 
 [tool.setuptools.dynamic]
 version = {attr = "app_version.APP_VERSION"}

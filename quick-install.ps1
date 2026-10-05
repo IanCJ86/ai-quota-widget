@@ -3,6 +3,9 @@
 param([string]$Version = 'latest', [string]$ExistingDataDir = '', [string]$Destination = '',
       [switch]$NoLaunch, [switch]$NoShortcut, [switch]$AllowPrerelease)
 $ErrorActionPreference = 'Stop'
+if ($PSVersionTable.PSVersion.Major -le 5) {
+    $env:PSModulePath = (Join-Path $PSHOME 'Modules') + ';' + $env:PSModulePath
+}
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 $previousProgress = $ProgressPreference
 $temporary = $null

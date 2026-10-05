@@ -24,13 +24,13 @@
 
 **Windows 10/11 x64，无需 Python、Node.js 或 Git。**
 
-1. 打开[最新正式版下载页](https://github.com/IanCJ86/ai-quota-widget/releases/latest)，下载名称以 **`windows-x64.zip`** 结尾的成品包。
-2. 完整解压，双击 **`install.cmd`**；也可直接打开包内的 `quota-widget.exe`。
+1. 打开[最新正式版下载页](https://github.com/IanCJ86/ai-quota-widget/releases/latest)，下载名称以 **`Setup.exe`** 结尾的安装包，双击即可安装。
+2. 想用便携版？下载 **`windows-x64.zip`**，完整解压后打开 `quota-widget.exe`；也可用包内 `install.cmd` 安装。
 3. 在中文“快速设置”中选择需要的账户。已有登录会尝试识别，Key 在本机填写，也可以稍后设置。
 
-只需连接你用的服务，不必安装所有 CLI。升级前右键“退出”旧版，再运行安装器，个人配置保留。
+只需连接你用的服务，不必安装所有 CLI。已安装用户可右键“检查更新”，有新版时点“更新到…”；下载校验后自动切换，失败恢复旧版，个人配置保留。
 
-安装失败？先看[排错说明](docs/cli-and-install.md)。普通用户只选 `windows-x64.zip`；`windows-source.zip` 和 `.whl` 供开发者使用，`quick-install.ps1` 是可选快装脚本。
+安装失败？先看[排错说明](docs/cli-and-install.md)。普通用户选 `Setup.exe` 或 `windows-x64.zip`；`windows-source.zip` 供开发者使用，`quick-install.ps1` 是可选快装脚本。
 
 想让 AI 帮你安装？复制这段：
 
@@ -52,6 +52,7 @@ $installer = Join-Path $env:TEMP 'ai-quota-quick-install.ps1'; Invoke-WebRequest
 - 悬浮显示，托盘也能看剩余额度；双击刷新，右键调整账户、主题、套餐显示名和续订日期。
 - 自动定时查询；网络失败保留并标记旧数据，不把历史数字当作新结果。
 - 点击 **✕** 隐藏到托盘，点击托盘图标恢复；真正退出请用右键菜单。
+- DeepSeek 时段：绿色“梁文谷”、红色“梁文锋”，显示距下次峰谷切换的时间。Codex 新发现的重置券张数红色保持 24 小时，24 小时内到期的日期也变红；不弹通知。
 - 可选 Codex 重置雷达来自 [codexreset.org](https://codexreset.org)，是第三方预测，不是官方承诺，也不是你的个人重置通知。
 
 **读数说明：** DeepSeek“今日估算”来自余额变化，不是官方账单，也不需要额外网页登录授权。当天已有采样时，关闭后再打开可补算余额下降；首次采样前、跨天及充值抵消的消费不能完整还原。`tok` 只统计本机 Harness。Codex 数据可能是本机快照，存在滞后。

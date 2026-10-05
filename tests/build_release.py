@@ -37,6 +37,7 @@ with tempfile.TemporaryDirectory(prefix='quota-release-build-') as temporary:
     if '--windows' in sys.argv:
         subprocess.run([sys.executable,str(tree/'tests/build_windows.py'),str(output)],check=True,cwd=tree)
         assets.append(output/f'ai-quota-widget-v{version}-windows-x64.zip')
+        assets.append(output/f'ai-quota-widget-v{version}-Setup.exe')
         quick=output/'quick-install.ps1'
         quick.write_text((tree/'quick-install.ps1').read_text(encoding='utf-8-sig'),encoding='utf-8-sig')
         assets.append(quick)

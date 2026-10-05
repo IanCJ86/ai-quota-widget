@@ -43,3 +43,10 @@
 测试入口 `tests/render_themes.py OUTPUT_DIR [100|125|150|200]` 使用隔离桌面和固定假数据生成真实 Tk 截图，并检查抬头文字边界。默认不触碰真实账户、缓存或托盘。五套100%预览保存在 `docs/themes/`；高倍缩放及单元/安装测试结果见 PR。界面偏好仍待用户验收，截图通过不等于长期真实桌面稳定性证明。
 
 AI-Agent: Codex
+
+## v1.5 增量
+
+- `quota_signals.py`：无 GUI、无网络的峰谷倒计时、重置券身份摘要与发现时间；观察状态与原 Codex 缓存一起原子保存。
+- `quota_update.py`：后台获取正式 Release，校验下载及逐文件清单；独立 CLI 确认接管就绪后 GUI 才退出，成功安装并启动才清理带安装回执的旧版本。失败恢复旧快捷方式和程序，用户数据不迁移、不重写。
+- `packaging/cli_entry.py` 与独立 PyInstaller Analysis：查询进程不携带/加载 Tk、Pillow、托盘代码。GUI 的离线依赖探测通过短暂 `--launch-check` 子进程完成，不显示窗口。
+- `packaging/installer.iss`：中文按用户安装向导，复用 ZIP 中同一个 `setup.ps1` 校验/提交过程。不提权、不增加自启；普通用户不安装编译器。构建端 Inno 7.1.0 下载具有固定 SHA256 与 Authenticode 检查。
