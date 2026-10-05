@@ -115,13 +115,14 @@ class IdleTests(unittest.TestCase):
         self.assertEqual(a._commands.window.state(),'withdrawn')
         self.assertNotEqual(a._commands.window.title(), a.root.title())
 
-    def test_brand_and_renewal_no_longer_consume_green_status(self):
+    def test_titles_share_deepseek_color_and_do_not_consume_status_colors(self):
         a=self.app
         for name,palette in fixtures.monitor.THEMES.items():
             a._set_theme(name)
             self.assertNotEqual(palette['CODEX_SOFT'],palette['RADAR_DOWN'])
-            if name in ('dark','glass'):
-                self.assertEqual(a.section_titles['Codex'].cget('fg'),'#d8dfea')
+            for title in a.section_titles.values():
+                self.assertEqual(title.cget('fg'),palette['DEEPSEEK_SOFT'])
+                self.assertNotIn(title.cget('fg'),(palette['RADAR_UP'],palette['RADAR_DOWN']))
 
 
 class EventTests(unittest.TestCase):

@@ -4,7 +4,8 @@ TRANSP_KEY = "#010102"  # glass colorkey: root pixels of this color go transpare
 def _palette(label, bg, card, text, muted, border, accent, brands,
              warning, danger, relief="flat", border_width=0):
     return dict(LABEL=label, BG=bg, BG_CARD=card, FG_TEXT=text, FG_DIM=muted,
-                BORDER=border, ACCENT=accent, BRANDS=dict(zip(("Kimi", "GLM", "Codex", "DeepSeek"), brands)),
+                BORDER=border, ACCENT=accent,
+                BRANDS=dict.fromkeys(("Kimi", "GLM", "Codex", "DeepSeek"), brands[3]),
                 KIMI_SOFT=brands[0], GLM_SOFT=brands[1], CODEX_SOFT=brands[2], DEEPSEEK_SOFT=brands[3],
                 WARNING=warning, DANGER=danger, RELIEF=relief, BORDER_WIDTH=border_width)
 
