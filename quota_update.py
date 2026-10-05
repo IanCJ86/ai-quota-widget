@@ -101,6 +101,42 @@ def file_hash(path):
     return digest.hexdigest()
 
 
+def cleanup_interrupted_download(data):
+    """Reap a recorded app-owned stage only after its owning process is gone."""
+    if os.name != 'nt' or not data:
+        return
+    pointer = Path(data) / 'update-stage.json'
+    try:
+        _reject_links(pointer)
+        stage = Path(json.loads(pointer.read_text(encoding='utf-8'))['stage']).resolve()
+        if stage.parent != Path(tempfile.gettempdir()).resolve() or not stage.name.startswith('aiquota-update-'):
+            return
+        if not stage.exists():
+            pointer.unlink()
+            return
+        _reject_links(stage)
+        owner = json.loads((stage / 'owner.json').read_text(encoding='utf-8'))
+        if owner.get('product') != 'AIQuotaWidget' or type(owner.get('pid')) is not int or owner['pid'] <= 0:
+            return
+        from ctypes import wintypes
+        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        handle = kernel.OpenProcess(0x100000, False, owner['pid'])
+        if handle:
+            kernel.CloseHandle(handle)
+            return
+        if ctypes.get_last_error() != 87:
+            return  # unknown/access denied is not proof that the owner exited
+        for child in stage.rglob('*'):
+            _reject_links(child)
+        shutil.rmtree(stage)
+        pointer.unlink()
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+
+
 def unpack_verified(archive, sums, name, destination):
     matches = re.findall(r'^([a-fA-F0-9]{64})\s+' + re.escape(name) + r'\s*$', sums, re.M)
     if len(matches) != 1 or file_hash(archive) != matches[0].lower():
@@ -217,6 +253,7 @@ def apply_update(plan_path, parent):
     if version(next_version) <= version(APP_VERSION):
         raise ValueError('NotAnUpgrade')
     new = root / ('v' + next_version) / 'quota-widget.exe'
+    atomic_json(stage / 'owner.json', {'product': 'AIQuotaWidget', 'pid': os.getpid()})
     atomic_json(stage / 'ready.json', {'pid': os.getpid()})
     wait_parent(parent, old)
     shortcuts = {path: path.read_bytes() if path.exists() else None for path in shortcut_paths()}
@@ -283,6 +320,7 @@ class UpdateController:
         self.next_check = time.monotonic() + 60
         self.enabled = bool(getattr(sys, 'frozen', False))
         if self.enabled and self.data:
+            cleanup_interrupted_download(self.data)
             try:
                 last = json.loads((self.data / 'update-state.json').read_text(encoding='utf-8'))['checked_at']
                 remaining = last + 86400 - time.time()
@@ -309,6 +347,9 @@ class UpdateController:
                 self.events.put(('checked', check_latest()))
                 return
             stage = Path(tempfile.mkdtemp(prefix='aiquota-update-'))
+            atomic_json(stage / 'owner.json', {'product': 'AIQuotaWidget', 'pid': os.getpid()})
+            if self.data:
+                atomic_json(self.data / 'update-stage.json', {'stage': str(stage)})
             archive = stage / 'app.zip'
             download(release['zip'], archive, limit=128 * 1024 * 1024)
             sums = download(release['sums']).decode('utf-8-sig')

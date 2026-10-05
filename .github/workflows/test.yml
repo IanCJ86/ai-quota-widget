@@ -37,4 +37,6 @@ jobs:
       - run: python tests/build_windows.py dist/standalone
       - run: python tests/frozen_smoke.py dist/standalone/frozen/AIQuotaWidget
       - shell: powershell
+        run: ./tests/test_setup_exe.ps1 -Installer (Get-ChildItem dist/standalone/*Setup.exe | Select-Object -First 1).FullName
+      - shell: powershell
         run: ./tests/test_quick_install.ps1 -ZipPath (Get-ChildItem dist/standalone/*windows-x64.zip | Select-Object -First 1).FullName
