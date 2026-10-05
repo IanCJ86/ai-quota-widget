@@ -152,4 +152,4 @@ class UpdateTests(unittest.TestCase):
                     patch.object(updates.shutil, 'rmtree'):
                 self.assertEqual(updates.apply_update(plan, 123), 1)
                 self.assertEqual(shortcut.read_bytes(), b'old-link')
-                self.assertEqual(launch.call_args.args[0], [str(old)])
+                self.assertEqual(Path(launch.call_args.args[0][0]).resolve(), old.resolve())
