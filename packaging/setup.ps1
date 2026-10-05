@@ -13,6 +13,17 @@ $source = $PSScriptRoot
 $stage = $null
 $migrationStage = $null
 $installLock = $null
+$checkedPaths = @{}
+
+function Assert-NoLinks([string]$Path) {
+    $cursor = [IO.Path]::GetFullPath($Path)
+    while ($cursor) {
+        if ($checkedPaths.ContainsKey($cursor)) { break }
+        if ((Test-Path -LiteralPath $cursor) -and ((Get-Item -LiteralPath $cursor -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw '安装文件路径不能包含重解析链接。' }
+        $checkedPaths[$cursor] = $true
+        $cursor = [IO.Path]::GetDirectoryName($cursor)
+    }
+}
 
 function Invoke-DataMigration([string]$OldDirectory, [string]$DataDirectory) {
     if (-not (Test-Path -LiteralPath $OldDirectory -PathType Container)) { throw '旧数据目录不存在或不是文件夹，未迁移。' }
@@ -86,14 +97,17 @@ try {
     if ($entries.Count -lt 3 -or -not $manifest.files.'quota-widget.exe' -or -not $manifest.files.'quota-cli.exe') { throw '安装包文件清单不完整。' }
     foreach ($entry in $entries) {
         $file = [IO.Path]::GetFullPath((Join-Path $source $entry.Name))
+        Assert-NoLinks $file
         if (-not $file.StartsWith($source.TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase) -or $entry.Value -notmatch '^[a-fA-F0-9]{64}$') { throw '安装包路径或校验值无效。' }
         if ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ne $entry.Value) { throw '安装包校验失败，请重新下载。' }
     }
     New-Item -ItemType Directory -Path $root -Force | Out-Null
     $target = Join-Path $root ('v'+$manifest.version)
+    Assert-NoLinks $target
     Write-Host '[2/4] 安装软件（保留个人配置）'
     if (Test-Path -LiteralPath $target) {
         foreach ($entry in $entries) {
+            Assert-NoLinks (Join-Path $target $entry.Name)
             if ((Get-FileHash -LiteralPath (Join-Path $target $entry.Name) -Algorithm SHA256).Hash -ne $entry.Value) { throw '该版本的已有文件与成品包不同，未覆盖。请使用新的独立目录。' }
         }
     } else {
@@ -108,6 +122,11 @@ try {
         Move-Item -LiteralPath $stage -Destination $target
         $stage = $null
     }
+    # Machine-owned receipt allows future updates to trim only our own versions.
+    Assert-NoLinks (Join-Path $target 'bundle-manifest.json')
+    Assert-NoLinks (Join-Path $target '.install-receipt.json')
+    Copy-Item -LiteralPath (Join-Path $source 'bundle-manifest.json') -Destination (Join-Path $target 'bundle-manifest.json') -Force
+    @{product='AIQuotaWidget';version=$manifest.version} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $target '.install-receipt.json') -Encoding UTF8
     # Migration only when explicitly given a known old install by the user/agent.
     if ($ExistingDataDir) {
         $data = Join-Path $env:USERPROFILE '.ai-quota-widget'

@@ -54,6 +54,9 @@ def build(output):
         for p in sorted(app.rglob('*')):
             if p.is_file(): z.write(p, p.relative_to(app).as_posix())
     print(json.dumps({'file':str(archive),'sha256':hashlib.sha256(archive.read_bytes()).hexdigest(),'bytes':archive.stat().st_size}))
+    subprocess.run(['powershell.exe','-NoProfile','-ExecutionPolicy','Bypass','-File',
+                    str(root/'tests/build_installer.ps1'),'-Bundle',str(app),'-Output',str(output)],
+                   check=True, env=env)
 
 
 if __name__ == '__main__':

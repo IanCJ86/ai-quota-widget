@@ -2,6 +2,8 @@ app_version.py
 quota_cli.py
 quota_install.py
 quota_state.py
+quota_signals.py
+quota_update.py
 quota_paths.py
 harness_stats.py
 monitor_runtime.py

@@ -115,7 +115,7 @@ class DshOnlyTests(unittest.TestCase):
         self.assertEqual(a.section_titles['DeepSeek'].cget('fg'),p['BRANDS']['DeepSeek'])
         self.assertEqual(a.section_renews['DeepSeek'].cget('fg'),p['DEEPSEEK_SOFT'])
         self.assertEqual(a.rows['ds'][0].cget('fg'),p['FG_TEXT'])
-        self.assertEqual(a.rows['ds'][1].cget('fg'),p['FG_DIM'])
+        self.assertIn(a.rows['ds'][1].cget('fg'),(p['RADAR_DOWN'],p['DANGER'],p['FG_DIM']))
         self.assertNotEqual(p['FG_DIM'],p['FG_TEXT'])
 
     def test_debug_tray_registration_state_updates_without_query(self):

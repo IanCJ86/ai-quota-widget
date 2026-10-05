@@ -23,6 +23,7 @@ from app_version import APP_VERSION, USER_AGENT
 from quota_paths import data_locations, resolve_data_dir, migrate_data
 from quota_state import (source_status, window_expired, error_label, finite,
                          validate_config, credit_status, refresh_notice)
+from quota_signals import tariff_status, voucher_fingerprints, observe_vouchers, voucher_colors
 
 # CLI dispatch precedes GUI imports and config/credential access.
 if __name__ == '__main__' and sys.argv[1:] and sys.argv[1] != '--query':
@@ -209,7 +210,7 @@ _CODEX_ACTIVE_PROCESS = None
 # colors
 # DeepSeek doubles its prices during weekday peak windows (Beijing time); the
 # balance row says which regime the last refresh fell in.
-DEEPSEEK_PEAK = "梁文峰 时段"
+DEEPSEEK_PEAK = "梁文锋 时段"
 DEEPSEEK_OFFPEAK = "梁文谷 时段"
 BEIJING = timezone(timedelta(hours=8))
 # Local DeepSeek Harness transcripts, used for an optional "tokens today" figure.
@@ -508,6 +509,9 @@ def fetch_codex():
         # UI greys it instead of passing it off as the current value.
         "c_window_expired": bool(shown) and any(expired(w) for w in shown),
         "cr_credit_count": credit_count,
+        "cr_credit_tokens": voucher_fingerprints(credit.get('credits')),
+        "cr_credit_scope": hashlib.sha256(str(account.get('id') or account.get('email') or
+                                               CODEX_HOME).encode()).hexdigest(),
         "cr_credit_expiries": [e for e in expiries if finite(e)],
         "cr_credit_expiry": min([e for e in expiries if isinstance(e, (int, float))],
                                 default=None),
@@ -1002,6 +1006,7 @@ class App:
         self.topmost = tk.BooleanVar(value=True)
         self.data = {}
         self._radar_trends = {}
+        self._credit_observation = {}
         self._source_identities = {name: source_identity(name) for name in ('glm','deepseek','tokens')}
         self.errors = {}
         self.last_ok = None
@@ -1141,6 +1146,10 @@ class App:
         self.menu.add_cascade(label="主题", menu=tm)
         self.menu.add_separator()
         self.menu.add_command(label=f"版本 {APP_VERSION}", state="disabled")
+        from quota_update import UpdateController
+        self.updater = UpdateController(self, os.path.dirname(CONFIG_FILE))
+        self.menu.add_command(label="检查更新", command=self.updater.request)
+        self.updater.menu_index = self.menu.index('end')
         self.menu.add_command(label='复制脱敏诊断', command=self._copy_diagnostics)
         self.menu.add_command(label="退出", command=self._quit)
 
@@ -1692,6 +1701,8 @@ class App:
                         data = dict(data)
                         data.pop("ds_spend", None)  # legacy cache has no trustworthy day
                     self.data.update(data)
+                    if name == 'codex':
+                        self._credit_observation = record.get('vouchers', {})
                     self._success_at[name] = stamp
                     if name == 'main':
                         trends = record.get('trends', {})
@@ -1719,6 +1730,8 @@ class App:
                    for name, stamp in self._success_at.items()}
         if 'main' in sources:
             sources['main']['trends'] = dict(self._radar_trends)
+        if 'codex' in sources:
+            sources['codex']['vouchers'] = dict(self._credit_observation)
         atomic_json(CACHE_FILE, {"version": 1, "sources": sources})
 
     def _on_result(self, name, payload, diagnostics):
@@ -1731,6 +1744,9 @@ class App:
             self._write_debug()
             return
         if payload.get("ok"):
+            if name == 'codex':
+                self._credit_observation = observe_vouchers(
+                    self._credit_observation, payload['data'], time.time())
             if name == 'main':
                 trends = getattr(self, '_radar_trends', {}).copy()
                 for key in ('cr_main24', 'cr_main48'):
@@ -1828,6 +1844,9 @@ class App:
                 self._write_debug()
             active_before = tuple(n for n,s in self.scheduler.states.items() if s['worker'] is not None)
             self.scheduler.tick()
+            self.updater.tick()
+            if self._closed:
+                return
             active_after = tuple(n for n,s in self.scheduler.states.items() if s['worker'] is not None)
             if active_before != active_after:
                 self._render()
@@ -1965,14 +1984,15 @@ class App:
         show_credits = bool(CFG.get("show_codex_credits", True)) and bool(count or credit_note.startswith('已到期'))
         self._set_row_visible("cr_credit", show_credits)
         if show_credits:
-            note, color = credit_note, THEMES[self.theme]["FG_TEXT"]
+            note = credit_note
             if finite(expiry):
                 note = _fmt_day(expiry) + " 到期"
                 if credit_note:
                     note = _fmt_day(expiry) + ' ' + credit_note
-                if expiry - time.time() <= 7 * 86400:
-                    color = THEMES[self.theme]["WARNING"]     # about to expire
-            self._set_custom("cr_credit", f"{int(count or 0)} 张", note, color)
+            new, expiring = voucher_colors(self._credit_observation, time.time(), expiry)
+            self._set_custom("cr_credit", f"{int(count or 0)} 张", note,
+                             THEMES[self.theme]['DANGER' if new else 'FG_TEXT'])
+            self.rows['cr_credit'][1].config(fg=THEMES[self.theme]['DANGER' if expiring else 'FG_DIM'])
         self._set_row("g5", d.get("g5_pct"),
                       _countdown(d.get("g5_reset")) if d.get("g5_reset") else "")
         self._set_row("gw", d.get("gw_pct"), _fmt_reset(d.get("gw_reset")))
@@ -1988,13 +2008,18 @@ class App:
         if d.get("ds_balance") is not None:
             # Use the current clock, not the last balance refresh timestamp.
             if d.get("ds_available", True):
-                note = deepseek_peak_label()
+                note, peak = tariff_status(datetime.now(timezone.utc), DEEPSEEK_HOLIDAYS)
             else:
                 note = "账号不可用"
+                self.rows['ds'][1].config(fg=THEMES[self.theme]['FG_DIM'])
             self._set_amount("ds", d.get("ds_balance"), d.get("ds_currency") or "",
                              note, whole_width=whole_width)
+            if d.get('ds_available', True):
+                self.rows['ds'][1].config(fg=THEMES[self.theme][
+                    'DANGER' if peak else 'RADAR_DOWN' if peak is False else 'FG_DIM'])
         else:
             self._set_amount('ds', None, '')
+            self.rows['ds'][1].config(fg=THEMES[self.theme]['FG_DIM'])
         # Today's spend is estimated from balance changes, never colour-warned.
         # Its note shows how many tokens the local Harness used today, when that
         # can be read (see local_harness_tokens); otherwise it stays empty.
@@ -2040,7 +2065,8 @@ class App:
                 for key in keys:
                     self.rows[key][0].configure(text='--')
                     if key != 'ds_spend' or not token_note:
-                        self.rows[key][1].configure(text='未配置 Key' if source in ('glm','deepseek') else '未登录')
+                        self.rows[key][1].configure(text='未配置 Key' if source in ('glm','deepseek') else '未登录',
+                                                    fg=THEMES[self.theme]['FG_DIM'])
         if d.get('ds_spend_error'):
             self.rows['ds_spend'][0].configure(text='--')
             if not token_text:

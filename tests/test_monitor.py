@@ -981,9 +981,7 @@ class UITests(unittest.TestCase):
         self.assertEqual(a.section_titles["DeepSeek"].cget("text"), "DeepSeek")
         self.assertEqual(a.section_renews["DeepSeek"].cget("text"), "按量付费")
         self.assertEqual(a.rows["ds"][0].cget("text"), "¥119.90")
-        # the note reports which DeepSeek price regime the refresh fell into
-        self.assertIn(a.rows["ds"][1].cget("text"),
-                      (monitor.DEEPSEEK_PEAK, monitor.DEEPSEEK_OFFPEAK))
+        self.assertRegex(a.rows["ds"][1].cget("text"), r'^梁文[锋谷] (剩\d{2,}:\d{2}|·待日历)$')
         self.assertNotEqual(a.rows["ds"][0].cget("fg"), monitor.THEMES[a.theme]["WARNING"])
         with patch.dict(monitor.CFG, {"deepseek_low_balance": 200.0}):
             a._render()
@@ -1366,11 +1364,15 @@ class UITests(unittest.TestCase):
         self.assertTrue(shown(a.rows["cr_credit"][0]))
         self.assertEqual(a.rows["cr_credit"][0].cget("text"), "1 张")
         self.assertTrue(a.rows["cr_credit"][1].cget("text").endswith("到期"))
-        # Expiring inside a week is flagged.
+        # Three days is not urgent; only the DATE turns red within 24 hours.
         a._on_result("codex", {"ok": True, "data": {
             "cw_pct": 86, "cr_credit_count": 1,
             "cr_credit_expiry": time.time() + 3 * 86400}}, {})
-        self.assertEqual(a.rows["cr_credit"][0].cget("fg"), monitor.THEMES[a.theme]["WARNING"])
+        self.assertEqual(a.rows["cr_credit"][0].cget("fg"), monitor.THEMES[a.theme]["FG_TEXT"])
+        a._on_result("codex", {"ok": True, "data": {
+            "cw_pct": 86, "cr_credit_count": 1,
+            "cr_credit_expiry": time.time() + 3600}}, {})
+        self.assertEqual(a.rows["cr_credit"][1].cget("fg"), monitor.THEMES[a.theme]["DANGER"])
         # No vouchers left: the row disappears instead of showing 0.
         a._on_result("codex", {"ok": True, "data": {"cw_pct": 86, "cr_credit_count": 0}}, {})
         self.assertFalse(shown(a.rows["cr_credit"][0]))
