@@ -111,7 +111,7 @@ class IdentityTests(unittest.TestCase):
         for key_name, fetch, payload in cases:
             with self.subTest(provider=key_name), patch.object(monitor, key_name, return_value='fake'), \
                     patch.object(monitor, 'deepseek_spend', return_value=0), \
-                    patch.object(monitor.urllib.request, 'urlopen',
+                    patch.object(monitor, 'account_request',
                                  return_value=io.StringIO(json.dumps(payload))) as http:
                 fetch()
                 self.assertEqual(http.call_args.args[0].get_header('User-agent'), app_version.USER_AGENT)

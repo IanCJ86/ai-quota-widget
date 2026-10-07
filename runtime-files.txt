@@ -4,6 +4,7 @@ quota_install.py
 quota_state.py
 quota_signals.py
 quota_update.py
+quota_network.py
 quota_paths.py
 harness_stats.py
 monitor_runtime.py
@@ -16,3 +17,4 @@ widget_tray.py
 widget_windows.py
 widget_viewport.py
 widget_onboarding.py
+widget_network.py

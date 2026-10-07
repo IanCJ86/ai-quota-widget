@@ -14,7 +14,7 @@ headless = Analysis([str(root/'packaging/cli_entry.py')], pathex=[str(root)],
     binaries=[], datas=[], hiddenimports=['compression.zstd'], hookspath=[],
     excludes=['unittest','tkinter','_tkinter','PIL','pystray','numpy','scipy',
               'widget_dialogs','widget_settings','widget_windows','widget_tray',
-              'widget_viewport','widget_onboarding','widget_themes'], noarchive=False)
+              'widget_viewport','widget_onboarding','widget_network','widget_themes'], noarchive=False)
 cli = EXE(PYZ(headless.pure),headless.scripts,[],exclude_binaries=True,name='quota-cli',console=True,
           debug=False,bootloader_ignore_signals=False,strip=False,upx=False,
           manifest=str(root/'packaging/app.manifest'))

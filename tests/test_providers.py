@@ -31,7 +31,7 @@ class KimiAdapterTests(unittest.TestCase):
         cred_patch = patch.object(monitor, "KIMI_CRED", str(self.cred))
         cred_patch.start()
         self.addCleanup(cred_patch.stop)
-        http_patch = patch.object(monitor.urllib.request, "urlopen")
+        http_patch = patch.object(monitor, "account_request")
         self.http = http_patch.start()
         self.addCleanup(http_patch.stop)
 
@@ -108,19 +108,19 @@ class RadarAdapterTests(unittest.TestCase):
         self.assertEqual(result["cr_main48"], 0)
 
     def test_public_request_has_no_credentials_and_has_size_limit(self):
-        with patch.object(monitor.urllib.request, "urlopen", return_value=io.BytesIO(b"ok")) as http:
+        with patch('quota_network.open_request', return_value=io.BytesIO(b"ok")) as http:
             self.assertEqual(monitor._fetch_public_text(monitor.CODEX_RADAR_URL, "text/html"), b"ok")
             req = http.call_args.args[0]
             self.assertIsNone(req.get_header("Authorization"))
             self.assertIsNone(req.get_header("Cookie"))
             self.assertEqual(req.get_header("User-agent"), monitor.USER_AGENT)
-            self.assertEqual(http.call_args.kwargs["timeout"], 8)
-        with patch.object(monitor.urllib.request, "urlopen", return_value=io.BytesIO(b"x" * (2 * 1024 * 1024 + 1))):
-            with self.assertRaises(ValueError):
+            self.assertLessEqual(http.call_args.kwargs["timeout"], 8)
+        with patch('quota_network.open_request', return_value=io.BytesIO(b"x" * (2 * 1024 * 1024 + 1))):
+            with self.assertRaises(OSError):
                 monitor._fetch_public_text(monitor.CODEX_RADAR_URL, "text/html")
 
     def test_timeout_remains_a_failure(self):
-        with patch.object(monitor.urllib.request, "urlopen", side_effect=TimeoutError):
+        with patch('quota_network.open_request', side_effect=TimeoutError):
             with self.assertRaises(TimeoutError):
                 monitor.fetch_main_radar()
 

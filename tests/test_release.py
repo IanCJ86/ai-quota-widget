@@ -63,7 +63,7 @@ class StateTests(unittest.TestCase):
         s.configure(['codex'])
         record=s.states['codex']; record['attempt']=1
         s._finish('codex',record,dict(ok=False,error='HTTP429',retry_after=5000),100)
-        self.assertEqual(record['due'],400)
+        self.assertEqual(record['due'],5100)  # honor the server's actual cooldown
     def test_error_label_rejects_non_string(self):
         self.assertEqual(state.error_label({'secret':'FAKE'}),'查询失败')
     def test_corrupt_config_is_preserved_until_saved(self):

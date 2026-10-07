@@ -55,7 +55,7 @@ class Contracts(unittest.TestCase):
     def test_balance_survives_spend_failure(self):
         response = io.StringIO(json.dumps({'is_available':True,'balance_infos':[{'currency':'CNY','total_balance':'12'}]}))
         with patch.object(monitor,'deepseek_api_key',return_value='fake'), \
-             patch.object(monitor.urllib.request,'urlopen',return_value=response), \
+             patch.object(monitor,'account_request',return_value=response), \
              patch.object(monitor,'deepseek_spend',side_effect=PermissionError()):
             result=monitor.fetch_deepseek()
         self.assertEqual(result['ds_balance'],12)

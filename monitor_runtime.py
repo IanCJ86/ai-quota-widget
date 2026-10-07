@@ -232,7 +232,8 @@ def validate_result(name, data):
         'glm': ('g5_pct','gw_pct','g5_reset','gw_reset','g_plan'),
         'deepseek': ('ds_balance','ds_spend','ds_spend_day','ds_granted','ds_topped_up',
                      'ds_currency','ds_available','ds_plan','ds_spend_error'),
-        'main': ('cr_main24','cr_main48'),
+        'main': ('cr_main24','cr_main48','cr_main_updated','cr_main24_at','cr_main48_at',
+                 'cr_main24_updated','cr_main48_updated','cr_main24_missing','cr_main48_missing'),
         'tokens': ('ds_tokens_total','ds_tokens_fresh','ds_tokens_day'),
     }[name]
     data = {k: v for k, v in data.items() if k in fields}
@@ -240,7 +241,7 @@ def validate_result(name, data):
     for key, value in list(data.items()):
         if value is None:
             continue
-        if key.endswith('_reset') or key == 'cr_credit_expiry':
+        if key.endswith('_reset') or key == 'cr_credit_expiry' or key.startswith('cr_main') and key.endswith(('_updated', '_at')):
             parsed = timestamp(value)
             if parsed is None:
                 raise ValueError('invalid timestamp')
@@ -259,7 +260,7 @@ def validate_result(name, data):
         elif key.endswith('_day'):
             if not isinstance(value, str) or date.fromisoformat(value).isoformat() != value:
                 raise ValueError('invalid date')
-        elif key in ('c_window_expired','ds_available'):
+        elif key in ('c_window_expired','ds_available', 'cr_main24_missing', 'cr_main48_missing'):
             if not isinstance(value, bool):
                 raise ValueError('invalid flag')
         elif key.endswith('_plan'):
@@ -372,7 +373,10 @@ class Scheduler:
         # Repeated clicks cannot spawn duplicates or reset active timeouts.
         for state in self.states.values():
             if state["worker"] is None:
-                state.update(due=0, attempt=0)
+                cooldown = state.get('cooldown_until', 0)
+                state.update(due=cooldown if cooldown > self.wall() else 0, attempt=0)
+                if cooldown > self.wall():
+                    state['due'] = self.monotonic() + cooldown-self.wall()
 
     @property
     def active(self):
@@ -389,6 +393,12 @@ class Scheduler:
             except (ValueError, TypeError):
                 payload = dict(ok=False, error="InvalidResponse", retryable=True)
         success = bool(payload.get("ok"))
+        retry_after = payload.get('retry_after')
+        if not success and payload.get('error') == 'HTTP429':
+            delay = min(86400, max(60, retry_after)) if finite(retry_after) else 60
+            state['cooldown_until'] = self.wall() + delay
+        elif success:
+            state.pop('cooldown_until', None)
         if success:
             state.update(attempt=0, due=now + self.interval)
             if name in ('codex','kimi','glm'):
@@ -403,11 +413,13 @@ class Scheduler:
             delay = 2 if state['attempt'] == 1 else 5
             retry_after = payload.get('retry_after')
             if isinstance(retry_after, (int, float)) and math.isfinite(retry_after):
-                delay = max(delay, min(300, max(0, retry_after)))
+                delay = max(delay, min(86400, max(0, retry_after)))
             state["due"] = now + delay
         else:
             # Exhausted rounds back off five minutes; auth errors wait normal interval.
             state.update(attempt=0, due=now + (300 if payload.get("retryable", True) else self.interval))
+        if state.get('cooldown_until', 0) > self.wall():
+            state['due'] = max(state['due'], now+state['cooldown_until']-self.wall())
         state["error"] = None if success else payload.get("error", "QueryFailed")
         diagnostics = dict(
             duration_seconds=round(now - state.get("started", now), 2),

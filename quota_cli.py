@@ -10,14 +10,15 @@ import time
 from functools import lru_cache
 from datetime import datetime
 from app_version import APP_VERSION
-from quota_state import SOURCES, ACCOUNT_SOURCES, source_status, window_expired, error_label, finite, credit_status, timestamp
+from quota_state import SOURCES, ACCOUNT_SOURCES, source_status, window_expired, error_label, finite, credit_status, timestamp, radar_status, merge_radar
 
 PUBLIC_FIELDS = {
     'kimi': ('k5_pct','kw_pct','k5_reset','kw_reset'),
     'codex': ('c5_pct','cw_pct','c5_reset','cw_reset','cr_credit_count','cr_credit_expiry','cr_credit_expiries','c_window_expired'),
     'glm': ('g5_pct','gw_pct','g5_reset','gw_reset'),
     'deepseek': ('ds_balance','ds_spend','ds_spend_day','ds_currency','ds_available','ds_spend_error'),
-    'main': ('cr_main24','cr_main48'),
+    'main': ('cr_main24','cr_main48','cr_main_updated','cr_main24_at','cr_main48_at',
+             'cr_main24_updated','cr_main48_updated','cr_main24_missing','cr_main48_missing'),
     'tokens': ('ds_tokens_total','ds_tokens_fresh','ds_tokens_day'),
 }
 
@@ -100,15 +101,18 @@ def collect(m, fresh=False, factory=None):
                     raise ValueError('credential context changed')
                 if result.get('ok'):
                     clean = validate_result(name, result['data'])
+                    clean = merge_radar(data, clean) if name == 'main' else clean
                     data, stamp, verified = safe_data(name, clean), time.time(), True
                 else:
-                    error = error_label(result.get('error'))
+                    error = error_label(result.get('error'), name)
             except Exception as exc:
                 error = error_label(type(exc).__name__)
             finally:
                 if worker is not None:
                     worker.close()
         status = source_status(data, stamp, verified, error, now=time.time())
+        if name == 'main':
+            status.update(radar_status(data, m.CFG.get('radar_window', 24), verified, error))
         prefix = {'kimi':('k5','kw'),'codex':('c5','cw'),'glm':('g5','gw')}.get(name, ())
         expired = [p for p in prefix if window_expired(data, p)]
         if expired:
@@ -189,6 +193,15 @@ def doctor(m):
         lines.append(f'{name}: {label}; {state["state"]}; 上次成功={state.get("last_success") or "无"}; '
                      f'最后错误={error_label(recent_errors.get(name)) or "无记录"}')
     lines.append('雷达：codexreset.org，第三方预测，非OpenAI官方；本次未联网核验。')
+    from quota_network import settings
+    modes = settings(m.CFG)
+    lines.append('网络模式（不包含代理地址）：' + ' / '.join(n+':'+v['mode'] for n,v in modes.items()))
+    update = debug.get('update')
+    if isinstance(update, dict) and isinstance(update.get('last_error'), dict):
+        issue = update['last_error']
+        from quota_state import safe_error
+        phase = {'check':'检查', 'download':'下载', 'verify':'校验'}.get(issue.get('phase'), '处理')
+        lines.append('最近更新'+phase+'：'+error_label(safe_error(issue.get('error'))))
     lines.append('今日金额为本机余额差额估算，token仅统计本机Harness，均非官方账单。')
     from monitor_runtime import QueryHistory
     history = QueryHistory(Path(m.DEBUG_FILE).with_name('query-history.json'))

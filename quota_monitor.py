@@ -20,9 +20,10 @@ from datetime import datetime, date, timezone, timedelta
 from html import unescape
 from html.parser import HTMLParser
 from app_version import APP_VERSION, USER_AGENT
+from quota_network import stream as network_stream, error_code, retry_after
 from quota_paths import data_locations, resolve_data_dir, migrate_data
 from quota_state import (source_status, window_expired, error_label, finite,
-                         validate_config, credit_status, refresh_notice)
+                         validate_config, credit_status, refresh_notice, radar_status, merge_radar)
 from quota_signals import tariff_status, voucher_fingerprints, observe_vouchers, voucher_colors
 
 # CLI dispatch precedes GUI imports and config/credential access.
@@ -102,6 +103,7 @@ DEBUG_FILE, CONFIG_FILE, SETTINGS_FILE, CACHE_FILE, GLM_KEY_FILE, DEEPSEEK_KEY_F
                                            'glm-key.dpapi','deepseek-key.dpapi','deepseek-spend.json'))
 
 DEFAULT_CONFIG = {
+    "network": {},  # per-source system/direct/custom proxy; never changes Windows
     # ---- personal display options (edit config.json, not this file) ----
     "renew_kimi": "MM-DD",        # Kimi renewal date shown in the UI, e.g. "09-01"
     "renew_codex": "MM-DD",       # Codex renewal date shown in the UI
@@ -301,7 +303,7 @@ def fetch_kimi():
             try:
                 req = urllib.request.Request(KIMI_OAUTH_HOST + path, data=body,
                                              headers={"Accept": "application/json", "User-Agent": USER_AGENT})
-                with urllib.request.urlopen(req, timeout=15) as response:
+                with account_request(req, timeout=15) as response:
                     r = json.load(response)
                 if r.get("access_token"):
                     cred["access_token"] = r["access_token"]
@@ -316,7 +318,7 @@ def fetch_kimi():
     req = urllib.request.Request(KIMI_USAGE_URL,
                                  headers={"Authorization": "Bearer " + cred["access_token"],
                                           "User-Agent": USER_AGENT})
-    with urllib.request.urlopen(req, timeout=15) as response:
+    with account_request(req, timeout=15) as response:
         d = json.load(response)
 
     weekly = d.get("usage") or {}
@@ -520,16 +522,24 @@ def fetch_codex():
 
 # ---------------- Codex reset radar ----------------
 
+def account_request(req, timeout=15):
+    import io
+    return io.BytesIO(network_stream(req, CFG, 'accounts', limit=2*1024*1024, budget=timeout))
+
 def _fetch_public_text(url, accept):
     req = urllib.request.Request(
         url,
         headers={"User-Agent": USER_AGENT, "Accept": accept},
     )
-    with urllib.request.urlopen(req, timeout=8) as response:
-        raw = response.read(2 * 1024 * 1024 + 1)
-        if len(raw) > 2 * 1024 * 1024:
-            raise ValueError("response too large")
-        return raw
+    import codecs
+    parser = _RadarParser()
+    decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
+    size = [0]
+    def consume(block):
+        size[0] += len(block)
+        parser.feed(decoder.decode(block))
+        return len(parser.values) == 2 and (parser.updated is not None or size[0] >= 512*1024)
+    return network_stream(req, CFG, 'radar', limit=2*1024*1024, budget=20, consume=consume)
 
 
 class _RadarParser(HTMLParser):
@@ -537,8 +547,38 @@ class _RadarParser(HTMLParser):
     def __init__(self):
         super().__init__()
         self.values = {}
+        self.updated = None
+        self._text = ''
+        self._ignored = 0
+
+    def handle_data(self, data):
+        if self._ignored:
+            return
+        self._text = (self._text + data)[-1024:]
+        if 'Data last updated:' not in self._text:
+            return
+        match = re.search(r'Data last updated:\s*([A-Za-z]{3} \d{1,2}, (?:\d{4} )?\d{1,2}:\d{2} [AP]M UTC)', self._text)
+        if match:
+            text = match.group(1)
+            try:
+                has_year = bool(re.search(r', \d{4} ', text))
+                parsed = datetime.strptime(text, '%b %d, %Y %I:%M %p UTC' if has_year else '%b %d, %I:%M %p UTC').replace(tzinfo=timezone.utc)
+                if not has_year:
+                    now = datetime.now(timezone.utc)
+                    parsed = parsed.replace(year=now.year)
+                    if parsed > now + timedelta(days=1):
+                        parsed = parsed.replace(year=now.year-1)
+                self.updated = parsed.timestamp()
+            except ValueError:
+                pass
+
+    def handle_endtag(self, tag):
+        if tag in ('script', 'style'):
+            self._ignored = max(0, self._ignored-1)
 
     def handle_starttag(self, tag, attrs):
+        if tag in ('script', 'style'):
+            self._ignored += 1
         attrs = dict(attrs)
         name = attrs.get("data-testid")
         if name not in ("probability-ring-24h", "probability-ring-48h"):
@@ -560,8 +600,9 @@ def fetch_main_radar():
     return {
         "cr_main24": parser.values.get("probability-ring-24h"),
         "cr_main48": parser.values.get("probability-ring-48h"),
-        "cr_main_updated": datetime.now(timezone.utc).isoformat(),
-        "cr_main_mode": "model",
+        "cr_main_updated": parser.updated,
+        "cr_main24_at": time.time() if 'probability-ring-24h' in parser.values else None,
+        "cr_main48_at": time.time() if 'probability-ring-48h' in parser.values else None,
     }
 
 
@@ -731,7 +772,7 @@ def fetch_glm():
         "Accept-Language": "zh-CN,zh",
         "Content-Type": "application/json",
     })
-    with urllib.request.urlopen(req, timeout=15) as response:
+    with account_request(req, timeout=15) as response:
         d = json.load(response)
     items = d
     for k in ("limits", "data"):
@@ -912,7 +953,7 @@ def fetch_deepseek():
         "Authorization": "Bearer " + key,
         "Accept": "application/json",
     })
-    with urllib.request.urlopen(req, timeout=15) as response:
+    with account_request(req, timeout=15) as response:
         d = json.load(response)
     infos = [x for x in (d.get("balance_infos") or []) if isinstance(x, dict)]
     if not infos:
@@ -1101,6 +1142,7 @@ class App:
                                   command=self._toggle_lock_position)
         self.menu.add_command(label="立即刷新", command=self.refresh_async)
         self.menu.add_command(label="快速设置…", command=self._setup_sources)
+        self.menu.add_command(label="网络设置…", command=self._network_settings)
         self.menu.add_separator()
         self.show_kimi = tk.BooleanVar(value=self._st.get("show_kimi", True))
         self.show_codex = tk.BooleanVar(value=self._st.get("show_codex", True))
@@ -1148,7 +1190,7 @@ class App:
         self.menu.add_separator()
         self.menu.add_command(label=f"版本 {APP_VERSION}", state="disabled")
         from quota_update import UpdateController
-        self.updater = UpdateController(self, os.path.dirname(CONFIG_FILE))
+        self.updater = UpdateController(self, os.path.dirname(CONFIG_FILE), CFG)
         self.menu.add_command(label="检查更新", command=self.updater.request)
         self.updater.menu_index = self.menu.index('end')
         self.menu.add_command(label='复制脱敏诊断', command=self._copy_diagnostics)
@@ -1276,6 +1318,8 @@ class App:
         if self._closed:
             return
         self._closed = True
+        if hasattr(self, 'updater'):
+            self.updater.cancel.set()
         self._commands.close()
         self.scheduler.close()  # Reap only our Job Object trees, never other Codex tasks.
         # Nothing may run after destroy(): a callback that outlives its
@@ -1668,6 +1712,9 @@ class App:
         return window_expired(self.data, key)
 
     def _transport_stale(self, source):
+        if source == 'main':
+            return radar_status(self.data, CFG.get('radar_window', 24),
+                                source in self._verified, self.errors.get(source))['stale']
         return source_status(self.data, self._success_at.get(source, 0),
                              source in self._verified, self.errors.get(source), interval=REFRESH_SECONDS)['stale']
 
@@ -1761,8 +1808,12 @@ class App:
                     else:
                         trends.pop(key, None)
                 self._radar_trends = trends
-            self.data = {k:v for k,v in self.data.items() if not k.startswith(self._source_keys(name))}
-            self.data.update(payload["data"])
+            if name == 'main':
+                # A missing window never destroys the previously observed value.
+                self.data = merge_radar(self.data, payload['data'])
+            else:
+                self.data = {k:v for k,v in self.data.items() if not k.startswith(self._source_keys(name))}
+                self.data.update(payload["data"])
             self._success_at[name] = time.time()
             self._verified.add(name)
             self.errors.pop(name, None)
@@ -1798,6 +1849,7 @@ class App:
                 "success_at": {name: datetime.fromtimestamp(ts).isoformat(timespec="seconds")
                                for name, ts in self._success_at.items()},
                 "queries": self._diagnostics, "status_text": self.status.cget("text"),
+                "update": {"busy": self.updater.busy, "last_error": self.updater.last_error},
                 "history_write_failed": self.history.failed,
                 "active": [name for name, state in self.scheduler.states.items() if state["worker"]],
                 "tray": {"available": bool(self.tray_controller.icon and self.tray_controller.icon.visible),
@@ -2060,14 +2112,16 @@ class App:
                         self.rows[key][1].config(text="窗口已过期")
                         self.rows[key][0].config(fg=THEMES[self.theme]["FG_DIM"])
             elif source in enabled and self._is_stale(source):
-                text = error_label(self.errors.get(source)) or self._stale_text(source)
+                text = error_label(self.errors.get(source), source) or (
+                    radar_status(d, CFG.get('radar_window', 24), source in self._verified)['reason']
+                    if source == 'main' else self._stale_text(source))
                 for key in keys:
                     # Preserve business metadata (especially voucher expiry).
                     value, note_label = self.rows[key]
                     old_value = str(value.cget('text'))
                     if old_value not in ('--', '…'):
                         value.config(text=old_value.removesuffix(' ·旧') + ' ·旧')
-                    if not note_label.cget('text') or note_label.cget('text') == '?':
+                    if source == 'main' or not note_label.cget('text') or note_label.cget('text') == '?':
                         note_label.config(text=text)
                     self.rows[key][0].config(fg=THEMES[self.theme]["FG_DIM"])
         stale = [name for name in enabled if self._is_stale(name)]
@@ -2100,7 +2154,8 @@ class App:
             errors = {n:e for n,e in self.errors.items() if n in enabled_all}
             notice = refresh_notice(active, errors, stale,
                                     [n for n in stale if self._data_expired(n)],
-                                    [n for n in stale if n not in self._verified and self._success_at.get(n)])
+                                    [n for n in stale if n not in self._verified and self._success_at.get(n)],
+                                    {n: s['due']-time.monotonic() for n,s in self.scheduler.states.items()})
             if notice:
                 parts.append(notice)
             elif not loaded:
@@ -2118,6 +2173,17 @@ class App:
         self.status.config(text="  ".join(parts),
                            fg=THEMES[self.theme]["DANGER"] if stale else THEMES[self.theme]["FG_DIM"])
         self.theme_painter.update()
+
+    def _network_settings(self):
+        from widget_network import show_network
+        if show_network(self, CFG, _save_config):
+            for state in self.scheduler.states.values():
+                if state['worker']:
+                    state['worker'].close()
+                    state['worker'] = None
+            self.scheduler.refresh()
+            self.updater.network_changed()
+            self.refresh_async()
 
     def _copy_diagnostics(self):
         from quota_cli import doctor
@@ -2140,13 +2206,11 @@ def query_worker(name):
         payload = {"ok": True, "data": data}
     except Exception as ex:
         code = ex.code if isinstance(ex, urllib.error.HTTPError) else None
-        payload = {"ok": False, "error": f"HTTP{code}" if code else type(ex).__name__,
-                   "retryable": code not in (400, 401, 403, 404) and not isinstance(ex, FileNotFoundError)}
+        payload = {"ok": False, "error": error_code(ex),
+                   "retryable": code not in (400, 401, 403, 404) and not isinstance(ex, FileNotFoundError)
+                   and error_code(ex) not in ('PACUnsupported','ProxyUnsupported','UnsafeRedirect','InvalidNetworkSettings','InvalidProxy')}
         if code == 429:
-            try:
-                payload['retry_after'] = min(300, max(0, float(ex.headers.get('Retry-After', 0))))
-            except (ValueError, TypeError):
-                pass
+            payload['retry_after'] = retry_after(ex.headers)
     # Only known public/account quota fields; never exception text, request headers or credentials.
     sys.stdout.buffer.write(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
     sys.stdout.buffer.flush()

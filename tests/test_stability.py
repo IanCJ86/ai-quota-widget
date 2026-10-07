@@ -27,7 +27,7 @@ class StabilityTests(unittest.TestCase):
             with self.subTest(balance=bad), \
                     patch.object(monitor, "deepseek_api_key", return_value="fake"), \
                     patch.object(monitor, "deepseek_spend") as spend, \
-                    patch.object(monitor.urllib.request, "urlopen", return_value=io.StringIO(
+                    patch.object(monitor, "account_request", return_value=io.StringIO(
                         json.dumps({"balance_infos": [{"currency": "CNY", "total_balance": bad}]}))):
                 with self.assertRaises((ValueError, TypeError)):
                     monitor.fetch_deepseek()
@@ -40,7 +40,7 @@ class StabilityTests(unittest.TestCase):
         with patch.object(monitor, "deepseek_api_key", return_value="fake"), \
                 patch.object(monitor, "deepseek_spend", return_value=0), \
                 patch.object(monitor, "local_harness_tokens", side_effect=AssertionError("scan")), \
-                patch.object(monitor.urllib.request, "urlopen", return_value=io.StringIO(
+                patch.object(monitor, "account_request", return_value=io.StringIO(
                     '{"balance_infos":[{"currency":"CNY","total_balance":"5"}]}')):
             self.assertEqual(monitor.fetch_deepseek()["ds_balance"], 5)
 
