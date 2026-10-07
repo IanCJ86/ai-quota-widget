@@ -377,7 +377,7 @@ class SecretTests(unittest.TestCase):
                 {"type": "TOKENS_LIMIT", "remaining_percent": 50, "reset_time": 2000}]}))
 
         with patch.dict(os.environ, {monitor.GLM_KEY_ENV: "sk-env"}), \
-                patch.object(monitor.urllib.request, "urlopen", side_effect=fake_urlopen):
+                patch.object(monitor, "account_request", side_effect=fake_urlopen):
             data = monitor.fetch_glm()
         self.assertEqual(seen["auth"], "sk-env")
         self.assertEqual((data["g5_pct"], data["gw_pct"]), (80, 50))
@@ -434,7 +434,7 @@ class SecretTests(unittest.TestCase):
 
         with patch.object(monitor, "_windows_env", return_value=""), \
                 patch.dict(os.environ, {monitor.DEEPSEEK_ENV: "sk-env"}), \
-                patch.object(monitor.urllib.request, "urlopen", side_effect=fake_urlopen):
+                patch.object(monitor, "account_request", side_effect=fake_urlopen):
             data = monitor.fetch_deepseek()
         self.assertEqual(seen["auth"], "Bearer sk-env")
         self.assertEqual(data["ds_currency"], "CNY")     # CNY preferred
@@ -459,7 +459,7 @@ class SecretTests(unittest.TestCase):
 
         with patch.object(monitor, "_windows_env", return_value=""), \
                 patch.dict(os.environ, {monitor.DEEPSEEK_ENV: "sk-env"}), \
-                patch.object(monitor.urllib.request, "urlopen",
+                patch.object(monitor, "account_request",
                              side_effect=lambda req, timeout=None: Response(
                                  '{"is_available": true, "balance_infos": []}')):
             with self.assertRaises(ValueError):
@@ -517,10 +517,10 @@ class DeepSeekTests(unittest.TestCase):
                     ' "topped_up_balance": "%s"}]}' % (balance, balance))
 
         with patch.dict(os.environ, {monitor.DEEPSEEK_ENV: "sk-env"}):
-            with patch.object(monitor.urllib.request, "urlopen",
+            with patch.object(monitor, "account_request",
                               side_effect=lambda req, timeout=None: Response(payload("10.50"))):
                 first = monitor.fetch_deepseek()
-            with patch.object(monitor.urllib.request, "urlopen",
+            with patch.object(monitor, "account_request",
                               side_effect=lambda req, timeout=None: Response(payload("10.00"))):
                 second = monitor.fetch_deepseek()
         self.assertEqual(first["ds_spend"], 0.0)     # first reading is the baseline
@@ -776,6 +776,8 @@ class UITests(unittest.TestCase):
         a._on_result('main', {'ok': True, 'data': {'cr_main24': 30, 'cr_main48': 80}}, {})
         self.assertEqual(a._radar_trends, {})
         a._on_result('main', {'ok': True, 'data': {'cr_main24': 40, 'cr_main48': 70}}, {})
+        for window in (24, 48):
+            a.data[f'cr_main{window}_updated'] = time.time()
         for theme in monitor.THEMES:
             a._set_theme(theme)
             for window, token in ((24, 'RADAR_UP'), (48, 'RADAR_DOWN')):
@@ -814,7 +816,7 @@ class UITests(unittest.TestCase):
         a._on_result('main', {'ok': True, 'data': {'cr_main24': None, 'cr_main48': 65}}, {})
         self.assertNotIn('cr_main24', a._radar_trends)
         a._on_result('main', {'ok': True, 'data': {'cr_main24': 10, 'cr_main48': 65}}, {})
-        self.assertNotIn('cr_main24', a._radar_trends)
+        self.assertEqual(a._radar_trends['cr_main24'], -1)  # compare to preserved 30, never 48h
 
     def test_callback_failure_keeps_timer_alive(self):
         a = self.app

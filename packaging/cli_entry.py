@@ -1,7 +1,13 @@
 """Separate headless import graph: no GUI, Pillow or tray in worker PYZ."""
 import sys
+from pathlib import Path
+if not getattr(sys, 'frozen', False):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-if sys.argv[1:2] == ['--apply-update']:
+if sys.argv[1:2] == ['--network-download']:
+    from quota_update import download_worker
+    download_worker()
+elif sys.argv[1:2] == ['--apply-update']:
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--apply-update', required=True)

@@ -21,6 +21,7 @@ import urllib.request
 import zipfile
 from app_version import APP_VERSION, USER_AGENT
 from monitor_runtime import atomic_json
+from quota_network import stream, NetworkError, error_code, retry_after, strip_proxy_auth
 from quota_paths import _reject_links
 
 REPO = 'IanCJ86/ai-quota-widget'
@@ -58,39 +59,108 @@ class SafeRedirect(urllib.request.HTTPRedirectHandler):
         parsed = urllib.parse.urlsplit(newurl)
         if parsed.scheme != 'https' or parsed.hostname not in (
                 'github.com', 'api.github.com', 'release-assets.githubusercontent.com',
-                'objects.githubusercontent.com') or parsed.username or parsed.password:
+                'objects.githubusercontent.com') or parsed.username or parsed.password or parsed.port not in (None, 443):
             raise ValueError('UnsafeDownloadRedirect')
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+        return strip_proxy_auth(super().redirect_request(req, fp, code, msg, headers, newurl))
 
 
-def download(url, target=None, limit=2 * 1024 * 1024):
-    opener = urllib.request.build_opener(SafeRedirect())
-    req = urllib.request.Request(url, headers={'User-Agent': USER_AGENT, 'Accept': 'application/json'})
-    deadline = time.monotonic() + 900
-    with opener.open(req, timeout=30) as response:
-        result = bytearray() if target is None else None
-        output = open(target, 'xb') if target is not None else None
-        try:
-            size = 0
-            while True:
-                block = response.read(64 * 1024)
-                if not block:
-                    break
-                size += len(block)
-                if size > limit or time.monotonic() > deadline:
-                    raise ValueError('DownloadLimitExceeded')
-                if output:
-                    output.write(block)
-                else:
-                    result.extend(block)
-        finally:
-            if output:
-                output.close()
-        return bytes(result) if result is not None else None
+def download_worker():
+    """Internal pipe-only helper. DNS/connect/read can all be killed by its owner."""
+    import base64
+    output = None
+    try:
+        data = json.loads(sys.stdin.buffer.readline(16385))
+        url, target = data['url'], data.get('target')
+        if url != API and not url.startswith(ASSETS):
+            raise NetworkError('UnsafeRedirect')
+        if target:
+            _reject_links(Path(target))
+            path = Path(target).resolve()
+            if (path.parent.parent != Path(tempfile.gettempdir()).resolve() or
+                    not path.parent.name.startswith('aiquota-update-') or path.name != 'app.zip'):
+                raise ValueError('UnsafeUpdateStage')
+            _reject_links(path)
+            output = path.open('xb')
+        last = [0]
+        def progress(size):
+            if time.monotonic()-last[0] >= 1:
+                print(json.dumps({'bytes': size}), flush=True)
+                last[0] = time.monotonic()
+        req = urllib.request.Request(url, headers={'User-Agent': USER_AGENT, 'Accept': 'application/json'})
+        raw = stream(req, data.get('config', {}), 'updates', limit=data['limit'],
+                     budget=data['budget'], output=output, progress=progress if target else None,
+                     redirect=SafeRedirect())
+        result = dict(ok=True, body=base64.b64encode(raw).decode('ascii'))
+    except Exception as exc:
+        result = dict(ok=False, error=error_code(exc))
+        if isinstance(exc, urllib.error.HTTPError) and exc.code == 429:
+            result['retry_after'] = retry_after(exc.headers)
+    finally:
+        if output:
+            output.close()
+    print(json.dumps(result), flush=True)
 
 
-def check_latest():
-    return release_info(json.loads(download(API)))
+def download(url, target=None, limit=2 * 1024 * 1024, *, config=None, cancel=None, progress=None):
+    import base64
+    from monitor_runtime import KillJob
+    from quota_network import settings
+    budget = 600 if target else 20
+    try:
+        safe_config = {'network': settings(config or {})}
+    except ValueError:
+        raise NetworkError('InvalidNetworkSettings') from None
+    if getattr(sys, 'frozen', False):
+        command = [str(Path(sys.executable).with_name('quota-cli.exe')), '--network-download']
+    else:
+        command = [sys.executable, str(Path(__file__).parent/'packaging/cli_entry.py'), '--network-download']
+    process = None
+    job = KillJob()
+    try:
+        process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                   stderr=subprocess.DEVNULL, **NO_WINDOW)
+        job.assign(process)
+        request = json.dumps(dict(url=url, target=str(target) if target else None,
+                limit=limit, budget=budget, config=safe_config)).encode('utf-8')+b'\n'
+        deadline = time.monotonic()+budget+3
+        last_progress = -1
+        while True:
+            if cancel and cancel.is_set():
+                raise NetworkError('Cancelled')
+            if time.monotonic() >= deadline:
+                raise NetworkError('Timeout')
+            try:
+                stdout, _ = process.communicate(request, timeout=.2)
+                break
+            except subprocess.TimeoutExpired as exc:
+                request = None
+                if progress and exc.output:
+                    lines = exc.output.splitlines()
+                    for line in reversed(lines[-3:]):
+                        try:
+                            count = json.loads(line).get('bytes')
+                            if isinstance(count, int) and count > last_progress:
+                                progress(count)
+                                last_progress = count
+                                break
+                        except (ValueError, TypeError):
+                            pass
+        result = json.loads(stdout.splitlines()[-1])
+        if not result.get('ok'):
+            error = NetworkError(result.get('error', 'ConnectionError'))
+            error.retry_after = result.get('retry_after', 0)
+            raise error
+        return base64.b64decode(result['body'], validate=True) if target is None else None
+    finally:
+        job.close()
+        if process:
+            if process.poll() is None:
+                process.kill()
+            process.communicate()
+
+
+def check_latest(**options):
+    return release_info(json.loads(download(API, **options)))
 
 
 def file_hash(path):
@@ -370,15 +440,21 @@ def apply_update(plan_path, parent):
     finally:
         # Stage is ours, validated above; never follow a subsequently created link.
         try:
+            _reject_links(stage)
             for child in stage.rglob('*'):
                 _reject_links(child)
             shutil.rmtree(stage)
-        except OSError:
+            pointer = Path(plan['data']) / 'update-stage.json'
+            if pointer.is_file():
+                _reject_links(pointer)
+                if json.loads(pointer.read_text(encoding='utf-8')).get('stage') == str(stage):
+                    pointer.unlink()
+        except (OSError, ValueError):
             pass
 
 
 class UpdateController:
-    def __init__(self, app, data=None):
+    def __init__(self, app, data=None, config=None):
         self.app = app
         self.data = Path(data) if data else None
         self.events = queue.SimpleQueue()
@@ -386,6 +462,11 @@ class UpdateController:
         self.available = None
         self.menu_index = None
         self.handoff = None
+        self.config = config if config is not None else {}
+        self.cancel = threading.Event()
+        self.failures = 0
+        self.last_error = None
+        self.reschedule_after_cancel = False
         self.next_check = time.monotonic() + 60
         self.enabled = bool(getattr(sys, 'frozen', False))
         if self.enabled and self.data:
@@ -400,42 +481,66 @@ class UpdateController:
 
     def request(self, check_only=False):
         if self.busy:
+            if not self.handoff:
+                self.cancel.set()
             return
         if not self.enabled:
             self.app.status.config(text='源码版请通过 Git 更新')
             return
         self.busy = True
+        self.cancel.clear()
         release = None if check_only else self.available
-        self.app.menu.entryconfigure(self.menu_index, label='下载更新中…' if release else '检查更新中…', state='disabled')
+        self.app.menu.entryconfigure(self.menu_index, label='下载中 ·点击取消' if release else '检查中 ·点击取消', state='normal')
         threading.Thread(target=self._work, args=(release,), daemon=True).start()
 
     def _work(self, release):
         stage = None
+        phase = 'check'
+        import copy
+        config = {'network': copy.deepcopy(self.config.get('network', {}))}
         try:
             if release is None:
-                self.events.put(('checked', check_latest()))
+                self.events.put(('checked', check_latest(config=config, cancel=self.cancel)))
                 return
+            phase = 'download'
             stage = Path(tempfile.mkdtemp(prefix='aiquota-update-'))
             atomic_json(stage / 'owner.json', {'product': 'AIQuotaWidget', 'pid': os.getpid()})
             if self.data:
                 atomic_json(self.data / 'update-stage.json', {'stage': str(stage)})
             archive = stage / 'app.zip'
-            download(release['zip'], archive, limit=128 * 1024 * 1024)
-            sums = download(release['sums']).decode('utf-8-sig')
+            download(release['zip'], archive, limit=128 * 1024 * 1024, config=config, cancel=self.cancel,
+                     progress=lambda size: self.events.put(('progress', size)))
+            sums = download(release['sums'], config=config, cancel=self.cancel).decode('utf-8-sig')
+            phase = 'verify'
             unpack_verified(archive, sums, release['zip'].rsplit('/', 1)[1], stage / 'package')
+            if self.cancel.is_set():
+                raise NetworkError('Cancelled')
             plan = stage / 'pending.json'
             atomic_json(plan, dict(old=str(Path(sys.executable).with_name('quota-widget.exe')),
                                    data=str(self.data)))
             self.events.put(('ready', str(plan)))
-        except Exception:
+        except Exception as exc:
             if stage:
                 try:
+                    _reject_links(stage)
                     for child in stage.rglob('*'):
                         _reject_links(child)
                     shutil.rmtree(stage)
-                except OSError:
+                    pointer = self.data / 'update-stage.json' if self.data else None
+                    if pointer and pointer.is_file():
+                        _reject_links(pointer)
+                        if json.loads(pointer.read_text(encoding='utf-8')).get('stage') == str(stage):
+                            pointer.unlink()
+                except (OSError, ValueError):
                     pass
-            self.events.put(('failed', None))
+            self.events.put(('failed', dict(phase=phase, error=error_code(exc),
+                                           retry_after=getattr(exc, 'retry_after', 0))))
+
+    def network_changed(self):
+        if not self.handoff:
+            self.reschedule_after_cancel = self.busy
+            self.cancel.set()
+            self.next_check = time.monotonic()
 
     def tick(self):
         if self.handoff:
@@ -457,10 +562,13 @@ class UpdateController:
                 self.app.status.config(text='更新未启动，旧版保持运行')
             return
         if self.enabled and not self.busy and time.monotonic() >= self.next_check:
-            self.next_check = time.monotonic() + 86400  # one small request/day, no toast
+            self.next_check = time.monotonic() + 86400
             self.request(check_only=True)
         while not self.events.empty():
             event, payload = self.events.get_nowait()
+            if event == 'progress':
+                self.app.menu.entryconfigure(self.menu_index, label=f'已下载 {payload/1048576:.1f}MB ·点击取消')
+                continue
             self.busy = False
             if event == 'ready':
                 try:
@@ -474,6 +582,8 @@ class UpdateController:
                     self.handoff = (child, payload, time.monotonic() + 25)
                 return
             if event == 'checked':
+                self.failures = 0
+                self.last_error = None
                 self.available = payload
                 self.next_check = time.monotonic() + 86400
                 if self.data:
@@ -483,5 +593,16 @@ class UpdateController:
                         pass
             label = ('更新到 ' + self.available['tag']) if self.available else '检查更新'
             if event == 'failed':
-                label = '更新查询失败 ·重试'
+                self.failures += 1
+                # Three short retries, then daily budget. No unlimited retry loop.
+                delay = (1 if self.reschedule_after_cancel else 86400) if payload['error'] == 'Cancelled' else (60, 300, 900, 86400)[min(self.failures-1, 3)]
+                self.reschedule_after_cancel = False
+                self.next_check = time.monotonic()+max(delay, payload.get('retry_after', 0))
+                self.last_error = payload
+                phase = {'check':'检查', 'download':'下载', 'verify':'校验'}[payload['phase']]
+                label = '已取消 ·重试' if payload['error'] == 'Cancelled' else f'更新{phase}失败 ·重试'
+                from quota_state import error_label
+                self.app.status.config(text='旧版保持运行 ·' + error_label(payload['error']))
             self.app.menu.entryconfigure(self.menu_index, label=label, state='normal')
+            if hasattr(self.app, '_write_debug'):
+                self.app._write_debug()

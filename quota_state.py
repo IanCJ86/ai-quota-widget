@@ -16,13 +16,22 @@ ERROR_LABELS = {
     'no_cache': '暂无数据', 'PermissionError': '本机权限不足',
     'UsageSchemaError': '日志格式不兼容', 'UsageReadError': '日志损坏或无法读取',
     'UsageBudgetError': '日志扫描超出限额', 'SpendWriteFailed': '估算记录保存失败',
+    'DNSError': '域名解析失败', 'TLSError': '安全连接失败',
+    'PACUnsupported': '请设置代理地址（PAC暂不支持）', 'ProxyUnsupported': '请使用HTTP代理入口',
+    'UnsafeRedirect': '已阻止不安全跳转', 'ResponseTooLarge': '响应超出限额',
+    'Cancelled': '已取消', 'InvalidProxy': '代理地址无效',
+    'InvalidNetworkSettings': '网络设置无效',
 }
 
-def error_label(error):
+def error_label(error, source=None):
     if not error:
         return ''
     if not isinstance(error, str):
         return '查询失败'
+    if error in ERROR_LABELS.values() or error == '站点拒绝访问':
+        return error
+    if source == 'main' and error in ('HTTP401', 'HTTP403'):
+        return '站点拒绝访问'
     return ERROR_LABELS.get(error, '服务暂不可用' if str(error).startswith('HTTP5') else '查询失败')
 
 
@@ -33,10 +42,16 @@ def safe_error(error):
     return 'QueryFailed' if error else ''
 
 
-def refresh_notice(active, errors, stale=(), expired=(), unverified=()):
+def refresh_notice(active, errors, stale=(), expired=(), unverified=(), retry_in=None):
     """A bounded footer explanation without replacing dates or business data."""
     if errors:
-        labels = {error_label(safe_error(e)) for e in errors.values()}
+        if len(errors) == 1 and 'main' in errors:
+            text = 'Tibo雷达·' + error_label(safe_error(errors['main']), 'main')
+            if 'main' in active:
+                return text + '·重试中'
+            delay = (retry_in or {}).get('main')
+            return text + (f'·{math.ceil(delay/60)}分钟后重试' if finite(delay) and delay > 0 else '')
+        labels = {error_label(safe_error(e), n) for n,e in errors.items()}
         label = next(iter(labels)) if len(labels) == 1 else '部分失败'
         return f'{label}:{len(errors)}' + ('·重试中' if set(active) & set(errors) else '')
     if active:
@@ -74,6 +89,43 @@ def source_status(data, stamp=0, verified=False, error=None, now=None, interval=
     return dict(state=state, stale=stale, cached=cached,
                 reason=error_label(error) if error else '缓存待核验' if cached and not verified else '数据已过旧' if cached and stale else '暂无数据' if not cached else '')
 
+
+def radar_status(data, window=24, verified=False, error=None, now=None):
+    now = time.time() if now is None else now
+    key = f'cr_main{window}'
+    stamp = data.get(key+'_at')
+    updated = data.get(key+'_updated', data.get('cr_main_updated'))
+    reason = error_label(error, 'main') if error else ''
+    if not reason:
+        if not finite(data.get(key)):
+            reason = '该窗口未提供'
+        elif data.get(key+'_missing'):
+            reason = '该窗口待更新'
+        elif not verified:
+            reason = '缓存待核验'
+        elif not timestamp(stamp) or now-stamp > 960 or stamp > now+60:
+            reason = '该窗口待更新'
+        elif not timestamp(updated):
+            reason = '信源时间未提供'
+        elif updated > now+300 or now-updated > 3*3600:
+            reason = '信源预测过旧' if updated <= now else '信源时间异常'
+    return dict(stale=bool(reason), state='stale' if reason else 'ok', reason=reason)
+
+
+def merge_radar(previous, current, now=None):
+    result = dict(previous)
+    now = time.time() if now is None else now
+    for window in (24, 48):
+        key = f'cr_main{window}'
+        missing = not finite(current.get(key))
+        result[key+'_missing'] = missing
+        if not missing:
+            result[key] = current[key]
+            result[key+'_at'] = current.get(key+'_at') or now
+            result[key+'_updated'] = current.get('cr_main_updated')
+    result['cr_main_updated'] = current.get('cr_main_updated')
+    return result
+
 def validate_config(raw, defaults):
     result, issues = dict(defaults), []
     if not isinstance(raw, dict):
@@ -85,6 +137,14 @@ def validate_config(raw, defaults):
         valid = True
         if key in enums:
             valid = value in enums[key]
+        elif key == 'network':
+            from quota_network import settings
+            try:
+                value = settings({'network': value})
+            except (ValueError, TypeError):
+                valid = False
+                # Invalid explicit routes must fail closed, not quietly become direct.
+                result[key] = {'__invalid__': True}
         elif key.startswith('show_') or key in ('lock_position',):
             valid = isinstance(value, bool) or (key == 'show_codex_5h' and value is None)
         elif key in ('window_x','window_y','window_alpha','deepseek_low_balance'):
