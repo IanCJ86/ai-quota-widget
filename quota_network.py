@@ -169,7 +169,7 @@ def stream(req, config, group, *, limit, budget, consume=None, output=None,
                     # Bounded blocking reads, including TLS sockets.
                     sock = getattr(getattr(getattr(response, 'fp', None), 'raw', None), '_sock', None)
                     if sock:
-                        sock.settimeout(min(3, remaining))
+                        sock.settimeout(min(8, remaining))
                     block = response.read1(16384) if hasattr(response, 'read1') else response.read(16384)
                     if time.monotonic() >= deadline:
                         raise NetworkError('Timeout')

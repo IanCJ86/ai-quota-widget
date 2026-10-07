@@ -2,6 +2,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 from quota_network import settings, GROUPS
+from widget_viewport import Viewport, work_area, clamp_rect
 
 
 def show_network(app, config, save):
@@ -10,22 +11,24 @@ def show_network(app, config, save):
     win.title('额度监控 · 网络设置')
     win.transient(app.root)
     win.attributes('-topmost', True)
-    win.resizable(False, False)
+    win.resizable(True, True)
+    viewport = Viewport(win)
+    body = viewport.body
     labels = {'accounts': '账户接口', 'radar': 'Tibo雷达', 'updates': '检查及下载更新'}
     modes = {'跟随系统/环境': 'system', '直接连接': 'direct', '指定HTTP代理': 'proxy'}
     rows = {}
-    tk.Label(win, text='只影响本工具，不修改电脑网络。默认跟随系统；PAC/SOCKS请改填HTTP入口。',
+    tk.Label(body, text='只影响本工具，不修改电脑网络。默认跟随系统；PAC/SOCKS请改填HTTP入口。',
              wraplength=470, justify='left').grid(row=0, column=0, columnspan=3, padx=12, pady=12)
     for i, group in enumerate(GROUPS, 1):
         item = current[group]
         mode = tk.StringVar(value=next(k for k,v in modes.items() if v == item['mode']))
         url = tk.StringVar(value=item['proxy'])
         fallback = tk.BooleanVar(value=item['direct_fallback'])
-        tk.Label(win, text=labels[group]).grid(row=i*2, column=0, padx=12, sticky='w')
-        ttk.Combobox(win, textvariable=mode, values=list(modes), state='readonly', width=18).grid(row=i*2, column=1)
-        tk.Entry(win, textvariable=url, width=30).grid(row=i*2, column=2, padx=12, pady=4)
+        tk.Label(body, text=labels[group]).grid(row=i*2, column=0, padx=12, sticky='w')
+        ttk.Combobox(body, textvariable=mode, values=list(modes), state='readonly', width=18).grid(row=i*2, column=1)
+        tk.Entry(body, textvariable=url, width=30).grid(row=i*2, column=2, padx=12, pady=4)
         if group != 'accounts':
-            tk.Checkbutton(win, text='系统连接失败时允许尝试直连（公司强制代理请勿启用）',
+            tk.Checkbutton(body, text='系统连接失败时允许尝试直连（公司强制代理请勿启用）',
                            variable=fallback).grid(row=i*2+1, column=0, columnspan=3, sticky='w', padx=12)
         rows[group] = (mode, url, fallback)
     changed = []
@@ -44,11 +47,19 @@ def show_network(app, config, save):
         config.update(candidate)
         changed.append(True)
         win.destroy()
-    tk.Label(win, text='代理地址留在本机，不进入脱敏诊断；账户请求不自动绕过代理。',
+    tk.Label(body, text='代理地址留在本机，不进入脱敏诊断；账户请求不自动绕过代理。',
              wraplength=470).grid(row=8, column=0, columnspan=3, pady=10)
-    tk.Button(win, text='保存', command=accept).grid(row=9, column=1, pady=(0,12))
-    tk.Button(win, text='取消', command=win.destroy).grid(row=9, column=2, pady=(0,12))
+    buttons = tk.Frame(win)
+    buttons.grid(row=2,column=0,columnspan=2,pady=(0,12))
+    tk.Button(buttons, text='保存', command=accept).pack(side='left',padx=12)
+    tk.Button(buttons, text='取消', command=win.destroy).pack(side='left',padx=12)
     win.update_idletasks()
+    area = work_area(app.root)
+    viewport.fit((area[0],area[1],area[2],area[3]-buttons.winfo_reqheight()-12))
+    win.update_idletasks()
+    w,h,x,y=clamp_rect(app.root.winfo_x()+20,app.root.winfo_y()+20,
+                      win.winfo_reqwidth(),win.winfo_reqheight(),area)
+    win.geometry(f'{w}x{h}{x:+d}{y:+d}')
     win.grab_set()
     app.root.wait_window(win)
     return bool(changed)

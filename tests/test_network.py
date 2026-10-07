@@ -311,7 +311,7 @@ class NetworkDialogTests(unittest.TestCase):
             save=Mock(return_value=True)
             def click_save():
                 win=next(w for w in root.winfo_children() if isinstance(w,tk.Toplevel))
-                button=next(w for w in win.winfo_children() if isinstance(w,tk.Button) and w.cget('text')=='保存')
+                button=next(w for panel in win.winfo_children() for w in panel.winfo_children() if isinstance(w,tk.Button) and w.cget('text')=='保存')
                 button.invoke()
             root.after(20,click_save)
             with patch.object(net,'open_request',side_effect=AssertionError('unexpected network')):
@@ -324,6 +324,31 @@ class NetworkDialogTests(unittest.TestCase):
             self.assertFalse(show_network(Mock(root=root),cfg,save))
             self.assertEqual(json.dumps(cfg,sort_keys=True),original)
         finally:root.destroy()
+
+    def test_small_screen_high_scaling_keeps_controls_accessible(self):
+        import tkinter as tk
+        import widget_network
+        root=tk.Tk();root.withdraw()
+        original=root.tk.call('tk','scaling')
+        failures=[]
+        def verify():
+            try:
+                win=next(w for w in root.winfo_children() if isinstance(w,tk.Toplevel))
+                win.update_idletasks()
+                self.assertLessEqual(win.winfo_width(),312)
+                self.assertLessEqual(win.winfo_height(),212)
+                bars=[w for w in win.winfo_children() if isinstance(w,tk.Scrollbar)]
+                self.assertTrue(any(w.winfo_manager() for w in bars))
+            except Exception as exc:failures.append(exc)
+            finally:win.destroy()
+        try:
+            root.tk.call('tk','scaling',4)
+            root.after(30,verify)
+            with patch.object(widget_network,'work_area',return_value=(0,0,320,220)):
+                widget_network.show_network(Mock(root=root),dict(monitor.DEFAULT_CONFIG),Mock())
+            if failures:raise failures[0]
+        finally:
+            root.tk.call('tk','scaling',original);root.destroy()
 
 
 if __name__ == '__main__':
