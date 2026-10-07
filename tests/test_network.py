@@ -285,6 +285,11 @@ class BackoffTests(unittest.TestCase):
         process.kill.assert_called_once()
         process.communicate.assert_called_once()
 
+    def test_invalid_update_route_reports_network_error_before_spawning(self):
+        with patch.object(updates.subprocess,'Popen',side_effect=AssertionError('spawn')):
+            with self.assertRaisesRegex(net.NetworkError,'InvalidNetworkSettings'):
+                updates.download(updates.API,config={'network':{'__invalid__':True}})
+
     def test_real_hung_helper_cancel_is_prompt_and_reaped(self):
         real_popen = subprocess.Popen
         children = []

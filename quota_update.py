@@ -106,7 +106,10 @@ def download(url, target=None, limit=2 * 1024 * 1024, *, config=None, cancel=Non
     from monitor_runtime import KillJob
     from quota_network import settings
     budget = 600 if target else 20
-    safe_config = {'network': settings(config or {})}
+    try:
+        safe_config = {'network': settings(config or {})}
+    except ValueError:
+        raise NetworkError('InvalidNetworkSettings') from None
     if getattr(sys, 'frozen', False):
         command = [str(Path(sys.executable).with_name('quota-cli.exe')), '--network-download']
     else:
