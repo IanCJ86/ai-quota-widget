@@ -39,7 +39,7 @@ class RoutingTests(unittest.TestCase):
         actual = net.settings(cfg)
         self.assertEqual(actual['accounts']['mode'], 'system')
         self.assertEqual(net.proxies_for(actual['radar'])['https'], 'http://127.0.0.1:12345')
-        for bad in ('socks5://host:1', 'http://user:secret@host:1', 'http://host',
+        for bad in ('socks5://host:1', 'https://host:1', 'http://user:secret@host:1', 'http://host',
                     'http://host:99999', 'http://host:1/path', 'http://host:1?secret',
                     'http://host:1\n', 'file:///tmp', 'http://host:1#private'):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
@@ -49,13 +49,19 @@ class RoutingTests(unittest.TestCase):
         for raw in (None, [], {'radar': {'mode':'socks'}}, {'accounts': {'direct_fallback':True}}):
             cfg, issues = state.validate_config({'network':raw}, monitor.DEFAULT_CONFIG)
             self.assertTrue(issues)
-            self.assertEqual(cfg['network'], {})
+            with self.assertRaises(ValueError):net.settings(cfg)
+            with patch.object(net.urllib.request,'build_opener',side_effect=AssertionError('network')):
+                with self.assertRaisesRegex(net.NetworkError,'InvalidNetworkSettings'):
+                    net.open_request(urllib.request.Request('https://x.invalid'),cfg,'accounts')
 
     def test_pac_and_socks_are_explicit_not_silent_direct(self):
         with patch.object(net, '_pac_configured', return_value=True), patch.object(net.urllib.request, 'getproxies', return_value={}):
             with self.assertRaisesRegex(net.NetworkError, 'PACUnsupported'):
                 net.proxies_for(net.settings({})['radar'])
         with patch.object(net, '_pac_configured', return_value=False), patch.object(net.urllib.request, 'getproxies', return_value={'https':'socks5://host:1'}):
+            with self.assertRaisesRegex(net.NetworkError, 'ProxyUnsupported'):
+                net.proxies_for(net.settings({})['radar'])
+        with patch.object(net, '_pac_configured', return_value=False), patch.object(net.urllib.request, 'getproxies', return_value={'https':'https://user:FAKE@host:1'}):
             with self.assertRaisesRegex(net.NetworkError, 'ProxyUnsupported'):
                 net.proxies_for(net.settings({})['radar'])
 

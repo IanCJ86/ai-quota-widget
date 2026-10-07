@@ -194,8 +194,11 @@ def doctor(m):
                      f'最后错误={error_label(recent_errors.get(name)) or "无记录"}')
     lines.append('雷达：codexreset.org，第三方预测，非OpenAI官方；本次未联网核验。')
     from quota_network import settings
-    modes = settings(m.CFG)
-    lines.append('网络模式（不包含代理地址）：' + ' / '.join(n+':'+v['mode'] for n,v in modes.items()))
+    try:
+        modes = settings(m.CFG)
+        lines.append('网络模式（不包含代理地址）：' + ' / '.join(n+':'+v['mode'] for n,v in modes.items()))
+    except ValueError:
+        lines.append('网络配置无效，查询暂停；请在右键网络设置中修正。')
     update = debug.get('update')
     if isinstance(update, dict) and isinstance(update.get('last_error'), dict):
         issue = update['last_error']

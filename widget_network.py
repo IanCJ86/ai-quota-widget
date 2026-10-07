@@ -6,7 +6,11 @@ from widget_viewport import Viewport, work_area, clamp_rect
 
 
 def show_network(app, config, save):
-    current = settings(config)
+    invalid = False
+    try:
+        current = settings(config)
+    except ValueError:
+        current, invalid = settings({}), True
     win = tk.Toplevel(app.root)
     win.title('额度监控 · 网络设置')
     win.transient(app.root)
@@ -17,7 +21,8 @@ def show_network(app, config, save):
     labels = {'accounts': '账户接口', 'radar': 'Tibo雷达', 'updates': '检查及下载更新'}
     modes = {'跟随系统/环境': 'system', '直接连接': 'direct', '指定HTTP代理': 'proxy'}
     rows = {}
-    tk.Label(body, text='只影响本工具，不修改电脑网络。默认跟随系统；PAC/SOCKS请改填HTTP入口。',
+    tk.Label(body, text=('原网络配置无效，查询已暂停；请确认以下设置后保存。\n' if invalid else '')+
+             '只影响本工具，不修改电脑网络。默认跟随系统；请使用http://代理入口（可访问HTTPS服务）。',
              wraplength=470, justify='left').grid(row=0, column=0, columnspan=3, padx=12, pady=12)
     for i, group in enumerate(GROUPS, 1):
         item = current[group]

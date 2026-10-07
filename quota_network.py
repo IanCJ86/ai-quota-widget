@@ -24,7 +24,7 @@ def proxy_url(value):
         raise ValueError('InvalidProxy')
     try:
         p = urllib.parse.urlsplit(value.strip())
-        if (p.scheme not in ('http', 'https') or not p.hostname or p.username or p.password
+        if (p.scheme != 'http' or not p.hostname or p.username or p.password
                 or p.path not in ('', '/') or p.query or p.fragment or not p.port
                 or any(c.isspace() or ord(c) < 32 for c in value)):
             raise ValueError('InvalidProxy')
@@ -35,7 +35,7 @@ def proxy_url(value):
 
 def settings(config):
     raw = config.get('network', {})
-    if not isinstance(raw, dict):
+    if not isinstance(raw, dict) or raw.get('__invalid__'):
         raise ValueError('InvalidNetworkSettings')
     result = {}
     for group in GROUPS:
@@ -76,7 +76,7 @@ def proxies_for(item):
         if value:
             # urllib cannot speak SOCKS. Never silently try it as HTTP.
             parsed = urllib.parse.urlsplit(value if '://' in value else 'http://' + value)
-            if parsed.scheme not in ('http', 'https'):
+            if parsed.scheme != 'http':
                 raise NetworkError('ProxyUnsupported')
     if detected.get('all') and not detected.get('https'):
         raise NetworkError('ProxyUnsupported')
@@ -138,7 +138,10 @@ def retry_after(headers, now=None):
 
 def open_request(req, config, group, timeout=10, redirect=None, direct=False):
     _origin(req.full_url)
-    item = settings(config)[group]
+    try:
+        item = settings(config)[group]
+    except ValueError:
+        raise NetworkError('InvalidNetworkSettings') from None
     proxies = {} if direct else proxies_for(item)
     # Custom ProxyHandler must not inherit no_proxy bypass for an explicit proxy.
     handler = urllib.request.ProxyHandler(proxies)
@@ -157,7 +160,10 @@ def stream(req, config, group, *, limit, budget, consume=None, output=None,
            cancel=None, progress=None, redirect=None):
     """read1 prevents an endless trickle filling read(n); caller owns hard process deadline."""
     deadline = time.monotonic() + budget
-    item = settings(config)[group]
+    try:
+        item = settings(config)[group]
+    except ValueError:
+        raise NetworkError('InvalidNetworkSettings') from None
     attempts = (False, True) if group != 'accounts' and item['direct_fallback'] and item['mode'] == 'system' else (False,)
     for direct in attempts:
         if cancel and cancel.is_set():

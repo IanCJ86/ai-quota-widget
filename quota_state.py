@@ -143,6 +143,8 @@ def validate_config(raw, defaults):
                 value = settings({'network': value})
             except (ValueError, TypeError):
                 valid = False
+                # Invalid explicit routes must fail closed, not quietly become direct.
+                result[key] = {'__invalid__': True}
         elif key.startswith('show_') or key in ('lock_position',):
             valid = isinstance(value, bool) or (key == 'show_codex_5h' and value is None)
         elif key in ('window_x','window_y','window_alpha','deepseek_low_balance'):
