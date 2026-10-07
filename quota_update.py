@@ -21,7 +21,7 @@ import urllib.request
 import zipfile
 from app_version import APP_VERSION, USER_AGENT
 from monitor_runtime import atomic_json
-from quota_network import stream, NetworkError, error_code, retry_after
+from quota_network import stream, NetworkError, error_code, retry_after, strip_proxy_auth
 from quota_paths import _reject_links
 
 REPO = 'IanCJ86/ai-quota-widget'
@@ -59,9 +59,9 @@ class SafeRedirect(urllib.request.HTTPRedirectHandler):
         parsed = urllib.parse.urlsplit(newurl)
         if parsed.scheme != 'https' or parsed.hostname not in (
                 'github.com', 'api.github.com', 'release-assets.githubusercontent.com',
-                'objects.githubusercontent.com') or parsed.username or parsed.password:
+                'objects.githubusercontent.com') or parsed.username or parsed.password or parsed.port not in (None, 443):
             raise ValueError('UnsafeDownloadRedirect')
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+        return strip_proxy_auth(super().redirect_request(req, fp, code, msg, headers, newurl))
 
 
 def download_worker():

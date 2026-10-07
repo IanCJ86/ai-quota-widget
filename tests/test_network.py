@@ -164,6 +164,33 @@ class StreamTests(unittest.TestCase):
             net.open_request(urllib.request.Request('https://x.invalid'),{},'radar')
             self.assertEqual(build.call_args.args[0].proxies['https'],'http://second.invalid:2')
 
+    def test_proxy_credentials_never_reach_direct_fallback_or_original_request(self):
+        cfg={'network':{'radar':{'direct_fallback':True}}}
+        req=urllib.request.Request('https://example.invalid/')
+        seen=[]
+        def fake(request,*args,**kwargs):
+            seen.append(request.get_header('Proxy-authorization'))
+            if len(seen)==1:
+                request.add_header('Proxy-authorization','FAKE_ONLY')
+                raise TimeoutError()
+            return io.BytesIO(b'ok')
+        with patch.object(net,'open_request',side_effect=fake):
+            self.assertEqual(net.stream(req,cfg,'radar',limit=10,budget=10),b'ok')
+        self.assertEqual(seen,[None,None])
+        self.assertIsNone(req.get_header('Proxy-authorization'))
+
+    def test_redirect_drops_proxy_auth_for_the_new_route(self):
+        req=urllib.request.Request('https://api.example.invalid/old',headers={
+            'Authorization':'Bearer FAKE_ACCOUNT','Proxy-Authorization':'FAKE_PROXY'})
+        moved=net.SameOriginRedirect().redirect_request(req,None,302,'',{},'https://api.example.invalid/new')
+        self.assertIsNone(moved.get_header('Proxy-authorization'))
+        self.assertEqual(moved.get_header('Authorization'),'Bearer FAKE_ACCOUNT')
+        req=urllib.request.Request(updates.API,headers={'Proxy-Authorization':'FAKE_PROXY'})
+        moved=updates.SafeRedirect().redirect_request(req,None,302,'',{},'https://github.com/next')
+        self.assertIsNone(moved.get_header('Proxy-authorization'))
+        with self.assertRaises(ValueError):
+            updates.SafeRedirect().redirect_request(req,None,302,'',{},'https://github.com:444/next')
+
 
 class FreshnessTests(unittest.TestCase):
     def test_unknown_stale_and_future_source_are_not_fresh(self):

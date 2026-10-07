@@ -94,7 +94,16 @@ class SameOriginRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         if _origin(req.full_url) != _origin(newurl):
             raise NetworkError('UnsafeRedirect')
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+        return strip_proxy_auth(super().redirect_request(req, fp, code, msg, headers, newurl))
+
+
+def strip_proxy_auth(req):
+    # A new route must obtain its own proxy credentials, never inherit old ones.
+    if req is not None:
+        for name, _ in req.header_items():
+            if name.lower() == 'proxy-authorization':
+                req.remove_header(name)
+    return req
 
 
 def error_code(exc):
@@ -158,7 +167,7 @@ def stream(req, config, group, *, limit, budget, consume=None, output=None,
         size = 0
         result = bytearray()
         try:
-            with open_request(copy.copy(req), config, group,
+            with open_request(copy.deepcopy(req), config, group,
                     timeout=min(8, max(.1, deadline-time.monotonic())), redirect=redirect, direct=direct) as response:
                 while True:
                     if cancel and cancel.is_set():
