@@ -51,7 +51,7 @@ $installer = Join-Path $env:TEMP 'ai-quota-quick-install.ps1'; Invoke-WebRequest
 
 - 悬浮显示，托盘也能看剩余额度；双击刷新，右键调整账户、主题、套餐显示名和续订日期。
 - 自动定时查询；网络失败保留并标记旧数据，不把历史数字当作新结果。
-- 右键“网络设置”可分别调整账户、雷达和更新的连接方式；默认跟随系统，不修改电脑代理。PAC/SOCKS需填写代理软件提供的HTTP入口。
+- 默认跟随电脑网络，不修改系统代理。遇到“请设置代理地址”或连接失败，按[联网设置步骤](docs/cli-and-install.md#连接失败时怎么填)处理；账户、雷达和更新可分别设置。
 - 点击 **✕** 隐藏到托盘，点击托盘图标恢复；真正退出请用右键菜单。
 - DeepSeek 时段：绿色“梁文谷”、红色“梁文锋”，显示距下次峰谷切换的时间。Codex 新发现的重置券张数红色保持 24 小时，24 小时内到期的日期也变红；不弹通知。
 - 可选 Codex 重置雷达来自 [codexreset.org](https://codexreset.org)，是第三方预测，不是官方承诺，也不是你的个人重置通知。
@@ -69,7 +69,7 @@ $installer = Join-Path $env:TEMP 'ai-quota-quick-install.ps1'; Invoke-WebRequest
 | **蒸汽算力机** | **Token 加油站** | **电子墨水账本** |
 | [<img src="docs/images/steam.png" width="240" alt="蒸汽算力机">](docs/images/steam.png) | [<img src="docs/images/fuel.png" width="240" alt="Token 加油站">](docs/images/fuel.png) | [<img src="docs/images/ink.png" width="240" alt="电子墨水账本">](docs/images/ink.png) |
 
-截图为真实界面配合演示数据，并非个人账单；毛玻璃的桌面透色与模糊效果取决于系统支持，图中不含桌面合成效果。
+截图为真实界面配合演示数据，并非个人账单；毛玻璃保留半透明底色，不启用系统原生背景模糊，实际透色随桌面背景变化。
 
 ## 数据与反馈
 
