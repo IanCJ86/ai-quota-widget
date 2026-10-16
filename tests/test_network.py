@@ -23,8 +23,8 @@ import quota_update as updates
 from monitor_runtime import Scheduler, validate_result
 
 
-RINGS = (b'<div data-testid="probability-ring-24h" data-target-value="30"></div>'
-         b'<div data-testid="probability-ring-48h" data-target-value="52"></div>')
+FORECAST = {'probabilities': {'rounded_24h': 30, 'rounded_48h': 52},
+            'updated_at': '2026-10-07T11:00:00Z'}
 
 
 class RoutingTests(unittest.TestCase):
@@ -101,20 +101,18 @@ class RoutingTests(unittest.TestCase):
 
 
 class StreamTests(unittest.TestCase):
-    def test_early_stop_does_not_read_huge_tail(self):
-        body = RINGS+b'<p>Data last updated: Oct 7, 2026 11:00 AM UTC</p>'+b'x'*1000000
+    def test_small_json_response_is_read_without_html_scraping(self):
+        body = json.dumps(FORECAST).encode()
         response = io.BytesIO(body)
         with patch.object(net, 'open_request', return_value=response):
-            text = monitor._fetch_public_text(monitor.CODEX_RADAR_URL, 'text/html')
-        self.assertLess(len(text), 32768)
+            text = monitor._fetch_public_text(monitor.CODEX_RADAR_URL, 'application/json')
+        self.assertEqual(text, body)
 
-    def test_unknown_metadata_stops_bounded_and_remains_unknown(self):
-        body = RINGS+b'<div>'+b'x'*1000000
+    def test_unknown_metadata_remains_unknown(self):
+        body = json.dumps({'probabilities': FORECAST['probabilities']}).encode()
         with patch.object(net, 'open_request', return_value=io.BytesIO(body)):
-            text = monitor._fetch_public_text(monitor.CODEX_RADAR_URL,'text/html')
-        self.assertLessEqual(len(text),512*1024)
-        parser=monitor._RadarParser();parser.feed(text.decode())
-        self.assertIsNone(parser.updated)
+            result = monitor.fetch_main_radar()
+        self.assertIsNone(result['cr_main_updated'])
 
     def test_trickle_and_total_deadline(self):
         class Trickle(io.BytesIO):
@@ -216,12 +214,13 @@ class FreshnessTests(unittest.TestCase):
         self.assertFalse(state.radar_status(data,48,True,now=100000)['stale'])
         self.assertEqual(validate_result('main',data),data)
 
-    def test_timestamp_split_comments_script_noise_and_utf8(self):
-        parser = monitor._RadarParser()
-        body = '<script>Data last updated: Jan 1, 2020 1:00 AM UTC</script>'+RINGS.decode()+'<p>Data last updated:<!-- --> Oct 7, 2026 11:00 AM UTC</p>'
-        for c in body: parser.feed(c)
-        self.assertEqual(parser.updated, 1791370800)
-        self.assertEqual(len(parser.values),2)
+    def test_json_timestamp_uses_explicit_timezone_and_not_unrelated_fields(self):
+        body = dict(FORECAST, updated_at='2026-10-07T19:00:00+08:00',
+                    context_copy={'zh': 'Data last updated: Jan 1, 2020 1:00 AM UTC'})
+        with patch.object(monitor, '_fetch_public_text', return_value=json.dumps(body).encode()):
+            result = monitor.fetch_main_radar()
+        self.assertEqual(result['cr_main_updated'], 1791370800)
+        self.assertEqual((result['cr_main24'], result['cr_main48']), (30, 52))
 
     def test_metadata_validation_rejects_private_text(self):
         for bad in ('PRIVATE', False, -1, float('nan')):

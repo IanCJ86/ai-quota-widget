@@ -810,6 +810,22 @@ class UITests(unittest.TestCase):
         a._on_result('main', {'ok': True, 'data': {'cr_main24': 40}}, {})
         self.assertEqual(a._radar_trends, {'cr_main24': 1})
 
+    def test_previous_source_cache_is_not_loaded_or_used_for_trend(self):
+        a = self.app
+        with patch.object(monitor, 'CODEX_RADAR_URL', 'https://old.invalid/'):
+            a._source_identities['main'] = monitor.source_identity('main')
+            a.data.update(cr_main24=20, cr_main48=38)
+            a._success_at['main'] = time.time()
+            a._radar_trends = {'cr_main24': -1}
+            a._save_cache()
+        a._source_identities['main'] = monitor.source_identity('main')
+        a.data, a._radar_trends = {}, {}
+        a._load_cache()
+        self.assertNotIn('cr_main24', a.data)
+        self.assertEqual(a._radar_trends, {})
+        a._on_result('main', {'ok': True, 'data': {'cr_main24': 50, 'cr_main48': 75}}, {})
+        self.assertEqual(a._radar_trends, {})
+
     def test_missing_radar_window_is_not_compared_with_another_window(self):
         a = self.app
         a._on_result('main', {'ok': True, 'data': {'cr_main24': 30, 'cr_main48': 60}}, {})
