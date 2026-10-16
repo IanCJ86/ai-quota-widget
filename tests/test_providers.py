@@ -85,31 +85,53 @@ class KimiAdapterTests(unittest.TestCase):
 
 
 class RadarAdapterTests(unittest.TestCase):
-    def test_attribute_order_and_quote_style_do_not_affect_values(self):
-        html = b"<div data-target-value='47' class='ring' data-testid='probability-ring-24h'></div>" \
-               b'<div data-testid="probability-ring-48h" data-target-value="98"></div>'
-        with patch.object(monitor, "_fetch_public_text", return_value=html):
+    def test_uses_display_percentages_not_raw_or_model_probabilities(self):
+        body = json.dumps({'probabilities': {'rounded_24h': 50, 'rounded_48h': 75,
+            'raw_24h': .18, 'model_24h': 18, 'model_48h': 33},
+            'updated_at': '2026-10-16T18:26:26.280Z'}).encode()
+        with patch.object(monitor, "_fetch_public_text", return_value=body) as fetch:
             result = validate_result("main", monitor.fetch_main_radar())
-        self.assertEqual((result["cr_main24"], result["cr_main48"]), (47, 98))
+        self.assertEqual((result["cr_main24"], result["cr_main48"]), (50, 75))
+        self.assertAlmostEqual(result['cr_main_updated'], 1792175186.28)
+        fetch.assert_called_once_with('https://codex-reset.com/api/forecast', 'application/json')
 
     def test_missing_or_bad_probabilities_fail_without_fake_zero(self):
         for value in (b"<html>maintenance</html>",
-                      b'<div data-testid="probability-ring-24h" data-target-value="101"></div>',
-                      b'<div data-testid="probability-ring-48h" data-target-value="NaN"></div>'):
+                      b'[]', b'{}', b'{"probabilities": []}',
+                      b'{"probabilities":{"rounded_24h":101}}',
+                      b'{"probabilities":{"rounded_24h":true}}',
+                      b'{"probabilities":{"rounded_48h":"75"}}',
+                      b'{"probabilities":{"rounded_48h":NaN}}',
+                      b'{"probabilities":{"rounded_24h":-1}}'):
             with self.subTest(value=value), patch.object(monitor, "_fetch_public_text", return_value=value):
                 with self.assertRaises(ValueError):
                     monitor.fetch_main_radar()
 
     def test_partial_response_does_not_copy_one_window_to_the_other(self):
         with patch.object(monitor, "_fetch_public_text", return_value=
-                          b'<div data-testid="probability-ring-48h" data-target-value="0"></div>'):
+                          b'{"probabilities":{"rounded_48h":0}}'):
             result = validate_result("main", monitor.fetch_main_radar())
         self.assertIsNone(result["cr_main24"])
         self.assertEqual(result["cr_main48"], 0)
+        self.assertIsNone(result['cr_main24_at'])
+        self.assertIsNotNone(result['cr_main48_at'])
+
+    def test_missing_invalid_or_naive_timestamp_never_becomes_query_time(self):
+        for stamp in (None, True, 0, 'bad', '2026-10-17T09:00:00'):
+            with self.subTest(stamp=stamp), patch.object(monitor, '_fetch_public_text',
+                    return_value=json.dumps({'probabilities': {'rounded_24h': 100},
+                                             'updated_at': stamp}).encode()):
+                self.assertIsNone(monitor.fetch_main_radar()['cr_main_updated'])
+
+    def test_cache_identity_changes_with_radar_source(self):
+        current = monitor.source_identity('main')
+        self.assertIsNotNone(current)
+        with patch.object(monitor, 'CODEX_RADAR_URL', 'https://old.invalid/'):
+            self.assertNotEqual(monitor.source_identity('main'), current)
 
     def test_public_request_has_no_credentials_and_has_size_limit(self):
         with patch('quota_network.open_request', return_value=io.BytesIO(b"ok")) as http:
-            self.assertEqual(monitor._fetch_public_text(monitor.CODEX_RADAR_URL, "text/html"), b"ok")
+            self.assertEqual(monitor._fetch_public_text(monitor.CODEX_RADAR_URL, "application/json"), b"ok")
             req = http.call_args.args[0]
             self.assertIsNone(req.get_header("Authorization"))
             self.assertIsNone(req.get_header("Cookie"))
@@ -117,7 +139,7 @@ class RadarAdapterTests(unittest.TestCase):
             self.assertLessEqual(http.call_args.kwargs["timeout"], 8)
         with patch('quota_network.open_request', return_value=io.BytesIO(b"x" * (2 * 1024 * 1024 + 1))):
             with self.assertRaises(OSError):
-                monitor._fetch_public_text(monitor.CODEX_RADAR_URL, "text/html")
+                monitor._fetch_public_text(monitor.CODEX_RADAR_URL, "application/json")
 
     def test_timeout_remains_a_failure(self):
         with patch('quota_network.open_request', side_effect=TimeoutError):

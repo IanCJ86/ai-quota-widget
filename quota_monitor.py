@@ -17,8 +17,6 @@ import urllib.request
 import urllib.parse
 import urllib.error
 from datetime import datetime, date, timezone, timedelta
-from html import unescape
-from html.parser import HTMLParser
 from app_version import APP_VERSION, USER_AGENT
 from quota_network import stream as network_stream, error_code, retry_after
 from quota_paths import data_locations, resolve_data_dir, migrate_data
@@ -219,7 +217,7 @@ BEIJING = timezone(timedelta(hours=8))
 DSH_SESSIONS = os.path.expanduser(r"~\.dsh\sessions")
 # The public reset radar is a third-party signal. It does not expose or replace
 # the account-specific Codex quota below.
-CODEX_RADAR_URL = "https://codexreset.org/"
+CODEX_RADAR_URL = "https://codex-reset.com/api/forecast"
 GLM_QUOTA_URLS = {
     "cn": "https://open.bigmodel.cn/api/monitor/usage/quota/limit",
     "intl": "https://api.z.ai/api/monitor/usage/quota/limit",
@@ -531,78 +529,34 @@ def _fetch_public_text(url, accept):
         url,
         headers={"User-Agent": USER_AGENT, "Accept": accept},
     )
-    import codecs
-    parser = _RadarParser()
-    decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
-    size = [0]
-    def consume(block):
-        size[0] += len(block)
-        parser.feed(decoder.decode(block))
-        return len(parser.values) == 2 and (parser.updated is not None or size[0] >= 512*1024)
-    return network_stream(req, CFG, 'radar', limit=2*1024*1024, budget=20, consume=consume)
-
-
-class _RadarParser(HTMLParser):
-    """Attribute order/quote style must not break the public page adapter."""
-    def __init__(self):
-        super().__init__()
-        self.values = {}
-        self.updated = None
-        self._text = ''
-        self._ignored = 0
-
-    def handle_data(self, data):
-        if self._ignored:
-            return
-        self._text = (self._text + data)[-1024:]
-        if 'Data last updated:' not in self._text:
-            return
-        match = re.search(r'Data last updated:\s*([A-Za-z]{3} \d{1,2}, (?:\d{4} )?\d{1,2}:\d{2} [AP]M UTC)', self._text)
-        if match:
-            text = match.group(1)
-            try:
-                has_year = bool(re.search(r', \d{4} ', text))
-                parsed = datetime.strptime(text, '%b %d, %Y %I:%M %p UTC' if has_year else '%b %d, %I:%M %p UTC').replace(tzinfo=timezone.utc)
-                if not has_year:
-                    now = datetime.now(timezone.utc)
-                    parsed = parsed.replace(year=now.year)
-                    if parsed > now + timedelta(days=1):
-                        parsed = parsed.replace(year=now.year-1)
-                self.updated = parsed.timestamp()
-            except ValueError:
-                pass
-
-    def handle_endtag(self, tag):
-        if tag in ('script', 'style'):
-            self._ignored = max(0, self._ignored-1)
-
-    def handle_starttag(self, tag, attrs):
-        if tag in ('script', 'style'):
-            self._ignored += 1
-        attrs = dict(attrs)
-        name = attrs.get("data-testid")
-        if name not in ("probability-ring-24h", "probability-ring-48h"):
-            return
-        try:
-            value = int(attrs.get("data-target-value"))
-        except (TypeError, ValueError):
-            return
-        if 0 <= value <= 100:
-            self.values[name] = value
+    return network_stream(req, CFG, 'radar', limit=2*1024*1024, budget=20)
 
 
 def fetch_main_radar():
-    html = _fetch_public_text(CODEX_RADAR_URL, "text/html").decode("utf-8", errors="replace")
-    parser = _RadarParser()
-    parser.feed(html)
-    if not parser.values:
+    data = json.loads(_fetch_public_text(CODEX_RADAR_URL, "application/json"))
+    probabilities = data.get('probabilities') if isinstance(data, dict) else None
+    if not isinstance(probabilities, dict):
         raise ValueError("missing radar probabilities")
+    values = {}
+    for hours in (24, 48):
+        value = probabilities.get(f'rounded_{hours}h')
+        values[hours] = value if type(value) is int and 0 <= value <= 100 else None
+    if all(value is None for value in values.values()):
+        raise ValueError("missing radar probabilities")
+    updated = None
+    try:
+        parsed = datetime.fromisoformat(data['updated_at'].replace('Z', '+00:00'))
+        if parsed.tzinfo is not None:
+            updated = parsed.timestamp()
+    except (KeyError, TypeError, AttributeError, ValueError, OverflowError):
+        pass  # Unknown metadata stays visibly unverified, never use query time.
+    queried = time.time()
     return {
-        "cr_main24": parser.values.get("probability-ring-24h"),
-        "cr_main48": parser.values.get("probability-ring-48h"),
-        "cr_main_updated": parser.updated,
-        "cr_main24_at": time.time() if 'probability-ring-24h' in parser.values else None,
-        "cr_main48_at": time.time() if 'probability-ring-48h' in parser.values else None,
+        "cr_main24": values[24],
+        "cr_main48": values[48],
+        "cr_main_updated": updated,
+        "cr_main24_at": queried if values[24] is not None else None,
+        "cr_main48_at": queried if values[48] is not None else None,
     }
 
 
@@ -670,6 +624,8 @@ def source_identity(name):
         context = glm_api_key() + '\0' + CFG.get('glm_region', 'cn')
     elif name == 'tokens':
         context = harness_sessions_dir()
+    elif name == 'main':
+        context = CODEX_RADAR_URL
     else:
         return None
     return hashlib.sha256(context.encode('utf-8')).hexdigest()
@@ -1048,7 +1004,7 @@ class App:
         self.data = {}
         self._radar_trends = {}
         self._credit_observation = {}
-        self._source_identities = {name: source_identity(name) for name in ('glm','deepseek','tokens')}
+        self._source_identities = {name: source_identity(name) for name in ('glm','deepseek','tokens','main')}
         self.errors = {}
         self.last_ok = None
         self.instance = instance

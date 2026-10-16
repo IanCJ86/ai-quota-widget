@@ -26,4 +26,4 @@ description: 在 Windows 安装、升级或配置 AI Quota Widget 额度监控�
 
 仅成品包缺失、平台不支持或用户明确开发才走源码路线，见 [技术说明](docs/cli-and-install.md)。安装故障读 [排错技能](skills/ai-quota-widget-troubleshoot/SKILL.md)，先识别成品/源码，不把“未配置”当依赖坏了。
 
-额度周期查询，非实时推送；DeepSeek 今日金额是余额差额估算；雷达来自 codexreset.org，非 OpenAI 官方。说明这些边界即可，不扩大安装任务。
+额度周期查询，非实时推送；DeepSeek 今日金额是余额差额估算；雷达来自 codex-reset.com，非 OpenAI 官方。说明这些边界即可，不扩大安装任务。
