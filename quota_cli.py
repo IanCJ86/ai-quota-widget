@@ -18,7 +18,9 @@ PUBLIC_FIELDS = {
     'glm': ('g5_pct','gw_pct','g5_reset','gw_reset'),
     'deepseek': ('ds_balance','ds_spend','ds_spend_day','ds_currency','ds_available','ds_spend_error'),
     'main': ('cr_main24','cr_main48','cr_main_updated','cr_main24_at','cr_main48_at',
-             'cr_main24_updated','cr_main48_updated','cr_main24_missing','cr_main48_missing'),
+             'cr_main24_updated','cr_main48_updated','cr_main24_missing','cr_main48_missing',
+             'cr_main_phase','cr_main_signal_at','cr_main_expires_at','cr_main_review_at',
+             'cr_main_reset_at','cr_main_at'),
     'tokens': ('ds_tokens_total','ds_tokens_fresh','ds_tokens_day'),
 }
 
@@ -37,6 +39,10 @@ def safe_data(name, data):
                 pass
         elif key == 'ds_currency' and value in ('CNY','USD'):
             output[key] = value
+        elif key == 'cr_main_phase':
+            from quota_radar import PHASES
+            if value in PHASES:
+                output[key] = value
         elif key == 'ds_spend_error' and value == 'SpendWriteFailed':
             output[key] = value
         elif key == 'cr_credit_expiries' and isinstance(value, list) and all(finite(x) for x in value):

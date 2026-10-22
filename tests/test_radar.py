@@ -1,5 +1,6 @@
 """Signal lifecycle fixtures; no credentials, network, GUI or real cache."""
 import unittest
+from unittest.mock import patch
 from datetime import datetime, timezone
 
 from quota_radar import parse_forecast, radar_view
@@ -156,3 +157,21 @@ class RadarLifecycleTests(unittest.TestCase):
         self.assertNotIn('PUBLIC_POST',str(data))
         self.assertNotIn('https://',str(data))
         self.assertEqual(len(data['cr_main_signal_key']),64)
+
+    def test_cli_preserves_lifecycle_without_publishing_signal_identity(self):
+        from quota_cli import safe_data, summary
+        data=self.parse(announced())
+        clean=safe_data('main',data)
+        self.assertEqual(clean['cr_main_phase'],'announced')
+        self.assertNotIn('cr_main_signal_key',clean)
+        self.assertEqual(radar_view(clean,now=NOW)['score'],93)
+        for phase in ('quiet','expired','completed'):
+            with self.subTest(phase=phase):
+                clean=safe_data('main',dict(data,cr_main_phase=phase,cr_main24=None,
+                                         cr_main48=None,cr_main_reset_at=NOW-1))
+                self.assertEqual(radar_view(clean,now=NOW)['phase'],phase)
+        with patch('quota_radar.time.time',return_value=NOW):
+            report=summary({'source':'fresh','sources':{
+                'main':{'state':'ok','error':None,'data':safe_data('main',data)}}})
+        self.assertIn('已预告 93%',report)
+        self.assertNotIn('24小时预测',report)
