@@ -3,6 +3,7 @@ import math
 import re
 import time
 from datetime import datetime
+from quota_radar import PHASES, radar_view
 
 SOURCES = ('kimi', 'codex', 'glm', 'deepseek', 'main', 'tokens')
 ACCOUNT_SOURCES = SOURCES[:4]
@@ -93,13 +94,14 @@ def source_status(data, stamp=0, verified=False, error=None, now=None, interval=
 def radar_status(data, window=24, verified=False, error=None, now=None):
     now = time.time() if now is None else now
     key = f'cr_main{window}'
-    stamp = data.get(key+'_at')
+    view = radar_view(data, window, now)
+    stamp = data.get('cr_main_at') if view else data.get(key+'_at')
     updated = data.get(key+'_updated', data.get('cr_main_updated'))
     reason = error_label(error, 'main') if error else ''
     if not reason:
-        if not finite(data.get(key)):
+        if not view and not finite(data.get(key)):
             reason = '该窗口未提供'
-        elif data.get(key+'_missing'):
+        elif not view and data.get(key+'_missing'):
             reason = '该窗口待更新'
         elif not verified:
             reason = '缓存待核验'
@@ -113,6 +115,9 @@ def radar_status(data, window=24, verified=False, error=None, now=None):
 
 
 def merge_radar(previous, current, now=None):
+    if current.get('cr_main_phase') in PHASES:
+        # A fresh quiet/expired/completed response explicitly clears old scores.
+        return {**{k: v for k, v in previous.items() if not k.startswith('cr_main')}, **current}
     result = dict(previous)
     now = time.time() if now is None else now
     for window in (24, 48):

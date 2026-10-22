@@ -23,6 +23,7 @@ from quota_paths import data_locations, resolve_data_dir, migrate_data
 from quota_state import (source_status, window_expired, error_label, finite,
                          validate_config, credit_status, refresh_notice, radar_status, merge_radar)
 from quota_signals import tariff_status, voucher_fingerprints, observe_vouchers, voucher_colors
+from quota_radar import parse_forecast, radar_view
 
 # CLI dispatch precedes GUI imports and config/credential access.
 if __name__ == '__main__' and sys.argv[1:] and sys.argv[1] != '--query':
@@ -533,31 +534,7 @@ def _fetch_public_text(url, accept):
 
 
 def fetch_main_radar():
-    data = json.loads(_fetch_public_text(CODEX_RADAR_URL, "application/json"))
-    probabilities = data.get('probabilities') if isinstance(data, dict) else None
-    if not isinstance(probabilities, dict):
-        raise ValueError("missing radar probabilities")
-    values = {}
-    for hours in (24, 48):
-        value = probabilities.get(f'rounded_{hours}h')
-        values[hours] = value if type(value) is int and 0 <= value <= 100 else None
-    if all(value is None for value in values.values()):
-        raise ValueError("missing radar probabilities")
-    updated = None
-    try:
-        parsed = datetime.fromisoformat(data['updated_at'].replace('Z', '+00:00'))
-        if parsed.tzinfo is not None:
-            updated = parsed.timestamp()
-    except (KeyError, TypeError, AttributeError, ValueError, OverflowError):
-        pass  # Unknown metadata stays visibly unverified, never use query time.
-    queried = time.time()
-    return {
-        "cr_main24": values[24],
-        "cr_main48": values[48],
-        "cr_main_updated": updated,
-        "cr_main24_at": queried if values[24] is not None else None,
-        "cr_main48_at": queried if values[48] is not None else None,
-    }
+    return parse_forecast(json.loads(_fetch_public_text(CODEX_RADAR_URL, "application/json")))
 
 
 # ---------------- provider API keys (GLM / DeepSeek) ----------------
@@ -625,7 +602,7 @@ def source_identity(name):
     elif name == 'tokens':
         context = harness_sessions_dir()
     elif name == 'main':
-        context = CODEX_RADAR_URL
+        context = CODEX_RADAR_URL + '#signals-v2'
     else:
         return None
     return hashlib.sha256(context.encode('utf-8')).hexdigest()
@@ -1756,9 +1733,12 @@ class App:
                     self._credit_observation, payload['data'], time.time())
             if name == 'main':
                 trends = getattr(self, '_radar_trends', {}).copy()
+                if self.data.get('cr_main_signal_key') != payload['data'].get('cr_main_signal_key'):
+                    trends = {}
                 for key in ('cr_main24', 'cr_main48'):
                     old, new = self.data.get(key), payload['data'].get(key)
-                    if finite(old) and finite(new):
+                    same_signal = self.data.get('cr_main_signal_key') == payload['data'].get('cr_main_signal_key')
+                    if same_signal and finite(old) and finite(new):
                         if new != old:
                             trends[key] = 1 if new > old else -1
                     else:
@@ -1952,7 +1932,20 @@ class App:
 
         key = "cr_main48" if win == 48 else "cr_main24"
         main_pct = self.data.get(key)
-        self._set_row("cr_main", main_pct, f"{win}h概率")
+        view = radar_view(self.data, win)
+        if view:
+            main_pct = view['score']
+            if view['phase'] == 'completed':
+                reset = self.data.get('cr_main_reset_at')
+                self._set_custom('cr_main', '已重置', datetime.fromtimestamp(reset).strftime('%m-%d %H:%M'))
+                return
+            if main_pct is None:
+                self._set_custom('cr_main', '已预告' if view['phase'] == 'announced' else '--',
+                                 '待重置' if view['phase'] == 'announced' else view['note'])
+            else:
+                self._set_row('cr_main', main_pct, view['note'])
+        else:
+            self._set_row("cr_main", main_pct, f"{win}h概率")
         if main_pct is not None:
             direction = getattr(self, '_radar_trends', {}).get(key, 0)
             color = THEMES[self.theme]['RADAR_UP' if direction > 0 else 'RADAR_DOWN'] if direction else (

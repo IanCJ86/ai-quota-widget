@@ -192,7 +192,7 @@ def doctor(m):
         label = '凭据存在' if flags[name] else '未配置（可跳过）'
         lines.append(f'{name}: {label}; {state["state"]}; 上次成功={state.get("last_success") or "无"}; '
                      f'最后错误={error_label(recent_errors.get(name)) or "无记录"}')
-    lines.append('雷达：codex-reset.com，第三方预测，非OpenAI官方；本次未联网核验。')
+    lines.append('雷达：codex-reset.com，仅预告/线索评分及完成状态，非OpenAI官方概率；本次未联网核验。')
     from quota_network import settings
     try:
         modes = settings(m.CFG)
@@ -253,6 +253,12 @@ def summary(snapshot):
         if row['state'] == 'not_configured':
             continue
         values = []
+        if name == 'main' and row['data'].get('cr_main_phase'):
+            from quota_radar import radar_view
+            view = radar_view(row['data'])
+            text = view['note'] + (f' {view["score"]}%' if view['score'] is not None else '')
+            lines.append(f'main: {text}  [{row["error"] or states.get(row["state"], row["state"])}]')
+            continue
         for key, label in labels.items():
             value = row['data'].get(key)
             if value is not None:

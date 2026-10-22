@@ -826,6 +826,65 @@ class UITests(unittest.TestCase):
         a._on_result('main', {'ok': True, 'data': {'cr_main24': 50, 'cr_main48': 75}}, {})
         self.assertEqual(a._radar_trends, {})
 
+    def test_signal_lifecycle_renders_announcement_expiry_quiet_and_completion(self):
+        from quota_radar import parse_forecast
+        a=self.app
+        now=time.time()
+        payload=dict(mode='announced',updated_at=now,last_reset_at=now-2*86400,
+                     probabilities={'rounded_24h':22,'rounded_48h':39,'signal_percent':93},
+                     official_signal={'tweet_id':'a','at':now-60},
+                     latest_alert={'kind':'watch','state':'active','id':'a','source_at':now-60,
+                                   'window':{'end':now+30}})
+        data=parse_forecast(payload,now)
+        a._on_result('main',{'ok':True,'data':data},{})
+        self.assertEqual(a.rows['cr_main'][0].cget('text'),'93%')
+        self.assertEqual(a.rows['cr_main'][1].cget('text'),'已预告')
+        with patch('quota_radar.time.time',return_value=now+31):
+            a._render()
+        self.assertEqual(a.rows['cr_main'][0].cget('text'),'--')
+        self.assertEqual(a.rows['cr_main'][1].cget('text'),'预告失效')
+        payload.update(mode='model',official_signal=None,latest_alert=None)
+        a._on_result('main',{'ok':True,'data':parse_forecast(payload,now)},{})
+        self.assertEqual(a.rows['cr_main'][0].cget('text'),'--')
+        self.assertEqual(a.rows['cr_main'][1].cget('text'),'暂无预告')
+        self.assertIsNone(a.data['cr_main24'])
+        payload['last_reset_at']=now-10
+        a._on_result('main',{'ok':True,'data':parse_forecast(payload,now)},{})
+        self.assertEqual(a.rows['cr_main'][0].cget('text'),'已重置')
+        self.assertEqual(a.rows['cr_main'][1].cget('text'),datetime.fromtimestamp(now-10).strftime('%m-%d %H:%M'))
+        self.assertIsNone(a.data['cr_main24'])
+
+    def test_signal_expiry_survives_cache_restart_and_network_failure(self):
+        from quota_radar import parse_forecast
+        a=self.app;now=time.time()
+        payload=dict(mode='announced',updated_at=now,probabilities={'signal_percent':93},
+                     official_signal={'tweet_id':'a','at':now-60,'expires_at':now+10})
+        a._on_result('main',{'ok':True,'data':parse_forecast(payload,now)},{})
+        a.data,a._radar_trends={},{}
+        a._load_cache()
+        with patch('quota_radar.time.time',return_value=now+11):
+            a._render()
+        self.assertEqual(a.rows['cr_main'][0].cget('text'),'--')
+        a._on_result('main',{'ok':False,'error':'Timeout'},{})
+        with patch('quota_radar.time.time',return_value=now+11):a._render()
+        self.assertNotIn('93',a.rows['cr_main'][0].cget('text'))
+
+    def test_score_changes_compare_only_within_same_signal_and_keep_colors(self):
+        from quota_radar import parse_forecast
+        a=self.app;now=time.time()
+        payload=dict(mode='announced',updated_at=now,probabilities={'signal_percent':83},
+                     official_signal={'tweet_id':'a','at':now-60})
+        a._on_result('main',{'ok':True,'data':parse_forecast(payload,now)},{})
+        payload['probabilities']['signal_percent']=93
+        a._on_result('main',{'ok':True,'data':parse_forecast(payload,now)},{})
+        self.assertEqual(a.rows['cr_main'][0].cget('fg'),monitor.THEMES[a.theme]['RADAR_UP'])
+        payload['probabilities']['signal_percent']=83
+        a._on_result('main',{'ok':True,'data':parse_forecast(payload,now)},{})
+        self.assertEqual(a.rows['cr_main'][0].cget('fg'),monitor.THEMES[a.theme]['RADAR_DOWN'])
+        payload['official_signal']['tweet_id']='b'
+        a._on_result('main',{'ok':True,'data':parse_forecast(payload,now)},{})
+        self.assertEqual(a._radar_trends,{})
+
     def test_missing_radar_window_is_not_compared_with_another_window(self):
         a = self.app
         a._on_result('main', {'ok': True, 'data': {'cr_main24': 30, 'cr_main48': 60}}, {})

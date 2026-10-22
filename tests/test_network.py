@@ -23,7 +23,7 @@ import quota_update as updates
 from monitor_runtime import Scheduler, validate_result
 
 
-FORECAST = {'probabilities': {'rounded_24h': 30, 'rounded_48h': 52},
+FORECAST = {'mode':'model', 'probabilities': {'rounded_24h': 30, 'rounded_48h': 52},
             'updated_at': '2026-10-07T11:00:00Z'}
 
 
@@ -109,7 +109,7 @@ class StreamTests(unittest.TestCase):
         self.assertEqual(text, body)
 
     def test_unknown_metadata_remains_unknown(self):
-        body = json.dumps({'probabilities': FORECAST['probabilities']}).encode()
+        body = json.dumps({'mode':'model','probabilities': FORECAST['probabilities']}).encode()
         with patch.object(net, 'open_request', return_value=io.BytesIO(body)):
             result = monitor.fetch_main_radar()
         self.assertIsNone(result['cr_main_updated'])
@@ -220,7 +220,7 @@ class FreshnessTests(unittest.TestCase):
         with patch.object(monitor, '_fetch_public_text', return_value=json.dumps(body).encode()):
             result = monitor.fetch_main_radar()
         self.assertEqual(result['cr_main_updated'], 1791370800)
-        self.assertEqual((result['cr_main24'], result['cr_main48']), (30, 52))
+        self.assertEqual((result['cr_main24'], result['cr_main48']), (None, None))
 
     def test_metadata_validation_rejects_private_text(self):
         for bad in ('PRIVATE', False, -1, float('nan')):

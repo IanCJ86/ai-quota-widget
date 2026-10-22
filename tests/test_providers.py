@@ -85,13 +85,15 @@ class KimiAdapterTests(unittest.TestCase):
 
 
 class RadarAdapterTests(unittest.TestCase):
-    def test_uses_display_percentages_not_raw_or_model_probabilities(self):
-        body = json.dumps({'probabilities': {'rounded_24h': 50, 'rounded_48h': 75,
-            'raw_24h': .18, 'model_24h': 18, 'model_48h': 33},
+    def test_uses_signal_score_not_raw_or_model_probabilities(self):
+        now=time.time()
+        body = json.dumps({'mode':'announced', 'probabilities': {'rounded_24h': 22, 'rounded_48h': 39,
+            'signal_percent':93, 'raw_24h': .22, 'model_24h': 22, 'model_48h': 39},
+            'official_signal': {'at':now-60,'tweet_id':'test'},
             'updated_at': '2026-10-16T18:26:26.280Z'}).encode()
         with patch.object(monitor, "_fetch_public_text", return_value=body) as fetch:
             result = validate_result("main", monitor.fetch_main_radar())
-        self.assertEqual((result["cr_main24"], result["cr_main48"]), (50, 75))
+        self.assertEqual((result["cr_main24"], result["cr_main48"]), (93, 93))
         self.assertAlmostEqual(result['cr_main_updated'], 1792175186.28)
         fetch.assert_called_once_with('https://codex-reset.com/api/forecast', 'application/json')
 
@@ -107,19 +109,19 @@ class RadarAdapterTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     monitor.fetch_main_radar()
 
-    def test_partial_response_does_not_copy_one_window_to_the_other(self):
+    def test_model_only_does_not_show_historical_probability(self):
         with patch.object(monitor, "_fetch_public_text", return_value=
-                          b'{"probabilities":{"rounded_48h":0}}'):
+                          b'{"mode":"model","probabilities":{"rounded_48h":39}}'):
             result = validate_result("main", monitor.fetch_main_radar())
         self.assertIsNone(result["cr_main24"])
-        self.assertEqual(result["cr_main48"], 0)
-        self.assertIsNone(result['cr_main24_at'])
+        self.assertIsNone(result["cr_main48"])
+        self.assertEqual(result['cr_main_phase'],'quiet')
         self.assertIsNotNone(result['cr_main48_at'])
 
     def test_missing_invalid_or_naive_timestamp_never_becomes_query_time(self):
         for stamp in (None, True, 0, 'bad', '2026-10-17T09:00:00'):
             with self.subTest(stamp=stamp), patch.object(monitor, '_fetch_public_text',
-                    return_value=json.dumps({'probabilities': {'rounded_24h': 100},
+                    return_value=json.dumps({'mode':'model','probabilities': {'rounded_24h': 100},
                                              'updated_at': stamp}).encode()):
                 self.assertIsNone(monitor.fetch_main_radar()['cr_main_updated'])
 
