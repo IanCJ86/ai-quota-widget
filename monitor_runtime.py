@@ -233,7 +233,9 @@ def validate_result(name, data):
         'deepseek': ('ds_balance','ds_spend','ds_spend_day','ds_granted','ds_topped_up',
                      'ds_currency','ds_available','ds_plan','ds_spend_error'),
         'main': ('cr_main24','cr_main48','cr_main_updated','cr_main24_at','cr_main48_at',
-                 'cr_main24_updated','cr_main48_updated','cr_main24_missing','cr_main48_missing'),
+                 'cr_main24_updated','cr_main48_updated','cr_main24_missing','cr_main48_missing',
+                 'cr_main_phase','cr_main_signal_at','cr_main_expires_at','cr_main_review_at',
+                 'cr_main_reset_at','cr_main_signal_key','cr_main_at'),
         'tokens': ('ds_tokens_total','ds_tokens_fresh','ds_tokens_day'),
     }[name]
     data = {k: v for k, v in data.items() if k in fields}
@@ -254,9 +256,13 @@ def validate_result(name, data):
             if not isinstance(value, list) or len(value) > 10000 or any(
                     not isinstance(v, str) or len(v) != 64 or any(c not in '0123456789abcdef' for c in v) for v in value):
                 raise ValueError('invalid voucher fingerprints')
-        elif key == 'cr_credit_scope':
+        elif key in ('cr_credit_scope', 'cr_main_signal_key'):
             if not isinstance(value, str) or len(value) != 64 or any(c not in '0123456789abcdef' for c in value):
                 raise ValueError('invalid account scope')
+        elif key == 'cr_main_phase':
+            from quota_radar import PHASES
+            if value not in PHASES:
+                raise ValueError('invalid radar phase')
         elif key.endswith('_day'):
             if not isinstance(value, str) or date.fromisoformat(value).isoformat() != value:
                 raise ValueError('invalid date')
@@ -290,7 +296,7 @@ def validate_result(name, data):
         from datetime import date
         if data.get("ds_tokens_day") != date.today().isoformat():
             raise ValueError("wrong usage date")
-    if all(value is None for value in values) and not REQUIRED_KEYS.get(name):
+    if all(value is None for value in values) and not REQUIRED_KEYS.get(name) and not (name == 'main' and data.get('cr_main_phase')):
         raise ValueError("missing quota/probability")
     return data
 

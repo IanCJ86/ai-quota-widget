@@ -18,7 +18,9 @@ PUBLIC_FIELDS = {
     'glm': ('g5_pct','gw_pct','g5_reset','gw_reset'),
     'deepseek': ('ds_balance','ds_spend','ds_spend_day','ds_currency','ds_available','ds_spend_error'),
     'main': ('cr_main24','cr_main48','cr_main_updated','cr_main24_at','cr_main48_at',
-             'cr_main24_updated','cr_main48_updated','cr_main24_missing','cr_main48_missing'),
+             'cr_main24_updated','cr_main48_updated','cr_main24_missing','cr_main48_missing',
+             'cr_main_phase','cr_main_signal_at','cr_main_expires_at','cr_main_review_at',
+             'cr_main_reset_at','cr_main_at'),
     'tokens': ('ds_tokens_total','ds_tokens_fresh','ds_tokens_day'),
 }
 
@@ -37,6 +39,10 @@ def safe_data(name, data):
                 pass
         elif key == 'ds_currency' and value in ('CNY','USD'):
             output[key] = value
+        elif key == 'cr_main_phase':
+            from quota_radar import PHASES
+            if value in PHASES:
+                output[key] = value
         elif key == 'ds_spend_error' and value == 'SpendWriteFailed':
             output[key] = value
         elif key == 'cr_credit_expiries' and isinstance(value, list) and all(finite(x) for x in value):
@@ -192,7 +198,7 @@ def doctor(m):
         label = '凭据存在' if flags[name] else '未配置（可跳过）'
         lines.append(f'{name}: {label}; {state["state"]}; 上次成功={state.get("last_success") or "无"}; '
                      f'最后错误={error_label(recent_errors.get(name)) or "无记录"}')
-    lines.append('雷达：codex-reset.com，第三方预测，非OpenAI官方；本次未联网核验。')
+    lines.append('雷达：codex-reset.com，第三方预告/线索评分及完成状态，非OpenAI官方概率；本次未联网核验。')
     from quota_network import settings
     try:
         modes = settings(m.CFG)
@@ -253,6 +259,12 @@ def summary(snapshot):
         if row['state'] == 'not_configured':
             continue
         values = []
+        if name == 'main' and row['data'].get('cr_main_phase'):
+            from quota_radar import radar_view
+            view = radar_view(row['data'])
+            text = view['note'] + (f' {view["score"]}%' if view['score'] is not None else '')
+            lines.append(f'main: {text}  [{row["error"] or states.get(row["state"], row["state"])}]')
+            continue
         for key, label in labels.items():
             value = row['data'].get(key)
             if value is not None:
