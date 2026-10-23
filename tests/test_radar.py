@@ -56,7 +56,7 @@ class RadarLifecycleTests(unittest.TestCase):
         payload=announced();payload['latest_alert']['window']={'end':NOW+60}
         data=self.parse(payload)
         self.assertEqual(radar_view(data,now=NOW+59)['score'],93)
-        self.assertEqual(radar_view(data,now=NOW+60)['note'],'预告失效')
+        self.assertEqual(radar_view(data,now=NOW+60)['note'],'待确认')
         self.assertIsNone(radar_view(data,now=NOW+60)['score'])
 
     def test_unspecified_deadline_is_not_reused_forever(self):
@@ -76,7 +76,7 @@ class RadarLifecycleTests(unittest.TestCase):
             payload=announced();payload['latest_alert']['state']=state
             with self.subTest(state=state):
                 view=radar_view(self.parse(payload),now=NOW)
-                self.assertEqual(view['note'],'预告失效')
+                self.assertEqual(view['note'],'待确认')
                 self.assertIsNone(view['score'])
 
     def test_withdrawal_of_old_event_does_not_cancel_new_announcement(self):
