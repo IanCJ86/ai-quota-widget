@@ -842,7 +842,7 @@ class UITests(unittest.TestCase):
         with patch('quota_radar.time.time',return_value=now+31):
             a._render()
         self.assertEqual(a.rows['cr_main'][0].cget('text'),'--')
-        self.assertEqual(a.rows['cr_main'][1].cget('text'),'预告失效')
+        self.assertEqual(a.rows['cr_main'][1].cget('text'),'待确认')
         payload.update(mode='model',official_signal=None,latest_alert=None)
         a._on_result('main',{'ok':True,'data':parse_forecast(payload,now)},{})
         self.assertEqual(a.rows['cr_main'][0].cget('text'),'--')

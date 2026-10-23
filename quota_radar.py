@@ -110,7 +110,7 @@ def radar_view(data, window=24, now=None):
             phase = 'review'
     if phase == 'completed' and (not _stamp(data.get('cr_main_reset_at')) or now-data['cr_main_reset_at'] > 86400):
         phase = 'quiet'
-    note = {'announced': '已预告', 'hint': '重置线索', 'expired': '预告失效',
+    note = {'announced': '已预告', 'hint': '重置线索', 'expired': '待确认',
             'quiet': '暂无预告', 'completed': '已重置', 'review': '预告待核验'}[phase]
     score = data.get(f'cr_main{window}') if phase in ('announced', 'hint') else None
     return dict(phase=phase, score=score, note=note)
