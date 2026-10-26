@@ -489,6 +489,17 @@ def fetch_codex():
 
     shown = [w for w in (five_h, weekly) if w]
 
+    # Account credits are distinct from reset vouchers. The API returns a
+    # decimal string; omit malformed or missing amounts without losing quota.
+    account_credits = rl.get("credits") or {}
+    balance = account_credits.get("balance") if isinstance(account_credits, dict) else None
+    try:
+        balance = float(balance) if balance is not None and not isinstance(balance, bool) else None
+        if balance is not None and (not finite(balance) or not 0 <= balance <= 1e18):
+            balance = None
+    except (ValueError, TypeError, OverflowError):
+        balance = None
+
     # Reset credits: granted "full reset" vouchers with an expiry.
     credit = (result or {}).get("rateLimitResetCredits") or {}
     try:
@@ -509,6 +520,7 @@ def fetch_codex():
         # Any displayed window that already reset makes the snapshot stale; the
         # UI greys it instead of passing it off as the current value.
         "c_window_expired": bool(shown) and any(expired(w) for w in shown),
+        "c_auto_balance": balance,
         "cr_credit_count": credit_count,
         "cr_credit_tokens": voucher_fingerprints(credit.get('credits')),
         "cr_credit_scope": hashlib.sha256(str(account.get('id') or account.get('email') or
@@ -1024,7 +1036,7 @@ class App:
         self._divider2.grid(row=4, column=0, sticky="ew", padx=10, pady=1)
         self._section(5, "Codex", CODEX_NEUTRAL,
                       [("c5", "每5小时"), ("cw", "每周"),
-                       ("cr_credit", "重置券"), ("cr_main", "Tibo雷达")])
+                       ("c_auto", "自动额度"), ("cr_credit", "重置券"), ("cr_main", "Tibo雷达")])
         self._divider3 = tk.Frame(self.content, bg="#3a3a4e", height=1)
         self._divider3.grid(row=6, column=0, sticky="ew", padx=10, pady=1)
         # DeepSeek is pay-as-you-go, so this card shows a money balance.
@@ -1700,7 +1712,7 @@ class App:
     @staticmethod
     def _source_keys(name):
         return {"kimi": ("k5_", "kw_", "k_plan"),
-                "codex": ("c5_", "cw_", "c_plan", "c_window", "cr_credit"),
+                "codex": ("c5_", "cw_", "c_plan", "c_window", "c_auto_", "cr_credit"),
                 "glm": ("g5_", "gw_", "g_plan"), "main": ("cr_main",),
                 "deepseek": ("ds_balance", "ds_spend", "ds_granted", "ds_topped_up",
                              "ds_currency", "ds_available", "ds_plan"),
@@ -1991,6 +2003,10 @@ class App:
         self._set_row("c5", d.get("c5_pct"),
                       _countdown(d.get("c5_reset")) if d.get("c5_reset") else "")
         self._set_row("cw", d.get("cw_pct"), _fmt_reset(d.get("cw_reset")))
+        # Only show account credits when the server actually supplies a balance.
+        auto_balance = d.get("c_auto_balance")
+        self._set_row_visible("c_auto", auto_balance is not None)
+        self._set_custom("c_auto", f"{int(auto_balance + 0.5):,}" if auto_balance is not None else None)
         # Reset vouchers: hide the row when there are none (or when disabled).
         count, expiry, credit_note = credit_status(d)
         show_credits = bool(CFG.get("show_codex_credits", True)) and bool(count or credit_note.startswith('已到期'))
@@ -2049,12 +2065,12 @@ class App:
         self._render_radar()
         enabled = self._enabled_sources()
         for source, keys in {"kimi": ("k5", "kw"),
-                             "codex": ("c5", "cw", "cr_credit"),
+                             "codex": ("c5", "cw", "c_auto", "cr_credit"),
                              "glm": ("g5", "gw"), "main": ("cr_main",),
                              "deepseek": ("ds", "ds_spend")}.items():
             if source in ('codex','kimi','glm') and source in enabled and not self._transport_stale(source):
                 for key in keys:
-                    if key == 'cr_credit':
+                    if key in ('cr_credit', 'c_auto'):
                         continue
                     if self._window_expired(key) or (source == 'codex' and not any(d.get(k + "_reset") for k in ("c5", "cw"))
                                                     and d.get("c_window_expired")):

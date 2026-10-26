@@ -11,7 +11,7 @@
 | 我用什么软件 | 买了什么套餐 / 服务 | 能看到什么 | 怎么连接 |
 | --- | --- | --- | --- |
 | Kimi Code；或使用同一 Kimi Code 账户的兼容客户端 | Kimi Code 套餐 | 5 小时、每周剩余额度与重置时间 | 本机登录 Kimi Code CLI，工具读取其登录凭据 |
-| Codex 桌面端 / CLI | 可使用 Codex 的订阅账户 | 5 小时、每周额度；接口提供时显示重置券及到期日 | 本机已有可识别的 Codex 登录及 app-server 运行时 |
+| Codex 桌面端 / CLI | 可使用 Codex 的订阅账户 | 5 小时、每周额度；接口提供时显示自动额度余额及重置券、到期日 | 本机已有可识别的 Codex 登录及 app-server 运行时 |
 | Claude Code、OpenCode 等，实际接入 GLM Coding Plan | GLM Coding Plan | 套餐 5 小时、每周剩余额度 | 在设置中保存对应套餐 Key，选择国内 / 国际区域 |
 | DeepSeek Harness、OpenCode 等，实际接入 DeepSeek 官方 API | DeepSeek 官方 API 按量账户 | 账户余额、今日支出估算 | 在设置中保存 DeepSeek 官方 API Key |
 | 本机 DeepSeek Harness | 同上；本机统计是附加项 | 当天本机 Harness 的 token 用量 | 读取本机 Harness 会话日志 |
@@ -57,7 +57,7 @@ $installer = Join-Path $env:TEMP 'ai-quota-quick-install.ps1'; Invoke-WebRequest
 - 可选 Tibo雷达来自 [codex-reset.com](https://codex-reset.com)：显示有效预告/线索评分、失效及重置完成状态，不显示纯历史频率。评分是第三方判断，不是官方概率或你的个人到账通知。
 - 卸载：先右键“退出”，再到 Windows“已安装的应用”卸载。默认保留配置和 Key；只有明确选择清除时才删除本工具的数据，不动其他 AI 软件。
 
-**读数说明：** DeepSeek“今日估算”来自余额变化，不是官方账单，也不需要额外网页登录授权。当天已有采样时，关闭后再打开可补算余额下降；首次采样前、跨天及充值抵消的消费不能完整还原。`tok` 只统计本机 Harness。Codex 数据可能是本机快照，存在滞后。
+**读数说明：** DeepSeek“今日估算”来自余额变化，不是官方账单，也不需要额外网页登录授权。当天已有采样时，关闭后再打开可补算余额下降；首次采样前、跨天及充值抵消的消费不能完整还原。`tok` 只统计本机 Harness。Codex 数据可能是本机快照，存在滞后。自动额度是账户额度余额，与重置券分开；仅在接口提供余额时显示。
 
 ## 六套主题
 
