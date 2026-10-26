@@ -14,7 +14,8 @@ from quota_state import SOURCES, ACCOUNT_SOURCES, source_status, window_expired,
 
 PUBLIC_FIELDS = {
     'kimi': ('k5_pct','kw_pct','k5_reset','kw_reset'),
-    'codex': ('c5_pct','cw_pct','c5_reset','cw_reset','cr_credit_count','cr_credit_expiry','cr_credit_expiries','c_window_expired'),
+    'codex': ('c5_pct','cw_pct','c5_reset','cw_reset','cr_credit_count','cr_credit_expiry','cr_credit_expiries','c_window_expired',
+              'c_auto_balance'),
     'glm': ('g5_pct','gw_pct','g5_reset','gw_reset'),
     'deepseek': ('ds_balance','ds_spend','ds_spend_day','ds_currency','ds_available','ds_spend_error'),
     'main': ('cr_main24','cr_main48','cr_main_updated','cr_main24_at','cr_main48_at',
