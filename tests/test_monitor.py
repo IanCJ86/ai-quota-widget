@@ -234,6 +234,19 @@ class DataTests(unittest.TestCase):
         self.assertEqual(data["cr_credit_expiry"], 1790000000)   # soonest first
         runtime.validate_result("codex", data)
 
+    def test_codex_account_credits_are_optional_and_separate_from_vouchers(self):
+        for raw, expected in [("12345.40", 12345.4), ("0", 0.0), (None, None),
+                              ("bad", None), ("NaN", None), (-1, None), (True, None)]:
+            with self.subTest(balance=raw):
+                result = {"rateLimitsByLimitId": {"codex": {
+                    "primary": {"usedPercent": 100, "windowDurationMins": 10080},
+                    "credits": {"balance": raw}}},
+                    "rateLimitResetCredits": {"availableCount": 1}}
+                with patch.object(monitor.subprocess, "Popen", return_value=self._codex_proc(result)):
+                    data = runtime.validate_result("codex", monitor.fetch_codex())
+                self.assertEqual(data["c_auto_balance"], expected)
+                self.assertEqual(data["cr_credit_count"], 1)
+
     def test_codex_runtime_prefers_newest_versioned_binary(self):
         """An outdated bin\\codex.exe must not shadow the runtime in use.
 
@@ -1430,6 +1443,18 @@ class UITests(unittest.TestCase):
                 font = tkfont.Font(font=label.cget("font"))
                 self.assertLessEqual(font.measure(text), label.winfo_reqwidth(),
                                      "%s is clipped in row %s" % (text, key))
+
+    def test_codex_auto_balance_row_and_missing_value(self):
+        a = self.app
+        for balance, expected in [(12345.4, "12,345"), (12345.6, "12,346"), (0, "0")]:
+            a._on_result("codex", {"ok": True, "data": {
+                "cw_pct": 0, "c_auto_balance": balance, "cr_credit_count": 1}}, {})
+            self.assertTrue(a.rows["c_auto"][0].winfo_manager())
+            self.assertEqual(a.rows["c_auto"][0].cget("text"), expected)
+            self.assertLess(int(a.row_labels["cw"][0].grid_info()["row"]), int(a.row_labels["c_auto"][0].grid_info()["row"]))
+            self.assertLess(int(a.row_labels["c_auto"][0].grid_info()["row"]), int(a.row_labels["cr_credit"][0].grid_info()["row"]))
+        a._on_result("codex", {"ok": True, "data": {"cw_pct": 0}}, {})
+        self.assertFalse(a.rows["c_auto"][0].winfo_manager())
 
     def test_codex_credit_row_follows_count_and_toggle(self):
         a = self.app

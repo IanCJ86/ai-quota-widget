@@ -228,7 +228,7 @@ def validate_result(name, data):
     fields = {
         'kimi': ('k5_pct','kw_pct','k5_reset','kw_reset','k_plan'),
         'codex': ('c5_pct','cw_pct','c5_reset','cw_reset','c_plan','c_window_expired',
-                  'cr_credit_count','cr_credit_expiry','cr_credit_expiries','cr_credit_tokens','cr_credit_scope'),
+                  'cr_credit_count','cr_credit_expiry','cr_credit_expiries','cr_credit_tokens','cr_credit_scope','c_auto_balance'),
         'glm': ('g5_pct','gw_pct','g5_reset','gw_reset','g_plan'),
         'deepseek': ('ds_balance','ds_spend','ds_spend_day','ds_granted','ds_topped_up',
                      'ds_currency','ds_available','ds_plan','ds_spend_error'),
