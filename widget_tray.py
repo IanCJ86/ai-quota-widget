@@ -97,6 +97,7 @@ class TrayIcon:
         menu = pystray.Menu(
             pystray.MenuItem("显示额度监控", lambda *args: self.commands.put("show"), default=True),
             pystray.MenuItem("立即刷新", lambda *args: self.commands.put("refresh")),
+            pystray.MenuItem("检测出口 IP（ipwho.is）", lambda *args: self.commands.put("egress")),
             pystray.MenuItem("退出", lambda *args: self.commands.put("quit")),
         )
         try:

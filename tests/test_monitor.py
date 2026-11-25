@@ -648,6 +648,39 @@ class UITests(unittest.TestCase):
         for item in reversed(self.patches):
             item.stop()
         self.tmp.cleanup()
+
+    def test_egress_requires_opt_in_and_stays_out_of_diagnostics(self):
+        a = self.app
+        with patch.object(monitor, 'QueryProcess') as process:
+            a._poll_egress()
+            process.assert_not_called()
+            a._commands.put('egress')
+            a._poll_commands(reschedule=False)
+            process.assert_called_once_with(os.path.abspath(monitor.__file__), 'egress')
+            worker = process.return_value
+            worker.poll.return_value = 0
+            worker.result.return_value = {'ok': True, 'data': {
+                'success': True, 'ip': '8.8.8.8', 'country_code': 'US', 'region': '加利福尼亚州'}}
+            a._poll_egress()
+            worker.close.assert_called_once()
+        self.assertIn('8.8.8.8', a.egress_label.cget('text'))
+        self.assertIn('加利福尼亚州', a.egress_label.cget('text'))
+        a._write_debug()
+        self.assertNotIn('8.8.8.8', Path(monitor.DEBUG_FILE).read_text(encoding='utf-8'))
+
+    def test_egress_timeout_clears_the_worker_and_can_retry(self):
+        a = self.app
+        with patch.object(monitor, 'QueryProcess') as process:
+            worker = process.return_value
+            worker.poll.return_value = None
+            a._check_egress()
+            a._egress_deadline = 0
+            a._poll_egress()
+            self.assertIn('检测失败', a.egress_label.cget('text'))
+            worker.close.assert_called_once()
+            a._check_egress()
+            self.assertEqual(process.call_count, 2)
+
     def test_five_skins_preserve_data_config_and_do_not_add_timers(self):
         a = self.app
         a._on_result("codex", {"ok": True, "data": {"cw_pct": 76}}, {})
