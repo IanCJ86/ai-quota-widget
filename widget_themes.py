@@ -30,7 +30,7 @@ class ThemePainter:
             label.configure(fg=palette["BRANDS"][name])
         for name, label in a.section_renews.items():
             label.configure(fg=palette["BRANDS"][name])
-        for label in [a.status, a.close_btn, *a._alpha_btns]:
+        for label in [a.status, a.close_btn, a.egress_label, *a._alpha_btns]:
             label.configure(fg=palette["FG_DIM"])
         self.canvas.configure(bg=palette["BG"])
         if a.theme == "glass":

@@ -42,7 +42,8 @@ if sys.argv[1:] == ["--version"]:
     raise SystemExit(0)
 
 from monitor_runtime import (Scheduler, SingleInstance, atomic_json, dpapi_protect,
-                             dpapi_unprotect, validate_result, QueryHistory)
+                             dpapi_unprotect, validate_result, QueryHistory, QueryProcess)
+from widget_egress import fetch_egress, parse_egress
 
 QUERY_MODE = len(sys.argv) == 3 and sys.argv[1] == "--query"
 HEADLESS_MODE = QUERY_MODE or any(arg in sys.argv for arg in
@@ -124,6 +125,7 @@ DEFAULT_CONFIG = {
     # Reset vouchers ("full reset" credits) and the daily token row.
     "show_codex_credits": True,
     "show_radar": True,
+    "show_egress_auto": False,
     "radar_window": 24,   # 24 or 48 hours
     "tray_metric": "cw_pct",  # Codex weekly percentage in the Windows tray
     "show_glm": False,            # GLM card visibility; rows show "--" until a key works
@@ -998,6 +1000,9 @@ class App:
         self.last_ok = None
         self.instance = instance
         self._closed = False
+        self._egress_worker = None
+        self._egress_due = 0
+        self._egress_deadline = 0
         self._commands = CommandInbox()
         self._commands.attach(self.root, lambda: self._poll_commands(reschedule=False))
         self._verified = set()
@@ -1043,6 +1048,11 @@ class App:
         self._section(7, "DeepSeek", DEEPSEEK_BLUE,
                       [("ds", "账号余额"), ("ds_spend", "今日估算")])
         self._dividers = [self._divider, self._divider2, self._divider3]
+        self.egress_label = tk.Label(self.content, fg=FG_DIM, bg=BG, font=FONT_STATUS,
+                                     justify="left", anchor="w", wraplength=200)
+        self.egress_label.grid(row=8, column=0, sticky="ew", padx=12, pady=(2, 0))
+        self.egress_label.grid_remove()
+        self._bind(self.egress_label)
 
         bar = tk.Frame(self.root, bg=BG)
         bar.grid(row=2, column=0, sticky="ew", padx=(19, 12), pady=(3, 2))
@@ -1088,6 +1098,10 @@ class App:
         self.menu.add_command(label="立即刷新", command=self.refresh_async)
         self.menu.add_command(label="快速设置…", command=self._setup_sources)
         self.menu.add_command(label="网络设置…", command=self._network_settings)
+        self.menu.add_command(label="检测出口 IP（ipwho.is）", command=self._check_egress)
+        self.show_egress_auto = tk.BooleanVar(value=CFG["show_egress_auto"])
+        self.menu.add_checkbutton(label="自动检测出口 IP（ipwho.is）", variable=self.show_egress_auto,
+                                  command=self._toggle_egress)
         self.menu.add_separator()
         self.show_kimi = tk.BooleanVar(value=self._st.get("show_kimi", True))
         self.show_codex = tk.BooleanVar(value=self._st.get("show_codex", True))
@@ -1266,6 +1280,7 @@ class App:
         if hasattr(self, 'updater'):
             self.updater.cancel.set()
         self._commands.close()
+        self._close_egress()
         self.scheduler.close()  # Reap only our Job Object trees, never other Codex tasks.
         # Nothing may run after destroy(): a callback that outlives its
         # interpreter only produces Tcl "invalid command name" noise.
@@ -1588,6 +1603,72 @@ class App:
     def _toggle_top(self):
         self.root.attributes("-topmost", self.topmost.get())
 
+    def _set_egress(self, text):
+        if text:
+            self.egress_label.configure(text=text)
+            self.egress_label.grid()
+        else:
+            self.egress_label.configure(text='')
+            self.egress_label.grid_remove()
+        if self.root.state() != 'withdrawn':
+            self._fit()
+
+    def _check_egress(self):
+        if self._closed or self._egress_worker is not None:
+            return
+        now = time.monotonic()
+        self._egress_due = now + REFRESH_SECONDS
+        self._egress_deadline = now + 12
+        self._set_egress('正在检测出口 IP…')
+        try:
+            self._egress_worker = QueryProcess(os.path.abspath(__file__), 'egress')
+        except (OSError, RuntimeError):
+            self._set_egress('出口 IP 检测失败，可重试')
+
+    def _close_egress(self):
+        worker = self._egress_worker
+        self._egress_worker = None
+        if worker is not None:
+            worker.close()
+
+    def _toggle_egress(self):
+        enabled = self.show_egress_auto.get()
+        if not _save_config({**CFG, 'show_egress_auto': enabled}):
+            self.show_egress_auto.set(CFG['show_egress_auto'])
+            self.status.configure(text='自动检测设置保存失败')
+            return
+        CFG['show_egress_auto'] = enabled
+        if enabled:
+            self._check_egress()
+        else:
+            self._close_egress()
+            self._set_egress('')
+
+    def _poll_egress(self):
+        now = time.monotonic()
+        worker = self._egress_worker
+        if worker is None:
+            if CFG['show_egress_auto'] and now >= self._egress_due:
+                self._check_egress()
+            return
+        finished = worker.poll() is not None
+        if not finished and now < self._egress_deadline:
+            return
+        text = '出口 IP 检测失败，可重试'
+        try:
+            if finished:
+                result = worker.result()
+                if isinstance(result, dict) and result.get('ok') is True:
+                    data = parse_egress(result.get('data'))
+                    country = '美国' if data['country_code'] == 'US' else data['country_code']
+                    region = data['region'] or '州／地区未知'
+                    text = f"出口 {data['ip']}\n{country} · {region} · {datetime.now():%H:%M}"
+        except (OSError, ValueError):
+            pass
+        finally:
+            self._close_egress()
+        self._set_egress(text)
+
     def refresh_async(self):
         if self._closed:
             return
@@ -1826,6 +1907,12 @@ class App:
                     self._redraw()
                 elif command == "refresh":
                     self.root.after_idle(self.refresh_async)
+                elif command == "egress":
+                    self.root.deiconify()
+                    self.root.lift()
+                    self._fit()
+                    self._redraw()
+                    self._check_egress()
                 elif command == "tray_failed":
                     self.tray_controller.failed = True
                     self.root.deiconify()
@@ -1856,6 +1943,7 @@ class App:
             self.updater.tick()
             if self._closed:
                 return
+            self._poll_egress()
             active_after = tuple(n for n,s in self.scheduler.states.items() if s['worker'] is not None)
             visible = self.root.state() != 'withdrawn'
             if active_before != active_after:
@@ -2142,6 +2230,9 @@ class App:
     def _network_settings(self):
         from widget_network import show_network
         if show_network(self, CFG, _save_config):
+            self._close_egress()
+            self._set_egress('')
+            self._egress_due = 0
             for state in self.scheduler.states.values():
                 if state['worker']:
                     state['worker'].close()
@@ -2165,9 +2256,12 @@ def query_worker(name):
     if sys.stdin.buffer.readline(16) != b"go\n":
         return
     try:
-        fn = {"kimi": fetch_kimi, "codex": fetch_codex, "glm": fetch_glm,
-              "deepseek": fetch_deepseek, "main": fetch_main_radar, "tokens": fetch_tokens}[name]
-        data = validate_result(name, fn())
+        if name == 'egress':
+            data = fetch_egress(CFG)
+        else:
+            fn = {"kimi": fetch_kimi, "codex": fetch_codex, "glm": fetch_glm,
+                  "deepseek": fetch_deepseek, "main": fetch_main_radar, "tokens": fetch_tokens}[name]
+            data = validate_result(name, fn())
         payload = {"ok": True, "data": data}
     except Exception as ex:
         code = ex.code if isinstance(ex, urllib.error.HTTPError) else None
@@ -2204,5 +2298,6 @@ if __name__ == "__main__":
             raise
         finally:
             if app:
+                app._close_egress()
                 app.scheduler.close()
             instance.close()

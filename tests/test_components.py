@@ -135,7 +135,7 @@ class TrayComponentTests(unittest.TestCase):
             menu = icon.call_args.args[3]
             for item in menu.items:
                 item(icon.return_value)
-            self.assertEqual([commands.get_nowait() for _ in range(3)], ['show', 'refresh', 'quit'])
+            self.assertEqual([commands.get_nowait() for _ in range(4)], ['show', 'refresh', 'egress', 'quit'])
             thread.return_value.start.assert_called_once()
             self.assertTrue(thread.call_args.kwargs['daemon'])
             tray.stop()

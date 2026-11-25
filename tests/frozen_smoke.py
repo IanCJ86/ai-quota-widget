@@ -78,6 +78,18 @@ def smoke(bundle):
                 assert result['ok'] and result['data']['ds_tokens_total']==0, result
             finally:
                 worker.close()
+            # A bad account route must be rejected by the frozen egress worker before network I/O.
+            egress_data = root/'egress-data'
+            egress_data.mkdir()
+            (egress_data/'config.json').write_text('{"network":{"accounts":{"mode":"invalid"}}}', encoding='utf-8')
+            with patch.dict(os.environ, {'AI_QUOTA_WIDGET_DATA_DIR': str(egress_data)}):
+                worker = QueryProcess('unused','egress')
+            try:
+                wait_for(lambda: worker.poll() is not None)
+                result = worker.result()
+                assert result['ok'] is False and result['error'] == 'InvalidNetworkSettings', result
+            finally:
+                worker.close()
         powershell = Path(os.environ['SystemRoot'])/'System32/WindowsPowerShell/v1.0/powershell.exe'
         destination=root/'安装 with spaces'
         started=time.monotonic()
