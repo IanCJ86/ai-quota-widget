@@ -46,36 +46,63 @@ def main():
     try:
         with patch.object(monitor.ctypes.windll.user32, 'GetDpiForWindow', return_value=dpi):
             app = fixture.app
-            monitor.CFG.update(kimi_plan_name='Andante', codex_plan_name='Pro 20x',
-                               renew_kimi='10-15', renew_codex='10-20')
+            app.show_antigravity.set(True)
+            app._apply_visibility(persist=False)
+            monitor.CFG.update(
+                kimi_plan_name='Andante', codex_plan_name='Pro 20x',
+                antigravity_plan_name='Pro',
+                renew_kimi='10-15', renew_codex='10-20', renew_antigravity='10-28',
+            )
             app.root.attributes('-alpha', 1.0)
             now = time.time()
+            from datetime import datetime, timezone
+            import quota_antigravity as ag
+            ag_reset = ag.parse_ag_reset({
+                'data': {
+                    'latest_reset': {
+                        'reset_type': 'full', 'scope': 'all',
+                        'announced_at': datetime.fromtimestamp(now - 2 * 86400, tz=timezone.utc).isoformat(),
+                        'verification': 'provisional',
+                    }
+                },
+                'meta': {'generated_at': datetime.fromtimestamp(now - 120, tz=timezone.utc).isoformat()},
+            }, now=now)
             fixtures = {
                 'kimi': dict(k_plan='Andante', k5_pct=62, k5_reset=now+7200,
                              kw_pct=85, kw_reset=now+86400*4),
                 'codex': dict(c_plan='Pro', cw_pct=72, cw_reset=now+86400*5,
                               cr_credit_count=1, cr_credit_expiry=now+86400*20),
+                'antigravity': dict(a_plan='Pro', a5_pct=86, a5_reset=now+10800, a5_disabled=False,
+                                    aw_pct=94, aw_reset=now+86400*5,
+                                    a3p_pct=68, a3p_reset=now+86400*3, a3p5_pct=42,
+                                    a_credits=42.0, a_credits_enabled=True),
+                'ag_reset': ag_reset,
                 'deepseek': dict(ds_balance=128.50, ds_spend=2.35, ds_currency='CNY',
                                  ds_spend_day=monitor.date.today().isoformat()),
-                'main': dict(cr_main24=48),
+                'main': dict(cr_main_phase='quiet', cr_main24=None, cr_main48=None,
+                             cr_main_updated=now-120, cr_main_at=now),
                 'tokens': dict(ds_tokens_day=monitor.date.today().isoformat(),
                                ds_tokens_total=12500000),
             }
-            for source, data in fixtures.items():
-                app._on_result(source, {'ok': True, 'data': data}, {})
-            for theme in ('glass', 'dark', 'light', 'steam', 'fuel', 'ink'):
-                app._set_theme(theme)
-                app.root.update()
-                app._fit()
-                app.root.update()
-                # PNGs are reusable public previews, not temporary captures.
-                path = output / ('hero.png' if theme == 'glass' else theme+'.png')
-                capture(app.root, path)
-                if theme != 'glass':
-                    with Image.open(path) as image:
-                        frames.append(image.convert('RGB'))
-            save_theme_gif(frames, output/'themes.gif')
-            print('Rendered glass hero + five-theme GIF with synthetic data')
+            with patch.object(monitor, 'available_sources', return_value={
+                'kimi': True, 'codex': True, 'glm': False, 'deepseek': True,
+                'antigravity': True, 'main': True, 'ag_reset': True, 'tokens': True,
+            }):
+                for source, data in fixtures.items():
+                    app._on_result(source, {'ok': True, 'data': data}, {})
+                for theme in ('glass', 'dark', 'light', 'steam', 'fuel', 'ink'):
+                    app._set_theme(theme)
+                    app.root.update()
+                    app._fit()
+                    app.root.update()
+                    # PNGs are reusable public previews, not temporary captures.
+                    path = output / ('hero.png' if theme == 'glass' else theme+'.png')
+                    capture(app.root, path)
+                    if theme != 'glass':
+                        with Image.open(path) as image:
+                            frames.append(image.convert('RGB'))
+                save_theme_gif(frames, output/'themes.gif')
+                print('Rendered glass hero + five-theme GIF with synthetic data')
     finally:
         fixture.tearDown()
         for frame in frames:

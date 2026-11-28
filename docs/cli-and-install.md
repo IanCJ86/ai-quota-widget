@@ -45,10 +45,11 @@
 
 | 字段 | 用途 |
 | --- | --- |
-| `show_kimi` / `show_codex` / `show_glm` / `show_deepseek` | 账户卡片开关 |
+| `show_kimi` / `show_codex` / `show_antigravity` / `show_glm` / `show_deepseek` | 账户卡片开关 |
 | `theme` | `glass` / `dark` / `light` / `steam` / `fuel` / `ink` |
 | `*_plan_name` / `renew_*` | 套餐显示名、续订日期；仅是显示设置，不用于购买或认证 |
 | `show_codex_5h` / `show_codex_credits` | 五小时额度行、重置券行；没有券时隐藏 |
+| `show_antigravity_5h` / `show_antigravity_3p` / `show_ag_reset` | Antigravity 5 小时（Free/Plus 默认隐藏）、第三方池折叠行（无数据时自动隐藏）与公开全员重置监测开关 |
 | `show_radar` / `radar_window` | 第三方雷达开关及24/48小时窗口 |
 | `network` | 右键“网络设置”：账户、雷达、更新分别跟随系统、直连或指定HTTP代理；地址不含账号密码 |
 | `glm_region` | 国内 `cn` 或国际 `intl`，须与 Key 所属服务一致 |

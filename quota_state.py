@@ -4,9 +4,10 @@ import re
 import time
 from datetime import datetime
 from quota_radar import PHASES, radar_view
+from quota_antigravity import AG_RESET_PHASES, ag_reset_view, ag_reset_status
 
-SOURCES = ('kimi', 'codex', 'glm', 'deepseek', 'main', 'tokens')
-ACCOUNT_SOURCES = SOURCES[:4]
+SOURCES = ('kimi', 'codex', 'glm', 'deepseek', 'antigravity', 'main', 'ag_reset', 'tokens')
+ACCOUNT_SOURCES = SOURCES[:5]
 ERROR_LABELS = {
     'HTTP401': '需重新认证', 'HTTP403': '权限或套餐受限', 'HTTP429': '服务限流',
     'Timeout': '请求超时', 'TimeoutError': '请求超时', 'URLError': '连接失败',
@@ -31,7 +32,7 @@ def error_label(error, source=None):
         return '查询失败'
     if error in ERROR_LABELS.values() or error == '站点拒绝访问':
         return error
-    if source == 'main' and error in ('HTTP401', 'HTTP403'):
+    if source in ('main', 'ag_reset') and error in ('HTTP401', 'HTTP403'):
         return '站点拒绝访问'
     return ERROR_LABELS.get(error, '服务暂不可用' if str(error).startswith('HTTP5') else '查询失败')
 
@@ -46,11 +47,13 @@ def safe_error(error):
 def refresh_notice(active, errors, stale=(), expired=(), unverified=(), retry_in=None):
     """A bounded footer explanation without replacing dates or business data."""
     if errors:
-        if len(errors) == 1 and 'main' in errors:
-            text = 'Tibo雷达·' + error_label(safe_error(errors['main']), 'main')
-            if 'main' in active:
+        if len(errors) == 1 and ('main' in errors or 'ag_reset' in errors):
+            src = 'main' if 'main' in errors else 'ag_reset'
+            prefix = 'Tibo雷达·' if src == 'main' else 'AG重置监测·'
+            text = prefix + error_label(safe_error(errors[src]), src)
+            if src in active:
                 return text + '·重试中'
-            delay = (retry_in or {}).get('main')
+            delay = (retry_in or {}).get(src)
             return text + (f'·{math.ceil(delay/60)}分钟后重试' if finite(delay) and delay > 0 else '')
         labels = {error_label(safe_error(e), n) for n,e in errors.items()}
         label = next(iter(labels)) if len(labels) == 1 else '部分失败'
@@ -137,7 +140,7 @@ def validate_config(raw, defaults):
         return result, ['config: expected object']
     enums = {'theme': ('dark','light','steam','fuel','ink','glass'), 'glm_region': ('cn','intl'),
              'deepseek_token_metric': ('total','fresh','off'), 'radar_window': (24,48),
-             'tray_metric': ('cw_pct','c5_pct','kw_pct','k5_pct','gw_pct','g5_pct','ds_spend')}
+             'tray_metric': ('cw_pct','c5_pct','kw_pct','k5_pct','gw_pct','g5_pct','aw_pct','a5_pct','ds_spend')}
     for key, value in raw.items():
         valid = True
         if key in enums:
@@ -151,7 +154,7 @@ def validate_config(raw, defaults):
                 # Invalid explicit routes must fail closed, not quietly become direct.
                 result[key] = {'__invalid__': True}
         elif key.startswith('show_') or key in ('lock_position',):
-            valid = isinstance(value, bool) or (key == 'show_codex_5h' and value is None)
+            valid = isinstance(value, bool) or (key in ('show_codex_5h', 'show_antigravity_5h') and value is None)
         elif key in ('window_x','window_y','window_alpha','deepseek_low_balance'):
             valid = finite(value)
         elif key in defaults and isinstance(defaults[key], str):

@@ -115,9 +115,12 @@ class Viewport:
                 header.place_configure(height=height)
             painter=app.theme_painter
             painter.scale=dpi/96
-            painter.canvas.configure(width=236*painter.scale,height=50*painter.scale)
+            painter.canvas.configure(width=236*painter.scale,height=52*painter.scale)
             painter._draw_key=None
             painter.draw()
+            if hasattr(app, '_paint_card_accents'):
+                from widget_style import THEMES
+                app._paint_card_accents(THEMES.get(app.theme, THEMES['dark']))
             return True
         except Exception:
             return False

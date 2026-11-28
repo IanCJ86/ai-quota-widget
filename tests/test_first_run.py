@@ -49,7 +49,8 @@ class FirstRunTests(unittest.TestCase):
         color, alpha, flags = wintypes.DWORD(), ctypes.c_ubyte(), wintypes.DWORD()
         self.assertTrue(api(int(a.root.wm_frame(),16), ctypes.byref(color), ctypes.byref(alpha), ctypes.byref(flags)))
         self.assertFalse(flags.value & 1, 'LWA_COLORKEY makes background mouse-transparent')
-        self.assertEqual(a.root.cget('bg'), a._cards[-1].cget('bg'))
+        self.assertEqual(a.root.cget('bg'), monitor.THEMES['glass']['BG'])
+        self.assertEqual(a._cards[-1].cget('bg'), monitor.THEMES['glass']['BG_CARD'])
 
     def test_startup_writes_diagnostics_without_worker_completion(self):
         path = Path(monitor.DEBUG_FILE)

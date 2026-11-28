@@ -21,9 +21,14 @@ from app_version import APP_VERSION, USER_AGENT
 from quota_network import stream as network_stream, error_code, retry_after
 from quota_paths import data_locations, resolve_data_dir, migrate_data
 from quota_state import (source_status, window_expired, error_label, finite,
-                         validate_config, credit_status, refresh_notice, radar_status, merge_radar)
+                         validate_config, credit_status, refresh_notice, radar_status,
+                         merge_radar, ag_reset_status)
 from quota_signals import tariff_status, voucher_fingerprints, observe_vouchers, voucher_colors
 from quota_radar import parse_forecast, radar_view
+from quota_antigravity import (
+    AG_RESET_URL, AG_CLI_SETTINGS, parse_ag_reset, ag_reset_view,
+    read_ag_snapshot, snapshot_path_for, snapshot_identity,
+)
 
 # CLI dispatch precedes GUI imports and config/credential access.
 if __name__ == '__main__' and sys.argv[1:] and sys.argv[1] != '--query':
@@ -32,7 +37,8 @@ if __name__ == '__main__' and sys.argv[1:] and sys.argv[1] != '--query':
 from widget_style import (
     TRANSP_KEY, THEMES, THEME_CHOICES, BG, BG_CARD, FG_DIM, FG_TEXT,
     KIMI_BLUE, CODEX_NEUTRAL, KIMI_BLUE_SOFT, CODEX_NEUTRAL_SOFT,
-    GLM_PURPLE, GLM_PURPLE_SOFT, DEEPSEEK_BLUE, DEEPSEEK_SOFT,
+    GLM_PURPLE, GLM_PURPLE_SOFT, ANTIGRAVITY_CYAN, ANTIGRAVITY_SOFT,
+    DEEPSEEK_BLUE, DEEPSEEK_SOFT,
     FONT_TITLE, FONT_TEXT, FONT_VALUE, FONT_STATUS, MONEY_PAD,
     TITLE_RESERVE_MAX, TITLE_GAP, TITLE_SLACK,
 )
@@ -47,7 +53,7 @@ from widget_egress import fetch_egress, parse_egress
 
 QUERY_MODE = len(sys.argv) == 3 and sys.argv[1] == "--query"
 HEADLESS_MODE = QUERY_MODE or any(arg in sys.argv for arg in
-    ('--doctor','--json','--once','--install','--help','--version'))
+    ('--doctor','--json','--once','--install','--help','--version','--agy-statusline'))
 if not HEADLESS_MODE:
     import tkinter as tk
     from tkinter import font as tkfont
@@ -112,9 +118,12 @@ DEFAULT_CONFIG = {
     "codex_plan_suffix": "",      # suffix appended to Codex planType, e.g. " 20x"
     "glm_plan_name": "",          # GLM plan display name, e.g. "Lite" / "Pro" / "Max"
     "renew_glm": "MM-DD",         # GLM renewal date shown in the UI
+    "antigravity_plan_name": "",  # Antigravity plan display override; empty = snapshot plan_tier
+    "renew_antigravity": "MM-DD", # Antigravity renewal date shown in the UI
     "custom_plan_kimi": "",       # user-defined plan names (kept as menu entries)
     "custom_plan_codex": "",
     "custom_plan_glm": "",
+    "custom_plan_antigravity": "",
     "theme": "glass",             # glass / dark / light / steam / fuel / ink
     # ---- visibility toggles (also in the right-click menu) ----
     "show_kimi": True,
@@ -125,6 +134,12 @@ DEFAULT_CONFIG = {
     # Reset vouchers ("full reset" credits) and the daily token row.
     "show_codex_credits": True,
     "show_radar": True,
+    "show_antigravity": False,    # Antigravity card visibility (off by default until enabled)
+    # None = follow Antigravity plan: Free/Plus weekly-only; Pro/Ultra show 5h.
+    "show_antigravity_5h": None,
+    "show_antigravity_3p": True,  # Optional Claude/GPT partner pool row (auto-hidden when absent)
+    "show_ag_reset": True,        # Public Antigravity global reset monitor (gemini-resets.com)
+    "antigravity_snapshot_file": "",  # Custom official agy statusLine snapshot JSON path
     "show_egress_auto": False,
     "radar_window": 24,   # 24 or 48 hours
     "tray_metric": "cw_pct",  # Codex weekly percentage in the Windows tray
@@ -551,6 +566,20 @@ def fetch_main_radar():
     return parse_forecast(json.loads(_fetch_public_text(CODEX_RADAR_URL, "application/json")))
 
 
+# ---------------- Antigravity (official agy statusLine snapshot + global reset) ----------------
+
+def antigravity_snapshot_path():
+    return snapshot_path_for(DATA_DIR, CFG.get("antigravity_snapshot_file", ""))
+
+
+def fetch_antigravity():
+    return read_ag_snapshot(antigravity_snapshot_path(), AG_CLI_SETTINGS)
+
+
+def fetch_ag_reset():
+    return parse_ag_reset(json.loads(_fetch_public_text(AG_RESET_URL, "application/json")))
+
+
 # ---------------- provider API keys (GLM / DeepSeek) ----------------
 
 def _windows_env(name):
@@ -617,6 +646,10 @@ def source_identity(name):
         context = harness_sessions_dir()
     elif name == 'main':
         context = CODEX_RADAR_URL + '#signals-v2'
+    elif name == 'antigravity':
+        return snapshot_identity(antigravity_snapshot_path())
+    elif name == 'ag_reset':
+        context = AG_RESET_URL + '#status-v1'
     else:
         return None
     return hashlib.sha256(context.encode('utf-8')).hexdigest()
@@ -626,6 +659,7 @@ def available_sources():
     from quota_cli import configured
     flags = dict(configured(sys.modules[__name__]))
     flags['main'] = bool(CFG.get('show_radar')) and bool(CFG.get('show_codex'))
+    flags['ag_reset'] = bool(CFG.get('show_ag_reset', True)) and bool(CFG.get('show_antigravity', False))
     flags['tokens'] = (CFG.get('deepseek_token_metric') != 'off'
                        and os.path.isdir(harness_sessions_dir()))
     return flags
@@ -852,9 +886,13 @@ TRAY_CHOICES = {
     "kimi": [("k5_pct", "Kimi 每5小时"), ("kw_pct", "Kimi 每周")],
     "codex": [("c5_pct", "Codex 每5小时"), ("cw_pct", "Codex 每周")],
     "glm": [("g5_pct", "GLM 每5小时"), ("gw_pct", "GLM 每周")],
+    "antigravity": [("a5_pct", "Antigravity 每5小时"), ("aw_pct", "Antigravity 每周")],
     "deepseek": [("ds_spend", "DeepSeek 今日估算金额（四舍五入）")],
 }
-TRAY_DEFAULT = {"kimi": "kw_pct", "codex": "cw_pct", "glm": "gw_pct", "deepseek": "ds_spend"}
+TRAY_DEFAULT = {
+    "kimi": "kw_pct", "codex": "cw_pct", "glm": "gw_pct",
+    "antigravity": "aw_pct", "deepseek": "ds_spend",
+}
 
 def clamp_position(x, y, w, h, screen_w, screen_h):
     """Where to put the window given a remembered position, or None.
@@ -995,7 +1033,10 @@ class App:
         self.data = {}
         self._radar_trends = {}
         self._credit_observation = {}
-        self._source_identities = {name: source_identity(name) for name in ('glm','deepseek','tokens','main')}
+        self._source_identities = {
+            name: source_identity(name)
+            for name in ('glm', 'deepseek', 'tokens', 'main', 'antigravity', 'ag_reset')
+        }
         self.errors = {}
         self.last_ok = None
         self.instance = instance
@@ -1020,6 +1061,12 @@ class App:
         self.theme = "dark"
         self._cards = []
         self._name_labels = []
+        self._card_accents = {}
+        self._head_rules = {}
+        self._bars = {}
+        self._bar_state = {}
+        self._bar_card = {}
+        self._bar_values = {}
         self.viewport = Viewport(self.root)
         self.content = self.viewport.body
 
@@ -1034,43 +1081,52 @@ class App:
         # cannot influence the card's column widths.
         self._head_height = tkfont.Font(font=FONT_TITLE).metrics("linespace") + 4
         self._section(1, "Kimi", KIMI_BLUE, [("k5", "每5小时"), ("kw", "每周")])
-        self._divider = tk.Frame(self.content, bg="#3a3a4e", height=1)
-        self._divider.grid(row=2, column=0, sticky="ew", padx=10, pady=1)
+        self._divider = tk.Frame(self.content, bg="#2b354d", height=1)
+        self._divider.grid(row=2, column=0, sticky="ew", padx=36, pady=3)
         self._section(3, "GLM", GLM_PURPLE, [("g5", "每5小时"), ("gw", "每周")])
-        self._divider2 = tk.Frame(self.content, bg="#3a3a4e", height=1)
-        self._divider2.grid(row=4, column=0, sticky="ew", padx=10, pady=1)
+        self._divider2 = tk.Frame(self.content, bg="#2b354d", height=1)
+        self._divider2.grid(row=4, column=0, sticky="ew", padx=36, pady=3)
         self._section(5, "Codex", CODEX_NEUTRAL,
                       [("c5", "每5小时"), ("cw", "每周"),
                        ("c_auto", "自动额度"), ("cr_credit", "重置券"), ("cr_main", "Tibo雷达")])
-        self._divider3 = tk.Frame(self.content, bg="#3a3a4e", height=1)
-        self._divider3.grid(row=6, column=0, sticky="ew", padx=10, pady=1)
+        self._divider3 = tk.Frame(self.content, bg="#2b354d", height=1)
+        self._divider3.grid(row=6, column=0, sticky="ew", padx=36, pady=3)
+        self._section(7, "Antigravity", ANTIGRAVITY_CYAN,
+                      [("a5", "每5小时"), ("aw", "每周"),
+                       ("a3p", "第三方池"), ("a_credits", "AI积分"), ("ag_reset", "重置监测")])
+        self._divider4 = tk.Frame(self.content, bg="#2b354d", height=1)
+        self._divider4.grid(row=8, column=0, sticky="ew", padx=36, pady=3)
         # DeepSeek is pay-as-you-go, so this card shows a money balance.
-        self._section(7, "DeepSeek", DEEPSEEK_BLUE,
+        self._section(9, "DeepSeek", DEEPSEEK_BLUE,
                       [("ds", "账号余额"), ("ds_spend", "今日估算")])
-        self._dividers = [self._divider, self._divider2, self._divider3]
+        self._dividers = [self._divider, self._divider2, self._divider3, self._divider4]
         self.egress_label = tk.Label(self.content, fg=FG_DIM, bg=BG, font=FONT_STATUS,
                                      justify="left", anchor="w", wraplength=200)
-        self.egress_label.grid(row=8, column=0, sticky="ew", padx=12, pady=(2, 0))
+        self.egress_label.grid(row=10, column=0, sticky="ew", padx=12, pady=(2, 0))
         self.egress_label.grid_remove()
         self._bind(self.egress_label)
 
         bar = tk.Frame(self.root, bg=BG)
-        bar.grid(row=2, column=0, sticky="ew", padx=(19, 12), pady=(3, 2))
+        bar.grid(row=2, column=0, sticky="ew", padx=(14, 11), pady=(4, 2))
         self.status = tk.Label(bar, text="初始化…", fg=FG_DIM, bg=BG,
                                font=FONT_STATUS, anchor="w")
         self.status.pack(side="left")
         self.close_btn = tk.Label(bar, text="✕", fg=FG_DIM, bg=BG, cursor="hand2",
-                                  font=FONT_STATUS)
+                                  font=FONT_STATUS, padx=3)
         self.close_btn.pack(side="right")
         self.close_btn._no_drag = True
         self.close_btn.bind("<Button-1>", lambda e: self._minimize_to_tray())
+        self.close_btn.bind("<Enter>", lambda e: self.close_btn.configure(fg=THEMES[self.theme]["DANGER"]))
+        self.close_btn.bind("<Leave>", lambda e: self.close_btn.configure(fg=THEMES[self.theme]["FG_DIM"]))
         self._alpha_btns = []
         for sym, d in (("－", -3), ("＋", 3)):
             b = tk.Label(bar, text=sym, fg=FG_DIM, bg=BG, cursor="hand2",
-                         font=FONT_STATUS)
+                         font=FONT_STATUS, padx=2)
             b.pack(side="right", padx=1)
             b._no_drag = True
             b.bind("<Button-1>", lambda e, dd=d: self._alpha_step(dd))
+            b.bind("<Enter>", lambda e, w=b: w.configure(fg=THEMES[self.theme]["FG_TEXT"]))
+            b.bind("<Leave>", lambda e, w=b: w.configure(fg=THEMES[self.theme]["FG_DIM"]))
             self._alpha_btns.append(b)
         # A little breathing room under the refresh line; the bar's own pady
         # plus this should end up close to the top margin so the frame looks
@@ -1107,6 +1163,9 @@ class App:
         self.show_codex = tk.BooleanVar(value=self._st.get("show_codex", True))
         self.show_codex_5h = tk.BooleanVar(value=self._codex_5h_visible())
         self.show_glm = tk.BooleanVar(value=self._st.get("show_glm", False))
+        self.show_antigravity = tk.BooleanVar(value=self._st.get("show_antigravity", False))
+        self.show_antigravity_5h = tk.BooleanVar(value=self._antigravity_5h_visible())
+        self.show_ag_reset = tk.BooleanVar(value=self._st.get("show_ag_reset", True))
         self.show_deepseek = tk.BooleanVar(value=self._st.get("show_deepseek", True))
         self.menu.add_checkbutton(label="Kimi Coding Plan", variable=self.show_kimi,
                                 command=self._apply_visibility)
@@ -1114,12 +1173,19 @@ class App:
                                 command=self._apply_visibility)
         self.menu.add_checkbutton(label="Codex", variable=self.show_codex,
                                 command=self._apply_visibility)
+        self.menu.add_checkbutton(label="Antigravity", variable=self.show_antigravity,
+                                command=self._apply_visibility)
         self.menu.add_checkbutton(label="DeepSeek 余额", variable=self.show_deepseek,
                                 command=self._apply_visibility)
         self.menu.add_checkbutton(label="Codex 每5小时窗口", variable=self.show_codex_5h,
                                 command=self._apply_visibility)
+        self.menu.add_checkbutton(label="Antigravity 每5小时窗口", variable=self.show_antigravity_5h,
+                                command=self._apply_visibility)
         self.show_radar = tk.BooleanVar(value=self._st.get("show_radar", True))
         self.menu.add_checkbutton(label="Tibo雷达（第三方站点）", variable=self.show_radar,
+                                command=self._apply_visibility)
+        self.menu.add_checkbutton(label="Antigravity 重置监测（gemini-resets.com）",
+                                variable=self.show_ag_reset,
                                 command=self._apply_visibility)
         self._radar_var = tk.StringVar(value=str(self._st.get("radar_window", 24)))
         rw = tk.Menu(self.menu, tearoff=0)
@@ -1137,6 +1203,8 @@ class App:
                               menu=self.settings._build_provider_menu("glm"))
         self.menu.add_cascade(label="Codex 设置",
                               menu=self.settings._build_provider_menu("codex"))
+        self.menu.add_cascade(label="Antigravity 设置",
+                              menu=self.settings._build_provider_menu("antigravity"))
         self.menu.add_cascade(label="DeepSeek 设置",
                               menu=self.settings._build_deepseek_menu())
         self.menu.add_separator()
@@ -1184,7 +1252,7 @@ class App:
         leave."""
         # Padding must be part of the minimum, or a card whose content is wider
         # than the minimum grows a few pixels and stops matching its neighbours.
-        label_w = max([lbl.winfo_reqwidth() for lbl in self._name_labels] or [0]) + 7
+        label_w = max([lbl.winfo_reqwidth() for lbl in self._name_labels] or [0]) + 10
         value_w = max([pl.winfo_reqwidth() for pl, _ in self.rows.values()] or [0]) + 4
         # A title shares its row with the renewal date, which has to sit exactly
         # at the notes column's x so it lines up with the notes underneath. A
@@ -1206,15 +1274,15 @@ class App:
         # Placed header labels do not participate in Tk's requested size.
         # Reserve the notes column even before the first query has returned.
         for name, card in zip(self.section_titles, self._cards):
-            card.grid_columnconfigure(2, minsize=self.section_renews[name].winfo_reqwidth()+12)
-            height = max(self.section_titles[name].winfo_reqheight(), self.section_renews[name].winfo_reqheight()+1)
+            card.grid_columnconfigure(2, minsize=self.section_renews[name].winfo_reqwidth() + 14)
+            height = max(self.section_titles[name].winfo_reqheight(), self.section_renews[name].winfo_reqheight() + 1)
             card.winfo_children()[0].configure(height=height)
             self.section_titles[name].master.place_configure(height=height)
         for name, lbl in self.section_titles.items():
             renew = self.section_renews.get(name)
             if renew is None:
                 continue
-            head_x = renew.master.winfo_x() or 7     # header's own x inside card
+            head_x = renew.master.winfo_x() or 10    # header's own x inside card
             renew.place_configure(x=max(notes_x - head_x, 0), y=1)
             full = self._title_text.get(name, lbl.cget("text"))
             lbl.configure(text=self._ellipsize(title_font, full,
@@ -1364,7 +1432,13 @@ class App:
         metric = CFG.get("tray_metric", "cw_pct")
         value = self.data.get(metric)
         amount = metric == 'ds_spend'
-        source = 'deepseek' if amount else "codex" if metric.startswith("c") else "kimi" if metric.startswith("k") else "glm"
+        source = (
+            'deepseek' if amount else
+            'codex' if metric.startswith('c') else
+            'kimi' if metric.startswith('k') else
+            'antigravity' if metric.startswith('a') else
+            'glm'
+        )
         stale = self._transport_stale(source) or (not amount and self._window_expired(metric.split("_")[0]))
         if amount and (self.data.get('ds_spend_day') != date.today().isoformat()
                        or self.data.get('ds_spend_error') or not finite(value) or value < 0):
@@ -1377,7 +1451,7 @@ class App:
         stamp = self._success_at.get(source)
         when = datetime.fromtimestamp(stamp).strftime("%m-%d %H:%M") if stamp else "尚无成功数据"
         period = '今日估算（非账单）' if amount else '每周' if 'w_' in metric else '5小时'
-        provider = 'DeepSeek' if amount else source.title()
+        provider = 'DeepSeek' if amount else 'Antigravity' if source == 'antigravity' else source.title()
         title = f"{provider} {period} {shown} | {'旧数据' if stale else '更新'} {when}"
         if self.tray_controller.icon.title != title:
             self.tray_controller.icon.title = title
@@ -1407,18 +1481,34 @@ class App:
         if hasattr(self, "show_codex_5h"):
             self.show_codex_5h.set(self._codex_5h_visible())
 
+    def _antigravity_5h_default_visible(self):
+        """Plan default: Free/Plus are weekly-only; Pro/Ultra have a 5-hour rolling window."""
+        plan = (self.settings._current_plan("antigravity") or "").strip().lower()
+        return not (plan.startswith("free") or plan.startswith("plus"))
+
+    def _antigravity_5h_visible(self):
+        override = CFG.get("show_antigravity_5h")
+        return self._antigravity_5h_default_visible() if override is None else bool(override)
+
+    def _sync_antigravity_5h_menu(self):
+        if hasattr(self, "show_antigravity_5h"):
+            self.show_antigravity_5h.set(self._antigravity_5h_visible())
+
     # Card order in the window; dividers sit between consecutive cards.
-    CARD_ORDER = ("kimi", "glm", "codex", "deepseek")
+    CARD_ORDER = ("kimi", "glm", "codex", "antigravity", "deepseek")
 
     def _apply_visibility(self, persist=True):
         CFG["show_kimi"] = self.show_kimi.get()
         CFG["show_codex"] = self.show_codex.get()
         CFG["show_glm"] = self.show_glm.get()
+        CFG["show_antigravity"] = self.show_antigravity.get()
         CFG["show_deepseek"] = self.show_deepseek.get()
         if persist:
             # A clicked checkbutton is an explicit user override. Leaving this
             # as None is how the plan-based default remains active.
             CFG["show_codex_5h"] = self.show_codex_5h.get()
+            CFG["show_antigravity_5h"] = self.show_antigravity_5h.get()
+            CFG["show_ag_reset"] = self.show_ag_reset.get()
         visible = {name: bool(getattr(self, "show_" + name).get())
                    for name in self.CARD_ORDER}
         for card, name in zip(self._cards, self.CARD_ORDER):
@@ -1439,12 +1529,12 @@ class App:
             self._fix_tray_metric(persist=persist)  # no startup config rewrite
         c5_visible = visible["codex"] and self.show_codex_5h.get()
         self._set_row_visible("c5", c5_visible)
+        a5_visible = visible["antigravity"] and self.show_antigravity_5h.get()
+        self._set_row_visible("a5", a5_visible)
+        self._set_row_visible("ag_reset", visible["antigravity"] and self.show_ag_reset.get())
         for key in ("cr_main",):
             if key in self.rows:
-                widgets = [self.row_labels[key][0], *self.rows[key]]
-                for wgt in widgets:
-                    (wgt.grid if (visible["codex"] and CFG["show_radar"])
-                     else wgt.grid_remove)()
+                self._set_row_visible(key, visible["codex"] and CFG["show_radar"])
         self._fit()
 
     def _apply_acrylic(self, on):
@@ -1498,11 +1588,74 @@ class App:
                 visit(child, background)
         visit(self.root, palette["BG"])
 
+    PERCENT_ROW_KEYS = frozenset(("k5", "kw", "g5", "gw", "c5", "cw", "a5", "aw", "a3p"))
+
+    def _paint_card_accents(self, palette):
+        """Draw crisp left brand accent strips, subtle header hairlines, and micro progress bars."""
+        for name, canvas in self._card_accents.items():
+            canvas.configure(bg=palette["BG_CARD"])
+            self._draw_accent(name, canvas, palette)
+        for name, rule in self._head_rules.items():
+            rule.configure(bg=palette["BG_CARD"])
+            self._draw_rule(rule, palette)
+        for key in self._bars:
+            self._bars[key].configure(bg=palette["BG_CARD"])
+            self._bar_state.pop(key, None)
+            pct, stale = self._bar_values.get(key, (None, False))
+            self._draw_bar(key, pct, stale)
+
+    def _draw_accent(self, name, canvas, palette):
+        h = max(canvas.winfo_height(), 24)
+        canvas.delete("all")
+        color = palette.get("CARD_ACCENTS", palette["BRANDS"]).get(name, palette["ACCENT"])
+        canvas.create_rectangle(0, 0, 3, h, fill=color, outline="")
+
+    def _draw_rule(self, canvas, palette):
+        w = max(canvas.winfo_width(), 1)
+        canvas.delete("all")
+        canvas.create_line(0, 0, w, 0, fill=palette["BORDER"])
+
+    def _draw_bar(self, key, pct, stale=False):
+        canvas = self._bars.get(key)
+        if canvas is None:
+            return
+        self._bar_values[key] = (pct, stale)
+        palette = THEMES.get(getattr(self, "theme", "dark"), THEMES["dark"])
+        if pct is None:
+            canvas.grid_remove()
+            self._bar_state.pop(key, None)
+            return
+        if self.rows[key][0].winfo_manager():
+            canvas.grid()
+        w = max(canvas.winfo_width(), 1)
+        h = max(canvas.winfo_height(), 3)
+        clamped = max(0, min(100, int(round(pct))))
+        if stale:
+            fill = palette["FG_DIM"]
+        elif clamped <= 15:
+            fill = palette["DANGER"]
+        elif clamped <= 30:
+            fill = palette["WARNING"]
+        else:
+            accents = palette.get("CARD_ACCENTS", palette["BRANDS"])
+            fill = accents.get(self._bar_card.get(key), palette["ACCENT"])
+        track = palette.get("TRACK", palette["BORDER"])
+        state = (w, h, clamped, fill, track)
+        if self._bar_state.get(key) == state:
+            return
+        self._bar_state[key] = state
+        canvas.delete("all")
+        canvas.create_rectangle(0, 0, w, h, fill=track, outline="")
+        if clamped > 0:
+            canvas.create_rectangle(0, 0, max(3, int(round(w * clamped / 100.0))), h,
+                                    fill=fill, outline="")
+
     def _section(self, row, title, color, lines):
         f = tk.Frame(self.content, bg=BG_CARD,
-                     highlightbackground="#33334a", highlightthickness=1)
-        f.grid(row=row, column=0, sticky="ew", padx=12,
-               pady=(8, 0) if row == 1 else (4, 0))
+                     highlightbackground="#2d3752", highlightthickness=1)
+        f.grid(row=row, column=0, sticky="ew", padx=11,
+               pady=(8, 0) if row == 1 else (3, 0))
+        f.grid_columnconfigure(2, weight=1)
         self._cards.append(f)
         # Column widths are equalised across cards in _sync_columns(); nothing is
         # fixed here, so each column is only as wide as its content needs.
@@ -1512,9 +1665,9 @@ class App:
         # the two can never overlap. The row is placed, with a spacer keeping
         # its height in the grid, so the header cannot influence the columns.
         spacer = tk.Frame(f, bg=BG_CARD, height=self._head_height)
-        spacer.grid(row=0, column=0, columnspan=3, pady=(3, 0))
+        spacer.grid(row=0, column=0, columnspan=3, pady=(5, 1))
         head = tk.Frame(f, bg=BG_CARD)
-        head.place(x=7, y=3, relwidth=1, width=-10, height=self._head_height)
+        head.place(x=10, y=5, relwidth=1, width=-14, height=self._head_height)
         title_lbl = tk.Label(head, text=title, fg=color, bg=BG_CARD,
                              font=FONT_TITLE, anchor="w")
         title_lbl.pack(side="left")
@@ -1523,22 +1676,47 @@ class App:
         renew_lbl.place(x=0, y=1)
         self.section_titles[title] = title_lbl
         self.section_renews[title] = renew_lbl
-        for i, line in enumerate(lines, start=1):
+        # Subtle 3px left brand accent strip via place() so grid columns stay untouched.
+        accent = tk.Canvas(f, width=3, highlightthickness=0, bd=0, bg=BG_CARD)
+        accent.place(x=0, y=5, width=3, relheight=1, height=-10)
+        accent.bind("<Configure>", lambda e, n=title, c=accent: self._draw_accent(
+            n, c, THEMES.get(self.theme, THEMES["dark"])))
+        self._card_accents[title] = accent
+        # Crisp 1px header hairline separator inside each Bento card (width=1 avoids pushing columns).
+        rule = tk.Canvas(f, width=1, height=1, highlightthickness=0, bd=0, bg=BG_CARD)
+        rule.grid(row=1, column=0, columnspan=3, sticky="ew", padx=(10, 10), pady=(1, 4))
+        rule.bind("<Configure>", lambda e, c=rule: self._draw_rule(
+            c, THEMES.get(self.theme, THEMES["dark"])))
+        self._head_rules[title] = rule
+        for idx, line in enumerate(lines):
             key, name = line[0], line[1]
+            grid_row = 2 + idx * 2
+            is_last = (idx == len(lines) - 1)
+            has_bar = key in self.PERCENT_ROW_KEYS
+            row_pady = (1, 0) if has_bar else (1, 6 if is_last else 2)
             nl = tk.Label(f, text=name, fg=FG_DIM, bg=BG_CARD,
                           font=FONT_TEXT, anchor="w")
-            nl.grid(row=i, column=0, sticky="w", padx=(7, 0))
+            nl.grid(row=grid_row, column=0, sticky="w", padx=(10, 0), pady=row_pady)
             self._name_labels.append(nl)
             self.row_labels[key] = (nl,)
             # One shared, left-aligned numeric column for every card.
             pct = tk.Label(f, text="…", fg=FG_TEXT, bg=BG_CARD,
                            font=FONT_VALUE, anchor="w")
-            pct.grid(row=i, column=1, sticky="w", padx=(4, 0))
+            pct.grid(row=grid_row, column=1, sticky="w", padx=(4, 0), pady=row_pady)
             rst = tk.Label(f, text="", fg=FG_DIM, bg=BG_CARD,
                            font=FONT_TEXT, anchor="w")
-            rst.grid(row=i, column=2, sticky="w", padx=(8, 3),
-                     pady=(0, 3 if i == len(lines) else 0))
+            rst.grid(row=grid_row, column=2, sticky="w", padx=(8, 10), pady=row_pady)
             self.rows[key] = (pct, rst)
+            if has_bar:
+                bar_h = max(3, int(round(3 * getattr(self.theme_painter, "scale", 1.0))))
+                bar = tk.Canvas(f, width=1, height=bar_h, highlightthickness=0, bd=0, bg=BG_CARD)
+                bar.grid(row=grid_row + 1, column=0, columnspan=3, sticky="ew",
+                         padx=(10, 10), pady=(2, 6 if is_last else 3))
+                bar.grid_remove()
+                self._bars[key] = bar
+                self._bar_card[key] = title
+                bar.bind("<Configure>", lambda e, k=key: self._draw_bar(
+                    k, *self._bar_values.get(k, (None, False))))
 
     def _bind(self, wgt):
         if getattr(wgt, "_no_drag", False):
@@ -1697,6 +1875,11 @@ class App:
             names.append("main")
         if CFG.get("show_glm") and flags['glm']:
             names.append("glm")
+        if CFG.get("show_antigravity"):
+            if flags.get('antigravity'):
+                names.append("antigravity")
+            if CFG.get("show_ag_reset", True):
+                names.append("ag_reset")
         if CFG.get("show_deepseek", True):
             if flags['deepseek']:
                 names.append('deepseek')
@@ -1705,7 +1888,7 @@ class App:
         return names
 
     def _sync_credentials(self):
-        for name in ('glm','deepseek','tokens'):
+        for name in ('glm', 'deepseek', 'tokens', 'antigravity'):
             identity = source_identity(name)
             if self._source_identities.get(name) == identity:
                 continue
@@ -1724,8 +1907,11 @@ class App:
     EXPIRED_KEY = {"codex": "c_window_expired"}
 
     def _data_expired(self, source):
-        if source in ('kimi','glm'):
-            return any(self._window_expired(k) for k in (('k5','kw') if source == 'kimi' else ('g5','gw')))
+        if source in ('kimi', 'glm'):
+            return any(self._window_expired(k) for k in (('k5', 'kw') if source == 'kimi' else ('g5', 'gw')))
+        if source == 'antigravity':
+            keys = ['aw'] + (['a5'] if self.show_antigravity_5h.get() else [])
+            return any(self._window_expired(k) for k in keys)
         if source == "codex":
             keys = ["cw"] + (["c5"] if self.show_codex_5h.get() else [])
             known = [self.data.get(k + "_reset") for k in keys]
@@ -1741,6 +1927,9 @@ class App:
         if source == 'main':
             return radar_status(self.data, CFG.get('radar_window', 24),
                                 source in self._verified, self.errors.get(source))['stale']
+        if source == 'ag_reset':
+            return ag_reset_status(self.data, source in self._verified,
+                                   self.errors.get(source))['stale']
         return source_status(self.data, self._success_at.get(source, 0),
                              source in self._verified, self.errors.get(source), interval=REFRESH_SECONDS)['stale']
 
@@ -1795,6 +1984,8 @@ class App:
         return {"kimi": ("k5_", "kw_", "k_plan"),
                 "codex": ("c5_", "cw_", "c_plan", "c_window", "c_auto_", "cr_credit"),
                 "glm": ("g5_", "gw_", "g_plan"), "main": ("cr_main",),
+                "antigravity": ("a5_", "aw_", "a3p", "a_credits", "a_plan", "a_captured_at"),
+                "ag_reset": ("ag_reset_",),
                 "deepseek": ("ds_balance", "ds_spend", "ds_granted", "ds_topped_up",
                              "ds_currency", "ds_available", "ds_plan"),
                 "tokens": ("ds_tokens_",)}[name]
@@ -1974,17 +2165,25 @@ class App:
         if pct is None:
             pl.config(text="--")
             rl.config(text="")
+            self._draw_bar(key, None, False)
         else:
             base = THEMES[getattr(self, "theme", "dark")]["FG_TEXT"]
             color = base if pct > 30 else (THEMES[self.theme]["WARNING"] if pct > 15 else THEMES[self.theme]["DANGER"])
             pl.config(text=f"{pct}%", fg=color)
             rl.config(text=reset_text if reset_text else "")
+            self._draw_bar(key, pct, False)
 
     def _set_row_visible(self, key, visible):
         """Show/hide a complete quota row without leaving an empty label."""
         widgets = [self.row_labels[key][0], *self.rows[key]]
         for wgt in widgets:
             (wgt.grid if visible else wgt.grid_remove)()
+        bar = self._bars.get(key)
+        if bar is not None:
+            if not visible:
+                bar.grid_remove()
+            elif self._bar_values.get(key, (None, False))[0] is not None:
+                bar.grid()
 
     def _set_amount(self, key, amount, currency, note="", warn=True, whole_width=3):
         """Render money instead of a percentage (pay-as-you-go balances).
@@ -2052,6 +2251,20 @@ class App:
                 THEMES[self.theme]["WARNING"] if main_pct >= 80 else THEMES[self.theme]["FG_DIM"])
             self.rows["cr_main"][0].config(fg=color)
 
+    def _render_ag_reset(self):
+        """Show confirmed/announced Antigravity global resets (never fake forecasts)."""
+        view = ag_reset_view(self.data)
+        palette = THEMES[self.theme]
+        if not view:
+            self._set_custom("ag_reset", "--", "")
+            return
+        if view["recent"]:
+            color = palette["RADAR_DOWN"] if view["kind"] == "full" else palette["WARNING"]
+        else:
+            color = palette["FG_DIM"]
+        self._set_custom("ag_reset", view["value"], view["note"], color)
+        self.rows["ag_reset"][1].config(fg=palette["FG_DIM"])
+
     def _render(self):
         d = self.data
         today = date.today().isoformat()
@@ -2081,6 +2294,13 @@ class App:
             self.section_renews["GLM"].config(
                 text=("续订 " + renew_g) if renew_g and renew_g != "MM-DD" else "",
                 fg=THEMES[self.theme]["GLM_SOFT"])
+        a_plan = CFG.get("antigravity_plan_name") or d.get("a_plan") or ""
+        a_title = "Antigravity" + ((" · " + a_plan) if a_plan else "")
+        self._set_title("Antigravity", a_title)
+        renew_a = CFG.get("renew_antigravity", "")
+        self.section_renews["Antigravity"].config(
+            text=("续订 " + renew_a) if renew_a and renew_a != "MM-DD" else "",
+            fg=THEMES[self.theme]["ANTIGRAVITY_SOFT"])
         self._set_row("k5", d.get("k5_pct"), _countdown(d.get("k5_reset")))
         self._set_row("kw", d.get("kw_pct"), _fmt_reset(d.get("kw_reset")))
         # Visibility is a user/menu setting with a plan-aware default. The row
@@ -2112,6 +2332,44 @@ class App:
         self._set_row("g5", d.get("g5_pct"),
                       _countdown(d.get("g5_reset")) if d.get("g5_reset") else "")
         self._set_row("gw", d.get("gw_pct"), _fmt_reset(d.get("gw_reset")))
+        # Antigravity: Gemini 5h/weekly + compact optional 3P pool + optional AI Credits + global reset monitor.
+        ag_visible = bool(CFG.get("show_antigravity", False))
+        self._set_row_visible("a5", ag_visible and self.show_antigravity_5h.get())
+        a5_note = ("周满暂停" if d.get("a5_disabled")
+                   else (_countdown(d.get("a5_reset")) if d.get("a5_reset") else ""))
+        self._set_row("a5", d.get("a5_pct"), a5_note)
+        self._set_row("aw", d.get("aw_pct"),
+                      _fmt_reset(d.get("aw_reset")) if d.get("aw_reset") else "")
+        a3p_w, a3p_5 = d.get("a3p_pct"), d.get("a3p5_pct")
+        show_a3p = (ag_visible and bool(CFG.get("show_antigravity_3p", True))
+                    and (a3p_w is not None or a3p_5 is not None))
+        self._set_row_visible("a3p", show_a3p)
+        if show_a3p:
+            a3p_primary = a3p_w if a3p_w is not None else a3p_5
+            if a3p_w is not None and a3p_5 is not None:
+                day_suffix = f" · {_fmt_day(d.get('a3p_reset'))}" if d.get("a3p_reset") else ""
+                a3p_note = f"5h {a3p_5}%{day_suffix}"
+            elif a3p_w is not None and d.get("a3p_reset"):
+                a3p_note = _fmt_reset(d.get("a3p_reset"))
+            elif a3p_5 is not None and d.get("a3p5_reset"):
+                a3p_note = _countdown(d.get("a3p5_reset"))
+            else:
+                a3p_note = ""
+            self._set_row("a3p", a3p_primary, a3p_note)
+        else:
+            self._draw_bar("a3p", None, False)
+        a_credits = d.get("a_credits")
+        show_a_credits = ag_visible and finite(a_credits)
+        self._set_row_visible("a_credits", show_a_credits)
+        if show_a_credits:
+            c_text = f"{int(round(a_credits)):,}" if a_credits >= 10 or float(a_credits).is_integer() else f"{a_credits:.1f}"
+            c_enabled = d.get("a_credits_enabled")
+            c_note = "超额已开" if c_enabled is True else ("超额未开" if c_enabled is False else "")
+            c_color = THEMES[self.theme]["WARNING"] if 0 < a_credits <= 10 else THEMES[self.theme]["FG_TEXT"]
+            self._set_custom("a_credits", c_text, c_note, c_color)
+            self.rows["a_credits"][1].config(fg=THEMES[self.theme]["FG_DIM"])
+        self._set_row_visible("ag_reset", ag_visible and bool(CFG.get("show_ag_reset", True)))
+        self._render_ag_reset()
         # DeepSeek is pay-as-you-go: the card shows money, not a percentage.
         if d.get("ds_plan") or d.get("ds_balance") is not None:
             self._set_title("DeepSeek", "DeepSeek")
@@ -2155,43 +2413,58 @@ class App:
         for source, keys in {"kimi": ("k5", "kw"),
                              "codex": ("c5", "cw", "c_auto", "cr_credit"),
                              "glm": ("g5", "gw"), "main": ("cr_main",),
+                             "antigravity": ("a5", "aw", "a3p", "a_credits"),
+                             "ag_reset": ("ag_reset",),
                              "deepseek": ("ds", "ds_spend")}.items():
-            if source in ('codex','kimi','glm') and source in enabled and not self._transport_stale(source):
+            if source in ('codex', 'kimi', 'glm', 'antigravity') and source in enabled and not self._transport_stale(source):
                 for key in keys:
-                    if key in ('cr_credit', 'c_auto'):
+                    if key in ('cr_credit', 'c_auto', 'a_credits'):
                         continue
                     if self._window_expired(key) or (source == 'codex' and not any(d.get(k + "_reset") for k in ("c5", "cw"))
                                                     and d.get("c_window_expired")):
                         self.rows[key][1].config(text="窗口已过期")
                         self.rows[key][0].config(fg=THEMES[self.theme]["FG_DIM"])
+                        if key in self._bars:
+                            self._draw_bar(key, self._bar_values.get(key, (None, False))[0], True)
             elif source in enabled and self._is_stale(source):
                 text = error_label(self.errors.get(source), source) or (
                     radar_status(d, CFG.get('radar_window', 24), source in self._verified)['reason']
-                    if source == 'main' else self._stale_text(source))
+                    if source == 'main' else
+                    ag_reset_status(d, source in self._verified)['reason']
+                    if source == 'ag_reset' else
+                    self._stale_text(source))
                 for key in keys:
                     # Preserve business metadata (especially voucher expiry).
                     value, note_label = self.rows[key]
                     old_value = str(value.cget('text'))
                     if old_value not in ('--', '…'):
                         value.config(text=old_value.removesuffix(' ·旧') + ' ·旧')
-                    if source == 'main' or not note_label.cget('text') or note_label.cget('text') == '?':
+                    if source in ('main', 'ag_reset') or not note_label.cget('text') or note_label.cget('text') == '?':
                         note_label.config(text=text)
                     self.rows[key][0].config(fg=THEMES[self.theme]["FG_DIM"])
+                    if key in self._bars:
+                        self._draw_bar(key, self._bar_values.get(key, (None, False))[0], True)
         stale = [name for name in enabled if self._is_stale(name)]
-        for source, keys in (('deepseek', ('ds','ds_spend')), ('glm', ('g5','gw')), ('kimi', ('k5','kw')), ('codex', ('c5','cw'))):
+        for source, keys in (('deepseek', ('ds','ds_spend')), ('glm', ('g5','gw')),
+                             ('kimi', ('k5','kw')), ('codex', ('c5','cw')),
+                             ('antigravity', ('a5','aw'))):
             if CFG.get('show_'+source) and source not in enabled:
                 for key in keys:
                     self.rows[key][0].configure(text='--')
+                    if key in self._bars:
+                        self._draw_bar(key, None, False)
                     if key != 'ds_spend' or not token_note:
-                        self.rows[key][1].configure(text='未配置 Key' if source in ('glm','deepseek') else '未登录',
-                                                    fg=THEMES[self.theme]['FG_DIM'])
+                        hint = ('未配置 Key' if source in ('glm','deepseek')
+                                else '待接入 agy' if source == 'antigravity'
+                                else '未登录')
+                        self.rows[key][1].configure(text=hint, fg=THEMES[self.theme]['FG_DIM'])
         if d.get('ds_spend_error'):
             self.rows['ds_spend'][0].configure(text='--')
             if not token_text:
                 self.rows['ds_spend'][1].configure(text='估算不可用')
         parts = []
         account_times = [self._success_at.get(name) for name in enabled
-                         if name in ("kimi", "codex", "glm", "deepseek")]
+                         if name in ("kimi", "codex", "glm", "antigravity", "deepseek")]
         loaded = any(self._success_at.get(name) for name in enabled)
         if not enabled:
             parts.append('右键 → 快速设置')
@@ -2260,6 +2533,7 @@ def query_worker(name):
             data = fetch_egress(CFG)
         else:
             fn = {"kimi": fetch_kimi, "codex": fetch_codex, "glm": fetch_glm,
+                  "antigravity": fetch_antigravity, "ag_reset": fetch_ag_reset,
                   "deepseek": fetch_deepseek, "main": fetch_main_radar, "tokens": fetch_tokens}[name]
             data = validate_result(name, fn())
         payload = {"ok": True, "data": data}
