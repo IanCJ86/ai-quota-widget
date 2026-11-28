@@ -64,9 +64,16 @@ class WidgetDialogs:
             result["v"] = f"{m:02d}-{d:02d}"
             win.destroy()
 
-        tk.Button(win, text="确定", command=ok, width=6).grid(
+        p = self.palette
+        btn_ok = dict(bg=p["ACCENT"], fg=p["BG"], activebackground=p["FG_TEXT"],
+                      activeforeground=p["BG"], relief="flat", bd=0, padx=10, pady=3,
+                      cursor="hand2", font=FONT_TEXT)
+        btn_cancel = dict(bg=p["BG"], fg=p["FG_TEXT"], activebackground=p["BORDER"],
+                          activeforeground=p["FG_TEXT"], relief="flat", bd=0, padx=10, pady=3,
+                          cursor="hand2", font=FONT_TEXT)
+        tk.Button(win, text="确定", command=ok, width=6, **btn_ok).grid(
             row=1, column=1, columnspan=2, pady=(0, 10))
-        tk.Button(win, text="取消", command=win.destroy, width=6).grid(
+        tk.Button(win, text="取消", command=win.destroy, width=6, **btn_cancel).grid(
             row=1, column=3, pady=(0, 10))
         # expose for smoke tests
         self._picker = (win, mv, dv, ok)
@@ -127,10 +134,17 @@ class WidgetDialogs:
             result["v"] = secret
             win.destroy()
 
-        error = tk.Label(win, text='', bg=self.palette['BG_CARD'], fg=self.palette['FG_TEXT'])
-        error.grid(row=4, column=0, columnspan=2, padx=12)
-        tk.Button(win, text="保存", command=ok, width=6).grid(row=3, column=0, pady=(0, 10))
-        tk.Button(win, text="取消", command=win.destroy, width=6).grid(
+        error = tk.Label(win, text='', bg=self.palette['BG_CARD'], fg=self.palette['DANGER'], font=FONT_HINT)
+        error.grid(row=4, column=0, columnspan=2, padx=12, pady=(0, 4))
+        p = self.palette
+        btn_ok = dict(bg=p["ACCENT"], fg=p["BG"], activebackground=p["FG_TEXT"],
+                      activeforeground=p["BG"], relief="flat", bd=0, padx=10, pady=3,
+                      cursor="hand2", font=FONT_TEXT)
+        btn_cancel = dict(bg=p["BG"], fg=p["FG_TEXT"], activebackground=p["BORDER"],
+                          activeforeground=p["FG_TEXT"], relief="flat", bd=0, padx=10, pady=3,
+                          cursor="hand2", font=FONT_TEXT)
+        tk.Button(win, text="保存", command=ok, width=6, **btn_ok).grid(row=3, column=0, pady=(0, 10))
+        tk.Button(win, text="取消", command=win.destroy, width=6, **btn_cancel).grid(
             row=3, column=1, pady=(0, 10))
         win.bind("<Return>", ok)
         # expose for smoke tests

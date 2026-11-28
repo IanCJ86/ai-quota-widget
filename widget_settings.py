@@ -1,6 +1,8 @@
 """Provider settings coordinator. Dependencies are explicit; App owns execution."""
 import calendar
 from datetime import date
+import os
+import sys
 import tkinter as tk
 from widget_style import PLAN_PRESETS, PLAN_CFG_KEY
 from widget_dialogs import WidgetDialogs
@@ -17,6 +19,10 @@ class SettingsController:
             return self.config.get("kimi_plan_name", "")
         if kind == "glm":
             return self.config.get("glm_plan_name", "")
+        if kind == "antigravity":
+            return (self.config.get("antigravity_plan_name")
+                    or self.app.data.get("a_plan")
+                    or "Pro")
         return (self.config.get("codex_plan_name")
                 or (self.app.data.get("c_plan") or "Pro")
                 + self.config.get("codex_plan_suffix", ""))
@@ -49,6 +55,20 @@ class SettingsController:
                 value=bool(self.config.get("show_codex_credits", True)))
             m.add_checkbutton(label="显示重置券", variable=self.show_codex_credits,
                               command=self._toggle_codex_credits)
+        if kind == "antigravity":
+            m.add_separator()
+            self.show_antigravity_3p = tk.BooleanVar(
+                value=bool(self.config.get("show_antigravity_3p", True)))
+            m.add_checkbutton(label="显示第三方模型池（Claude/GPT）",
+                              variable=self.show_antigravity_3p,
+                              command=self._toggle_antigravity_3p)
+            m.add_separator()
+            m.add_command(label="接入 agy CLI 状态桥接…",
+                          command=self._setup_agy_bridge)
+            m.add_command(label="选择快照文件…",
+                          command=self._choose_ag_snapshot)
+            m.add_command(label="恢复默认快照路径",
+                          command=lambda: self._set_ag_snapshot(""))
         if kind == "glm":
             m.add_separator()
             # config.json is plaintext; store new keys encrypted instead.
@@ -64,6 +84,64 @@ class SettingsController:
         self.app._render()
         self.app._fit()
 
+    def _toggle_antigravity_3p(self):
+        self.config["show_antigravity_3p"] = self.show_antigravity_3p.get()
+        self.save_config(self.config)
+        self.app._render()
+        self.app._fit()
+
+    def _agy_bridge_command(self):
+        if getattr(sys, "frozen", False):
+            cli_exe = os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "quota-cli.exe")
+            return f'"{cli_exe}" --agy-statusline'
+        script = os.path.abspath(os.path.join(os.path.dirname(__file__), "quota_monitor.py"))
+        python_exe = os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "python.exe")
+        if not os.path.isfile(python_exe):
+            python_exe = sys.executable
+        return f'"{python_exe}" "{script}" --agy-statusline'
+
+    def _setup_agy_bridge(self):
+        from quota_antigravity import find_agy_exe, install_agy_statusline_bridge, AG_CLI_SETTINGS
+        if not find_agy_exe():
+            self.dialogs._notice(
+                "未检测到 agy CLI",
+                "公开版仅通过官方 Antigravity CLI（agy）文档化 statusLine 桥接读取个人额度，\n"
+                "不探测内部进程或浏览器 Cookie。\n\n"
+                "安装 agy CLI（PowerShell）：\n"
+                "irm https://antigravity.google/cli/install.ps1 | iex\n\n"
+                "安装并登录 agy 后，再点击此菜单即可一键写入桥接配置。"
+            )
+            return
+        cmd = self._agy_bridge_command()
+        try:
+            target = install_agy_statusline_bridge(cmd, AG_CLI_SETTINGS)
+        except OSError:
+            self.dialogs._notice("写入未完成", "无法写入 agy CLI 配置文件，请检查文件权限。")
+            return
+        self.dialogs._notice(
+            "已接入 agy CLI 状态桥接",
+            f"已在 {target} 启用 statusLine（保留默认状态栏，不保存邮箱与对话路径）。\n"
+            "下次使用 agy 时会自动更新本机额度快照。"
+        )
+        self.app._sync_credentials()
+        self.app.refresh_async()
+
+    def _choose_ag_snapshot(self):
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(
+            parent=self.app.root,
+            title="选择 Antigravity 额度快照 JSON",
+            filetypes=[("JSON 文件", "*.json"), ("所有文件", "*.*")],
+        )
+        if path and os.path.isfile(path) and os.access(path, os.R_OK):
+            self._set_ag_snapshot(path)
+
+    def _set_ag_snapshot(self, path):
+        self.config["antigravity_snapshot_file"] = path
+        self.save_config(self.config)
+        self.app._sync_credentials()
+        self.app.refresh_async()
+
     def _build_deepseek_menu(self):
         """DeepSeek has no plans or renewal dates: only the API key."""
         m = tk.Menu(self.app.menu, tearoff=0)
@@ -77,7 +155,6 @@ class SettingsController:
 
     def _choose_logs(self):
         from tkinter import filedialog
-        import os
         path = filedialog.askdirectory(parent=self.app.root, title='选择 Harness sessions 目录', mustexist=True)
         if path and os.path.isdir(path) and os.access(path, os.R_OK):
             self._set_logs(path)
@@ -93,6 +170,9 @@ class SettingsController:
         self.save_config(self.config)
         if kind == "codex" and self.config.get("show_codex_5h") is None:
             self.app._sync_codex_5h_menu()
+            self.app._apply_visibility(persist=False)
+        elif kind == "antigravity" and self.config.get("show_antigravity_5h") is None:
+            self.app._sync_antigravity_5h_menu()
             self.app._apply_visibility(persist=False)
         self.app._render()
 

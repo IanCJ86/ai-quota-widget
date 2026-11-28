@@ -213,6 +213,8 @@ class SingleInstance:
 PERCENT_KEYS = {
     "kimi": ("k5_pct", "kw_pct"), "codex": ("c5_pct", "cw_pct"),
     "glm": ("g5_pct", "gw_pct"), "main": ("cr_main24", "cr_main48"),
+    "antigravity": ("a5_pct", "aw_pct", "a3p_pct", "a3p5_pct"),
+    "ag_reset": (),
     # Pay-as-you-go accounts have no percentage quota; they report money.
     "deepseek": (),
     "tokens": (),
@@ -236,6 +238,11 @@ def validate_result(name, data):
                  'cr_main24_updated','cr_main48_updated','cr_main24_missing','cr_main48_missing',
                  'cr_main_phase','cr_main_signal_at','cr_main_expires_at','cr_main_review_at',
                  'cr_main_reset_at','cr_main_signal_key','cr_main_at'),
+        'antigravity': ('a5_pct','a5_reset','a5_disabled','aw_pct','aw_reset',
+                        'a3p_pct','a3p_reset','a3p5_pct','a3p5_reset',
+                        'a_credits','a_credits_enabled','a_plan','a_captured_at'),
+        'ag_reset': ('ag_reset_phase','ag_reset_at','ag_reset_type','ag_reset_scope',
+                     'ag_reset_verified','ag_reset_updated','ag_reset_checked_at'),
         'tokens': ('ds_tokens_total','ds_tokens_fresh','ds_tokens_day'),
     }[name]
     data = {k: v for k, v in data.items() if k in fields}
@@ -243,7 +250,8 @@ def validate_result(name, data):
     for key, value in list(data.items()):
         if value is None:
             continue
-        if key.endswith('_reset') or key == 'cr_credit_expiry' or key.startswith('cr_main') and key.endswith(('_updated', '_at')):
+        if (key.endswith('_reset') or key in ('cr_credit_expiry', 'a_captured_at')
+                or (key.startswith(('cr_main', 'ag_reset')) and key.endswith(('_updated', '_at')))):
             parsed = timestamp(value)
             if parsed is None:
                 raise ValueError('invalid timestamp')
@@ -263,10 +271,26 @@ def validate_result(name, data):
             from quota_radar import PHASES
             if value not in PHASES:
                 raise ValueError('invalid radar phase')
+        elif key == 'ag_reset_phase':
+            from quota_antigravity import AG_RESET_PHASES
+            if value not in AG_RESET_PHASES:
+                raise ValueError('invalid antigravity reset phase')
+        elif key == 'ag_reset_type':
+            from quota_antigravity import AG_RESET_TYPES
+            if value not in AG_RESET_TYPES:
+                raise ValueError('invalid antigravity reset type')
+        elif key == 'ag_reset_verified':
+            from quota_antigravity import AG_RESET_VERIFICATIONS
+            if value not in AG_RESET_VERIFICATIONS:
+                raise ValueError('invalid antigravity verification')
+        elif key == 'ag_reset_scope':
+            if not isinstance(value, str) or len(value) > 24:
+                raise ValueError('invalid antigravity scope')
         elif key.endswith('_day'):
             if not isinstance(value, str) or date.fromisoformat(value).isoformat() != value:
                 raise ValueError('invalid date')
-        elif key in ('c_window_expired','ds_available', 'cr_main24_missing', 'cr_main48_missing'):
+        elif key in ('c_window_expired','ds_available', 'cr_main24_missing', 'cr_main48_missing',
+                     'a5_disabled', 'a_credits_enabled'):
             if not isinstance(value, bool):
                 raise ValueError('invalid flag')
         elif key.endswith('_plan'):
@@ -296,7 +320,10 @@ def validate_result(name, data):
         from datetime import date
         if data.get("ds_tokens_day") != date.today().isoformat():
             raise ValueError("wrong usage date")
-    if all(value is None for value in values) and not REQUIRED_KEYS.get(name) and not (name == 'main' and data.get('cr_main_phase')):
+    if (all(value is None for value in values) and not REQUIRED_KEYS.get(name)
+            and not (name == 'main' and data.get('cr_main_phase'))
+            and not (name == 'ag_reset' and data.get('ag_reset_phase'))
+            and not (name == 'antigravity' and finite(data.get('a_credits')))):
         raise ValueError("missing quota/probability")
     return data
 
@@ -407,9 +434,9 @@ class Scheduler:
             state.pop('cooldown_until', None)
         if success:
             state.update(attempt=0, due=now + self.interval)
-            if name in ('codex','kimi','glm'):
+            if name in ('codex','kimi','glm','antigravity'):
                 wall = self.wall()
-                prefix = {'codex':'c','kimi':'k','glm':'g'}[name]
+                prefix = {'codex':'c','kimi':'k','glm':'g','antigravity':'a'}[name]
                 resets = [payload["data"].get(prefix+k) for k in ('5_reset', 'w_reset')]
                 future = [v - wall + 1 for v in resets
                           if isinstance(v, (int, float)) and math.isfinite(v) and v > wall]

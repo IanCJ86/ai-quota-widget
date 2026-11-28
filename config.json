@@ -17,6 +17,13 @@
   "radar_window": 24,
   "tray_metric": "cw_pct",
   "show_glm": false,
+  "show_antigravity": false,
+  "show_antigravity_5h": null,
+  "show_antigravity_3p": true,
+  "show_ag_reset": true,
+  "antigravity_plan_name": "",
+  "renew_antigravity": "MM-DD",
+  "custom_plan_antigravity": "",
   "glm_api_key": "",
   "glm_region": "cn"
 }

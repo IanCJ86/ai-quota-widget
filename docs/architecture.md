@@ -16,7 +16,8 @@
 | app_version.py | 应用版本与 UA 的唯一来源，不混用数据格式版本 |
 | quota_state.py | GUI/CLI共用的配置校验、新旧状态、窗口过期与券期限计算，不创建界面 |
 | quota_radar.py | 公开预告的评分、期限与完成状态；纯函数，不查询账户，不使用历史频率补分 |
-| quota_cli.py | 标准库无界面入口、脱敏诊断、一次性查询；不启动GUI调度器 |
+| quota_antigravity.py | Antigravity 官方 `agy` CLI `statusLine` 脱敏快照解析与 `gemini-resets.com` 全员重置监测；纯标准库，不碰未公开内部 RPC 或浏览器 Cookie |
+| quota_cli.py | 标准库无界面入口、脱敏诊断、一次性查询与 `--agy-statusline` 桥接写入；不启动GUI调度器 |
 | quota_install.py | 安装、持久环境预检、清单哈希与失败回滚；PowerShell仅作入口 |
 | widget_viewport.py | 工作区边界、滚动容器及DPI变化处理 |
 | widget_onboarding.py | 中文快速设置、来源选择与首次使用引导 |

@@ -1533,7 +1533,7 @@ class UITests(unittest.TestCase):
         def shown(widget):
             return bool(widget.winfo_manager())
         with patch.dict(monitor.CFG, {}, clear=False):
-            for name in ("show_kimi", "show_glm", "show_codex", "show_deepseek"):
+            for name in ("show_kimi", "show_glm", "show_codex", "show_antigravity", "show_deepseek"):
                 getattr(a, name).set(True)
             a._apply_visibility()
             self.assertTrue(all(shown(d) for d in a._dividers))
@@ -1544,8 +1544,10 @@ class UITests(unittest.TestCase):
             self.assertFalse(shown(a._dividers[0]))
             self.assertTrue(shown(a._dividers[1]))
             self.assertTrue(shown(a._dividers[2]))
+            self.assertTrue(shown(a._dividers[3]))
             # A single visible card needs no dividers at all.
             a.show_kimi.set(False)
+            a.show_antigravity.set(False)
             a.show_deepseek.set(False)
             a._apply_visibility()
             self.assertFalse(any(shown(d) for d in a._dividers))

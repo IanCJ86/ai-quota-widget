@@ -10,7 +10,9 @@ import time
 from functools import lru_cache
 from datetime import datetime
 from app_version import APP_VERSION
-from quota_state import SOURCES, ACCOUNT_SOURCES, source_status, window_expired, error_label, finite, credit_status, timestamp, radar_status, merge_radar
+from quota_state import (SOURCES, ACCOUNT_SOURCES, source_status, window_expired,
+                         error_label, finite, credit_status, timestamp, radar_status,
+                         merge_radar, ag_reset_status)
 
 PUBLIC_FIELDS = {
     'kimi': ('k5_pct','kw_pct','k5_reset','kw_reset'),
@@ -18,10 +20,15 @@ PUBLIC_FIELDS = {
               'c_auto_balance'),
     'glm': ('g5_pct','gw_pct','g5_reset','gw_reset'),
     'deepseek': ('ds_balance','ds_spend','ds_spend_day','ds_currency','ds_available','ds_spend_error'),
+    'antigravity': ('a5_pct','a5_reset','a5_disabled','aw_pct','aw_reset',
+                    'a3p_pct','a3p_reset','a3p5_pct','a3p5_reset',
+                    'a_credits','a_credits_enabled','a_plan','a_captured_at'),
     'main': ('cr_main24','cr_main48','cr_main_updated','cr_main24_at','cr_main48_at',
              'cr_main24_updated','cr_main48_updated','cr_main24_missing','cr_main48_missing',
              'cr_main_phase','cr_main_signal_at','cr_main_expires_at','cr_main_review_at',
              'cr_main_reset_at','cr_main_at'),
+    'ag_reset': ('ag_reset_phase','ag_reset_at','ag_reset_type','ag_reset_scope',
+                 'ag_reset_verified','ag_reset_updated','ag_reset_checked_at'),
     'tokens': ('ds_tokens_total','ds_tokens_fresh','ds_tokens_day'),
 }
 
@@ -44,6 +51,22 @@ def safe_data(name, data):
             from quota_radar import PHASES
             if value in PHASES:
                 output[key] = value
+        elif key == 'ag_reset_phase':
+            from quota_antigravity import AG_RESET_PHASES
+            if value in AG_RESET_PHASES:
+                output[key] = value
+        elif key == 'ag_reset_type':
+            from quota_antigravity import AG_RESET_TYPES
+            if value in AG_RESET_TYPES:
+                output[key] = value
+        elif key == 'ag_reset_verified':
+            from quota_antigravity import AG_RESET_VERIFICATIONS
+            if value in AG_RESET_VERIFICATIONS:
+                output[key] = value
+        elif key == 'ag_reset_scope' and isinstance(value, str) and len(value) <= 24:
+            output[key] = value
+        elif key == 'a_plan' and isinstance(value, str) and len(value) <= 40:
+            output[key] = value
         elif key == 'ds_spend_error' and value == 'SpendWriteFailed':
             output[key] = value
         elif key == 'cr_credit_expiries' and isinstance(value, list) and all(finite(x) for x in value):
@@ -53,7 +76,8 @@ def safe_data(name, data):
 def configured(m):
     return dict(kimi=os.path.isfile(m.KIMI_CRED),
                 codex=os.path.isfile(os.path.join(m.CODEX_HOME, 'auth.json')),
-                glm=bool(m.glm_api_key()), deepseek=bool(m.deepseek_api_key()))
+                glm=bool(m.glm_api_key()), deepseek=bool(m.deepseek_api_key()),
+                antigravity=os.path.isfile(m.antigravity_snapshot_path()))
 
 def read_json(path):
     try:
@@ -120,7 +144,9 @@ def collect(m, fresh=False, factory=None):
         status = source_status(data, stamp, verified, error, now=time.time())
         if name == 'main':
             status.update(radar_status(data, m.CFG.get('radar_window', 24), verified, error))
-        prefix = {'kimi':('k5','kw'),'codex':('c5','cw'),'glm':('g5','gw')}.get(name, ())
+        elif name == 'ag_reset':
+            status.update(ag_reset_status(data, verified, error))
+        prefix = {'kimi':('k5','kw'),'codex':('c5','cw'),'glm':('g5','gw'),'antigravity':('a5','aw')}.get(name, ())
         expired = [p for p in prefix if window_expired(data, p)]
         if expired:
             status.update(stale=True, state='window_expired', reason='窗口已过期')
@@ -142,7 +168,7 @@ def collect(m, fresh=False, factory=None):
         sources[name] = dict(ok=bool(data) and not error, stale=status['stale'], state=status['state'],
             error=error, last_success=datetime.fromtimestamp(stamp).astimezone().isoformat() if stamp else None,
             expired_windows=expired, data=data)
-    active = [v for k,v in sources.items() if k != 'main' and v['state'] != 'not_configured']
+    active = [v for k,v in sources.items() if k not in ('main', 'ag_reset') and v['state'] != 'not_configured']
     useful = any(v['data'] for v in active)
     code = 2 if not useful else 1 if errors or m.CONFIG_ISSUES or any(v['stale'] for v in active) else 0
     return dict(schema=1,app_version=APP_VERSION,generated_at=datetime.now().astimezone().isoformat(),
@@ -200,6 +226,7 @@ def doctor(m):
         lines.append(f'{name}: {label}; {state["state"]}; 上次成功={state.get("last_success") or "无"}; '
                      f'最后错误={error_label(recent_errors.get(name)) or "无记录"}')
     lines.append('雷达：codex-reset.com，第三方预告/线索评分及完成状态，非OpenAI官方概率；本次未联网核验。')
+    lines.append('Antigravity 重置监测：gemini-resets.com，仅展示已公告的全员重置历史与时间，不提供预告；本次未联网核验。')
     from quota_network import settings
     try:
         modes = settings(m.CFG)
@@ -252,6 +279,7 @@ def summary(snapshot):
     lines = [f'AI Quota Widget {APP_VERSION} · 临界思潮 · {snapshot["source"]}']
     labels = {'k5_pct':'5小时剩余','kw_pct':'每周剩余','c5_pct':'5小时剩余',
               'cw_pct':'每周剩余','g5_pct':'5小时剩余','gw_pct':'每周剩余',
+              'a5_pct':'5小时剩余','aw_pct':'每周剩余','a3p_pct':'第三方池剩余','a_credits':'AI积分',
               'cr_credit_count':'重置券','ds_balance':'余额','ds_spend':'今日估算',
               'ds_tokens_total':'今日总token','ds_tokens_fresh':'今日非缓存token',
               'cr_main24':'24小时预测','cr_main48':'48小时预测'}
@@ -265,6 +293,12 @@ def summary(snapshot):
             view = radar_view(row['data'])
             text = view['note'] + (f' {view["score"]}%' if view['score'] is not None else '')
             lines.append(f'main: {text}  [{row["error"] or states.get(row["state"], row["state"])}]')
+            continue
+        if name == 'ag_reset' and row['data'].get('ag_reset_phase'):
+            from quota_antigravity import ag_reset_view
+            view = ag_reset_view(row['data'])
+            text = f'{view["value"]} ({view["note"]})' if view else '--'
+            lines.append(f'ag_reset: {text}  [{row["error"] or states.get(row["state"], row["state"])}]')
             continue
         for key, label in labels.items():
             value = row['data'].get(key)
@@ -284,7 +318,7 @@ def main(argv=None):
             stream.reconfigure(encoding='utf-8', errors='replace')
     parser = argparse.ArgumentParser(description='AI Quota Widget | 临界思潮 · Windows额度监控')
     mode = parser.add_mutually_exclusive_group()
-    for flag in ('doctor','json','once','install','version','launch-check'):
+    for flag in ('doctor','json','once','install','version','launch-check','agy-statusline'):
         mode.add_argument('--'+flag, action='store_true')
     parser.add_argument('--fresh', action='store_true', help='显式联网查询（仅json/once）')
     parser.add_argument('--data-dir', help='本机状态目录，不输出到诊断')
@@ -317,6 +351,17 @@ def main(argv=None):
         return 0
     if args.data_dir:
         os.environ['AI_QUOTA_WIDGET_DATA_DIR'] = str(Path(args.data_dir).resolve())
+    if args.agy_statusline:
+        from quota_paths import resolve_data_dir
+        from quota_antigravity import capture_statusline_stdin, snapshot_path_for
+        raw = sys.stdin.read(262144)
+        if raw and raw.strip():
+            data_dir = resolve_data_dir(str(Path(__file__).resolve().parent))
+            try:
+                capture_statusline_stdin(snapshot_path_for(data_dir), raw)
+            except Exception:
+                return 0
+        return 0
     if args.install:
         from quota_install import install
         try:
